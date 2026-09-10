@@ -222,7 +222,7 @@ def _execute_run(
 ) -> FundDisclosureSyncExecution:
     try:
         client = client_factory()
-    except GildataMCPError as exc:
+    except Exception as exc:
         return service.record_failure(run_id, error=exc, message="数据源不可用；本次范围已保存，可重试")
     try:
         return service.execute(run_id, client=client)
@@ -245,13 +245,11 @@ def start_fund_disclosure_sync(
     try:
         run = service.start_manual_run(case_id)
         db.commit()  # make the frozen manual scope visible before provider work
+        execution = _execute_run(service, run.id, client_factory=get_fund_disclosure_client)
+        db.commit()
     except (ValueError, TypeError) as exc:
         db.rollback()
         raise ValidationFailedError(str(exc)) from exc
-    execution = _execute_run(
-        service, run.id, client_factory=get_fund_disclosure_client
-    )
-    db.commit()
     return _run_dto(execution)
 
 
@@ -271,11 +269,9 @@ def retry_fund_disclosure_sync(
     try:
         run = service.start_retry(case_id, run_id)
         db.commit()  # preserve the retry's frozen scope even if provider setup fails
+        execution = _execute_run(service, run.id, client_factory=get_fund_disclosure_client)
+        db.commit()
     except (ValueError, TypeError) as exc:
         db.rollback()
         raise ValidationFailedError(str(exc)) from exc
-    execution = _execute_run(
-        service, run.id, client_factory=get_fund_disclosure_client
-    )
-    db.commit()
     return _run_dto(execution)

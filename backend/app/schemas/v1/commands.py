@@ -159,9 +159,8 @@ class RerunResponse(V1Model):
 
     A rerun freezes a NEW snapshot and appends a NEW provisional assessment;
     prior snapshots/assessments are never touched, and the difference shows
-    up in the snapshot-compare view.  ``mode`` is ``mock`` only when
-    ``APP_ENV=test`` and no LLM key is configured; every non-test runtime
-    requires a live provider.
+    up in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key
+    (non-production only — production fails closed per provider discipline).
     """
 
     thesis_id: str
@@ -246,8 +245,6 @@ class AtomicClaimCandidateDTO(V1Model):
 
 class AtomicClaimQueueResponse(V1Model):
     items: list[AtomicClaimCandidateDTO]
-    has_more: bool = False
-    next_cursor: str | None = None
 
 
 class AtomicClaimReviewRequest(V1Model):
@@ -334,9 +331,7 @@ class ProposeResponse(V1Model):
 
     Every proposed link lands as a ``Proposal(kind=evidence_link)`` in the
     review queue; nothing is auto-confirmed.  ``job_id`` lets the client track
-    progress / cancellation.  ``mode`` is ``mock`` only when
-    ``APP_ENV=test`` and no LLM key is configured; every non-test runtime
-    requires a live provider.
+    progress / cancellation.  ``mode`` is ``mock`` without an LLM key.
     """
 
     thesis_id: str

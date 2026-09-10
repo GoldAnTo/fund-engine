@@ -23,11 +23,6 @@ import json
 import re
 from collections.abc import Sequence
 
-from app.datasources.gildata.client import (
-    GILDATA_RESPONSE_ERROR_MESSAGE,
-    GildataMCPError,
-)
-
 # Match a 6-digit A-share stock code embedded in free text (e.g. a title).
 _SEC_CODE_RE = re.compile(r"(\d{6})")
 
@@ -282,36 +277,6 @@ def parse_content(text: str) -> list[dict]:
     return [r for r in results if isinstance(r, dict)]
 
 
-def parse_content_strict(text: str) -> list[dict]:
-    """Decode one live provider payload or raise a stable protocol error."""
-    if not isinstance(text, str) or not text.strip():
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    try:
-        inner = json.loads(text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE) from exc
-    if (
-        not isinstance(inner, dict)
-        or str(inner.get("code")) != "0"
-        or not isinstance(inner.get("results"), list)
-    ):
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    results = inner["results"]
-    if any(not isinstance(item, dict) for item in results):
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    return results
-
-
-def _strict_table_rows(item: dict) -> list[dict[str, str]]:
-    table_markdown = item.get("table_markdown")
-    if not isinstance(table_markdown, str) or not table_markdown.strip():
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    rows = parse_table_markdown_payload(table_markdown)
-    if not rows:
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    return rows
-
-
 # ---------------------------------------------------------------------------
 # fetch_* adapters
 # ---------------------------------------------------------------------------
@@ -353,8 +318,8 @@ def fetch_announcement(client, query: str) -> list[dict]:
     """
     text = client.call_tool("AnnouncementData", {"query": query})
     announcements: list[dict] = []
-    for item in parse_content_strict(text):
-        for row in _strict_table_rows(item):
+    for item in parse_content(text):
+        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
             normalized = _normalize(row, _ANNOUNCEMENT_ALIASES)
             announcements.append(
                 {
@@ -422,8 +387,8 @@ def fetch_fund_stock_holdings(client, query: str) -> list[dict]:
     """
     text = client.call_tool("FinQuery", {"query": query})
     holdings: list[dict] = []
-    for item in parse_content_strict(text):
-        for row in _strict_table_rows(item):
+    for item in parse_content(text):
+        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
             normalized = _normalize(row, _FUND_HOLDING_ALIASES)
             if not all(
                 normalized.get(field, "")

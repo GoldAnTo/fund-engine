@@ -37,7 +37,6 @@ class OriginalFileDTO(V1Model):
 
 class SourceContractDTO(V1Model):
     source_type: str
-    research_source_type: str
     provider_or_tenant: str
     permissions: dict[str, bool]
     status: Literal["admitted", "restricted"]

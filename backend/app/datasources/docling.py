@@ -19,7 +19,6 @@ which parser produced a span.  See spec
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import io
 import re
 import uuid
@@ -41,11 +40,7 @@ from app.documents.locators import (
 # Constants
 # ---------------------------------------------------------------------------
 
-PYPDF_PACKAGE_VERSION = importlib.metadata.version("pypdf")
-PYPDF_CONFIG_VERSION = "text-layer-paragraph-v1"
-PARSER_VERSION_PYPDF = (
-    f"pypdf-{PYPDF_PACKAGE_VERSION}+{PYPDF_CONFIG_VERSION}"
-)
+PARSER_VERSION_PYPDF = "pypdf-v1"
 PARSER_VERSION_DOCLING = "docling-v2.115.0"
 # Backwards-compat alias — some earlier call sites imported the STUB
 # constant when DoclingAdapter was a stub.  The value now points at the
@@ -205,35 +200,22 @@ class PypdfAdapter:
 
     parser_version: str = PARSER_VERSION_PYPDF
 
-    def __init__(self, *, max_pages: int = 1000, max_text_chars: int = 2_000_000, max_spans: int = 20_000) -> None:
-        for name, value in (("max_pages", max_pages), ("max_text_chars", max_text_chars), ("max_spans", max_spans)):
-            if type(value) is not int or value < 1:
-                raise ValueError(f"{name} must be a positive integer")
-        self._max_pages = max_pages
-        self._max_text_chars = max_text_chars
-        self._max_spans = max_spans
+    def __init__(self) -> None:
+        # pypdf has no client / model state today; constructor reserved
+        # for future configuration (e.g. password list, parser version
+        # override).
+        pass
 
     def extract_spans(
         self, raw: bytes, *, document_sha256: str
     ) -> list[ParsedSpan]:
         reader = PdfReader(io.BytesIO(raw))
-        if len(reader.pages) > self._max_pages:
-            raise PdfParseError("PDF exceeds page limit")
         spans: list[ParsedSpan] = []
         page_paragraphs: list[list[str]] = []
-        text_chars = 0
-        paragraph_count = 0
 
         for page_no, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
-            text_chars += len(text)
-            if text_chars > self._max_text_chars:
-                raise PdfParseError("PDF exceeds extracted text limit")
-            paragraphs = _split_into_paragraphs(text)
-            paragraph_count += len(paragraphs)
-            if paragraph_count > self._max_spans:
-                raise PdfParseError("PDF exceeds span limit")
-            page_paragraphs.append(paragraphs)
+            page_paragraphs.append(_split_into_paragraphs(text))
 
         if not any(page_paragraphs):
             raise PdfParseError("PDF has no extractable text layer (scanned?)")

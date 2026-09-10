@@ -10,11 +10,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.ai.error_safety import (
-    AI_OPERATION_ERROR_TYPE,
-    provider_failure_payload,
-)
-from app.datasources.gildata.client import GildataMCPError
 from app.models.fund_disclosure_sync import (
     FundDisclosureSyncConfigVersion,
     FundDisclosureSyncRun,
@@ -157,7 +152,7 @@ class FundDisclosureSyncService:
         )
         try:
             capability = self._provider_capability_snapshot(client)
-        except GildataMCPError as exc:
+        except Exception as exc:
             self._append_event(
                 run.id,
                 stage="provider_capability",
@@ -168,7 +163,7 @@ class FundDisclosureSyncService:
                     "used_tools": [],
                     "required_fields": list(_FUND_DISCLOSURE_FIELDS),
                     "unverified_capabilities": list(_UNVERIFIED_FUND_CAPABILITIES),
-                    "error_type": AI_OPERATION_ERROR_TYPE,
+                    "error_type": type(exc).__name__,
                 },
             )
             return self.record_failure(
@@ -206,13 +201,13 @@ class FundDisclosureSyncService:
                 permissions={"display": run.allow_display},
                 case_id=run.research_case_id,
             )
-        except GildataMCPError:
+        except Exception as exc:
             self._append_event(
                 run.id,
                 stage="failed",
                 status="failed",
                 message="基金披露补充失败；可在本记录基础上重试",
-                payload_json=provider_failure_payload(),
+                payload_json={"error_type": type(exc).__name__, "error": str(exc)},
             )
             return self._run(run.id)
         payload = asdict(stats)
@@ -275,7 +270,7 @@ class FundDisclosureSyncService:
             stage="failed",
             status="failed",
             message=message,
-            payload_json=provider_failure_payload(),
+            payload_json={"error_type": type(error).__name__, "error": str(error)},
         )
         return self._run(run.id)
 

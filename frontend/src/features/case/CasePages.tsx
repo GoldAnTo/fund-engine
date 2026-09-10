@@ -1,0 +1,5334 @@
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+
+import {
+  researchOsApi,
+  type AtomicClaimCandidate,
+  type CaseMechanismProtocol,
+  type MechanismTemplate,
+  type MetricDefinition,
+  type Monitor,
+  type MonitorDetail,
+  type Researchability,
+  type ResearchNetwork,
+  type ResearchWorkerStatus,
+} from "../../app/researchOsApi";
+import { researchConnectionGuidance } from "../../app/researchConnection";
+import { researchClient } from "../../data/researchClient";
+import type {
+  EventResearchClient,
+  EventResearchListItem,
+  EventSourceType,
+  EventWorkbench,
+} from "../../domain/eventResearch";
+import {
+  EVENT_RESEARCH_STAGES,
+  eventActionPresentation,
+  eventResearchStage,
+} from "../../domain/eventResearchPresentation";
+import type {
+  ResearchRunDetail,
+  ResearchRunSummary,
+} from "../../domain/prototypeTypes";
+import {
+  decodeRecoveryRouteState,
+  encodeRecoveryRouteState,
+} from "../../domain/recoveryRoute";
+import {
+  formatRunEventDetails,
+  monitorStatusLabel,
+  runFrequencyLabel,
+  runStageLabel,
+  runStatusLabel,
+  runTriggerLabel,
+} from "../../domain/runPresentation";
+import {
+  parseQualityLabel,
+  sourceAuthorityLabel,
+  sourceRetentionLabel,
+  sourceTypeLabel,
+  sourceTypeListLabel,
+} from "../../domain/sourcePresentation";
+import {
+  DEFAULT_SOURCE_GOVERNANCE,
+  SourceGovernanceFields,
+  sourceGovernanceMetadata,
+  sourceGovernanceValidationError,
+} from "../sources/SourceGovernanceFields";
+import type { DocumentSpan, SourceDocumentView } from "../../domain/types";
+import { MarketExpressionContent } from "./MarketExpressionContent";
+import {
+  MarketFundProfile,
+  MarketStockProfile,
+} from "./MarketInstrumentProfiles";
+import { CaseRelationsContent } from "./CaseRelationsContent";
+import { WikiInspectorContent } from "./WikiInspectorContent";
+
+const caseSections = [
+  { id: "conclusion", label: "研究结论", to: "", pages: [] },
+  {
+    id: "evidence",
+    label: "证据工作台",
+    to: "evidence",
+    pages: [
+      { suffix: "evidence", label: "命题与证据" },
+      { suffix: "documents", label: "原文资料" },
+      { suffix: "review", label: "证据审核" },
+    ],
+  },
+  { id: "market", label: "市场与表达", to: "market", pages: [] },
+  { id: "monitor", label: "监测与运行", to: "monitor", pages: [] },
+  {
+    id: "relations",
+    label: "关系与图谱",
+    to: "wiki",
+    pages: [
+      { suffix: "wiki", label: "Wiki 图谱" },
+      { suffix: "relations", label: "关联研究" },
+    ],
+  },
+] as const;
+
+type CaseSection = (typeof caseSections)[number];
+
+function caseNavigation(pathname: string, caseId: string): {
+  section: CaseSection;
+  currentSuffix: string | null;
+} {
+  const prefix = `/events/${caseId}`;
+  const suffix = pathname.startsWith(`${prefix}/`)
+    ? pathname.slice(prefix.length + 1).split("/")[0]
+    : "";
+  const sectionId = (
+    ["evidence", "documents", "review", "scope", "protocol"].includes(suffix)
+      ? "evidence"
+      : ["market", "stocks", "funds"].includes(suffix)
+        ? "market"
+        : ["monitor"].includes(suffix)
+          ? "monitor"
+          : ["wiki", "relations"].includes(suffix)
+            ? "relations"
+            : "conclusion"
+  ) as CaseSection["id"];
+  const section = caseSections.find((item) => item.id === sectionId)
+    ?? caseSections[0];
+  return {
+    section,
+    currentSuffix: section.pages.some((item) => item.suffix === suffix)
+      ? suffix
+      : null,
+  };
+}
+
+const relationLabels: Record<
+  ResearchNetwork["reviewed_relations"][number]["relation_type"],
+  string
+> = {
+  shared_driver: "共享驱动",
+  follow_up_validation: "后续验证",
+  potential_conflict: "可能冲突",
+  shared_material: "共享资料",
+};
+
+const EVENT_STATUS_LABEL: Record<EventResearchListItem["status"], string> = {
+  extracting: "资料识别中",
+  researching: "系统补证中",
+  awaiting_key_review: "等待证据审核",
+  continuing: "继续补证中",
+  awaiting_scope: "等待确认范围",
+  draft_ready: "结论草案待复核",
+  published: "持续跟踪",
+  exhausted: "当前范围已穷尽",
+};
+
+type EvidenceReviewOutcome = "confirmed" | "needs_more_evidence" | "rejected";
+
+const EVIDENCE_REVIEW_NOTICE: Record<EvidenceReviewOutcome, string> = {
+  confirmed: "证据已采纳，系统已生成待复核的结论草案。",
+  needs_more_evidence: "补证要求已记录，系统将按冻结范围继续处理。",
+  rejected: "候选已驳回，请调整研究范围或补充来源。",
+};
+
+const UNSAVED_CONCLUSION_MESSAGE =
+  "结论草案有未保存的修改。离开后这些修改将丢失，确定离开吗？";
+
+function useDirtyNavigationGuard(dirty: boolean) {
+  const dirtyRef = useRef(dirty);
+  const safeLocationRef = useRef({
+    href: window.location.href,
+    state: window.history.state,
+  });
+
+  useEffect(() => {
+    dirtyRef.current = dirty;
+    if (!dirty) {
+      safeLocationRef.current = {
+        href: window.location.href,
+        state: window.history.state,
+      };
+    }
+  }, [dirty]);
+
+  useEffect(() => {
+    if (!dirty) return;
+
+    const confirmLeaving = () => {
+      if (!dirtyRef.current) return true;
+      const confirmed = window.confirm(UNSAVED_CONCLUSION_MESSAGE);
+      if (confirmed) dirtyRef.current = false;
+      return confirmed;
+    };
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onDocumentClick = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) return;
+      const element = event.target instanceof Element
+        ? event.target.closest("a[href], [data-event-option]")
+        : null;
+      if (!element) return;
+      if (element instanceof HTMLAnchorElement) {
+        if (element.target && element.target !== "_self") return;
+        const destination = new URL(element.href, window.location.href);
+        if (destination.origin !== window.location.origin) return;
+        if (destination.href === window.location.href) return;
+      } else if (element.getAttribute("aria-pressed") === "true") {
+        return;
+      }
+      if (confirmLeaving()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const onPopState = (event: PopStateEvent) => {
+      if (confirmLeaving()) return;
+      event.stopImmediatePropagation();
+      window.history.pushState(
+        safeLocationRef.current.state,
+        "",
+        safeLocationRef.current.href,
+      );
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("click", onDocumentClick, true);
+    window.addEventListener("popstate", onPopState, true);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("click", onDocumentClick, true);
+      window.removeEventListener("popstate", onPopState, true);
+    };
+  }, [dirty]);
+
+  return function allowNavigation() {
+    dirtyRef.current = false;
+  };
+}
+
+function workflowNoticeFromState(state: unknown): string | null {
+  if (!state || typeof state !== "object") return null;
+  const notice = (state as { workflowNotice?: unknown }).workflowNotice;
+  return typeof notice === "string" ? notice : null;
+}
+
+function eventUpdatedLabel(updatedAt: string): string {
+  const value = new Date(updatedAt);
+  if (Number.isNaN(value.getTime())) return "更新时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
+}
+
+function preserveLocationSearch(to: string, search: string): string {
+  if (!search) return to;
+  const hashIndex = to.indexOf("#");
+  const hash = hashIndex >= 0 ? to.slice(hashIndex) : "";
+  const withoutHash = hashIndex >= 0 ? to.slice(0, hashIndex) : to;
+  const queryIndex = withoutHash.indexOf("?");
+  const pathname = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
+  const params = new URLSearchParams(
+    queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : "",
+  );
+  new URLSearchParams(search).forEach((value, key) => {
+    if (!params.has(key)) params.append(key, value);
+  });
+  const query = params.toString();
+  return `${pathname}${query ? `?${query}` : ""}${hash}`;
+}
+
+function CaseFrame({
+  children,
+}: {
+  children: (workbench: EventWorkbench, caseId: string) => ReactNode;
+}) {
+  const { caseId = "" } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [data, setData] = useState<EventWorkbench | null>(null);
+  const [caseOptions, setCaseOptions] = useState<EventResearchListItem[]>([]);
+  const [eventMenuOpen, setEventMenuOpen] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let active = true;
+    if (!caseId) return () => { active = false; };
+    setData(null);
+    setLoadError(false);
+    researchClient
+      .getEventWorkbench(caseId)
+      .then((workbench) => {
+        if (active) setData(workbench);
+      })
+      .catch(() => {
+        if (active) setLoadError(true);
+      });
+    return () => { active = false; };
+  }, [caseId, reload]);
+  useEffect(() => {
+    let active = true;
+    researchClient
+      .listEventResearch()
+      .then((items) => {
+        if (!active) return;
+        setCaseOptions(items);
+      })
+      .catch(() => {
+        if (active) setCaseOptions([]);
+      });
+    return () => { active = false; };
+  }, []);
+  function switchCase(nextCaseId: string) {
+    const suffix = location.pathname.startsWith(`/events/${caseId}`)
+      ? location.pathname.slice(`/events/${caseId}`.length)
+      : "";
+    setEventMenuOpen(false);
+    navigate(`/events/${nextCaseId}${suffix}${location.search}`);
+  }
+  useEffect(() => {
+    if (!eventMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setEventMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [eventMenuOpen]);
+  const navigation = caseNavigation(location.pathname, caseId);
+  if (!data)
+    return (
+      <main className="ros-page ros-case-page">
+        {loadError ? <div className="ros-empty" role="alert">
+          {loadError ? (
+            <>
+              <strong>无法读取这个 Case</strong>
+              <p>{researchConnectionGuidance ?? "没有展示替代数据；请检查权限、网络或 Case 标识。"}</p>
+              <button
+                className="ros-button ros-button--secondary"
+                type="button"
+                onClick={() => setReload((value) => value + 1)}
+              >
+                重试
+              </button>
+            </>
+          ) : (
+            "正在读取 Case；若无权限或 Case 不存在，系统不会展示替代数据。"
+          )}
+        </div> : <CaseWorkbenchSkeleton />}
+      </main>
+    );
+  return (
+    <main className="ros-page ros-case-page">
+      <header className="ros-case-header">
+        <div className="ros-event-context">
+          <span className="ros-event-context__label">当前事件研究</span>
+          <button
+            aria-expanded={eventMenuOpen}
+            aria-label={`当前事件研究：${data.event.eventTitle}，切换事件`}
+            className="ros-event-switcher"
+            type="button"
+            onClick={() => setEventMenuOpen((value) => !value)}
+          >
+            <strong>{data.event.eventTitle}</strong>
+            <i aria-hidden="true">⌄</i>
+          </button>
+          {eventMenuOpen && (
+            <div className="ros-event-menu">
+              <header>
+                <div><span className="ros-eyebrow">事件研究</span><strong>切换当前研究事件</strong></div>
+                <Link to={preserveLocationSearch("/events/new", location.search)}>＋ 新建事件研究</Link>
+              </header>
+              <div aria-label="切换事件研究" role="group">
+                {caseOptions.map((item) => (
+                  <button
+                    aria-pressed={item.id === caseId}
+                    className={item.id === caseId ? "is-current" : ""}
+                    data-event-option
+                    key={item.id}
+                    type="button"
+                    onClick={() => switchCase(item.id)}
+                  >
+                    <span><strong>{item.eventTitle}</strong><small>{[item.companyName, item.ticker].filter(Boolean).join(" · ") || "未绑定标的"} · 更新于 {eventUpdatedLabel(item.updatedAt)}</small></span>
+                    <em className={item.nextHumanAction ? "is-human" : ""}>{item.nextHumanAction || EVENT_STATUS_LABEL[item.status]}</em>
+                  </button>
+                ))}
+              </div>
+              <Link className="ros-event-menu__all" to={preserveLocationSearch("/events", location.search)}>查看全部事件研究 →</Link>
+            </div>
+          )}
+        </div>
+        <p className="ros-eyebrow">
+          {[data.event.companyName, data.event.ticker, `范围版本 v${data.scope.version}`].filter(Boolean).join(" · ")}
+        </p>
+        <h1>{data.event.eventTitle}</h1>
+        <p>{data.lifecycle.summary}</p>
+        <ol className="ros-event-progress" aria-label="当前事件研究进展">
+          {EVENT_RESEARCH_STAGES.map((stage) => {
+            const currentStage = eventResearchStage(data);
+            const state = stage.id < currentStage ? "done" : stage.id === currentStage ? "current" : "upcoming";
+            return <li className={`is-${state}`} key={stage.id} aria-current={state === "current" ? "step" : undefined}><span>{String(stage.id).padStart(2, "0")}</span><strong>{stage.label}</strong></li>;
+          })}
+        </ol>
+        <div className="ros-case-header__facts">
+          <span>已审核证据 {data.progress.verified}</span>
+          <span>待审核 {data.progress.pending}</span>
+          <span>无效来源 {data.progress.invalidSource}</span>
+          <span>
+            {data.lifecycle.activeRunId
+              ? "主研究运行可查看"
+              : data.lifecycle.status === "published"
+                ? "结论已发布；补证见监测"
+                : "尚未创建主研究运行"}
+          </span>
+        </div>
+      </header>
+      <nav className="ros-case-primary-tabs" aria-label="事件研究工作区">
+        {caseSections.map((section) => {
+          const isActive = section.id === navigation.section.id;
+          const pendingLabel = section.id === "evidence" && data.progress.pending > 0
+            ? `，待审核 ${data.progress.pending}`
+            : "";
+          return (
+            <Link
+              aria-current={isActive ? "page" : undefined}
+              aria-label={`${section.label}${pendingLabel}`}
+              className={isActive ? "active" : ""}
+              key={section.id}
+              to={preserveLocationSearch(`/events/${caseId}${section.to ? `/${section.to}` : ""}`, location.search)}
+            >
+              {section.label}
+              {pendingLabel && <span aria-hidden="true"> 待审核 {data.progress.pending}</span>}
+            </Link>
+          );
+        })}
+      </nav>
+      <details className="ros-case-nav-more">
+        <summary>更多研究内容</summary>
+        <div role="group" aria-label="更多研究内容">
+          {caseSections
+            .filter((section) => section.id !== navigation.section.id)
+            .map((section) => {
+              const pendingLabel = section.id === "evidence" && data.progress.pending > 0
+                ? `，待审核 ${data.progress.pending}`
+                : "";
+              return (
+                <Link
+                  aria-label={`${section.label}${pendingLabel}`}
+                  key={section.id}
+                  to={preserveLocationSearch(`/events/${caseId}${section.to ? `/${section.to}` : ""}`, location.search)}
+                >
+                  {section.label}
+                  {pendingLabel && <span aria-hidden="true"> 待审核 {data.progress.pending}</span>}
+                </Link>
+              );
+            })}
+        </div>
+      </details>
+      {navigation.section.pages.length > 0 && (
+        <nav
+          aria-label={`${navigation.section.label}页面`}
+          className="ros-case-secondary-tabs"
+        >
+          {navigation.section.pages.map((page) => (
+            <Link
+              aria-current={navigation.currentSuffix === page.suffix ? "page" : undefined}
+              className={navigation.currentSuffix === page.suffix ? "active" : ""}
+              key={page.suffix}
+              to={preserveLocationSearch(`/events/${caseId}/${page.suffix}`, location.search)}
+            >
+              {page.label}
+            </Link>
+          ))}
+        </nav>
+      )}
+      {children(data, caseId)}
+    </main>
+  );
+}
+
+function CaseWorkbenchSkeleton() {
+  return <section className="ros-case-loading" aria-label="Case 工作台加载中" aria-busy="true">
+    <header className="ros-case-loading__header"><Link to="/events" className="ros-button ros-button--secondary">返回研究调度</Link><span /></header>
+    <div className="ros-case-loading__title"><i /><b /><em /></div>
+    <nav className="ros-case-tabs" aria-label="Case 页面加载中"><span /><span /><span /><span /><span /><span /><span /><span /></nav>
+    <div className="ros-case-loading__body">{[0, 1, 2].map((item) => <div data-testid="case-workbench-skeleton" key={item}><i /><b /><em /></div>)}</div>
+  </section>;
+}
+
+function FactorList({ data }: { data: EventWorkbench }) {
+  return (
+    <section className="ros-factor-list">
+      <p className="ros-eyebrow">关键因素与验证缺口</p>
+      {data.factors.map((factor) => (
+        <article className="ros-factor-row" key={factor.position}>
+          <span>{String(factor.position).padStart(2, "0")}</span>
+          <div>
+            <strong>{factor.statement}</strong>
+            <small>
+              已审核支持 {factor.reviewedSupportCount} · 反证{" "}
+              {factor.reviewedContradictionCount} · AI 待审{" "}
+              {factor.pendingProposalCount}
+            </small>
+            {factor.currentGap && <em>还缺：{factor.currentGap}</em>}
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function CaseRelationRail({ caseId }: { caseId: string }) {
+  const location = useLocation();
+  const [relations, setRelations] = useState<ResearchNetwork | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setRelations(null);
+    setUnavailable(false);
+    researchOsApi.caseRelations(caseId)
+      .then((value) => active && setRelations(value))
+      .catch(() => active && setUnavailable(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId]);
+
+  const reviewed = relations?.reviewed_relations.slice(0, 3) ?? [];
+  const candidateCount = relations?.candidate_relations.length ?? 0;
+  return <section className="ros-rail-section ros-case-relation-rail">
+    <p className="ros-eyebrow">关联研究</p>
+    <h2>已审核关联</h2>
+    {unavailable ? <p>关联状态暂不可读取；不会显示其他 Case 的替代内容。</p> : !relations ? <p>正在读取当前 Case 的关联上下文…</p> : reviewed.length ? <ul>{reviewed.map((relation) => {
+      const other = relation.source_case.case_id === caseId ? relation.target_case : relation.source_case;
+      return <li key={relation.id}><Link to={preserveLocationSearch(`/events/${other.case_id}`, location.search)}>{other.title}</Link><small>{relationLabels[relation.relation_type]} · {relation.reason}</small></li>;
+    })}</ul> : <p>当前没有已审核关联。</p>}
+    {candidateCount > 0 && <p className="ros-note">另有 {candidateCount} 条 AI 候选，未经人工复核。<Link to={preserveLocationSearch(`/events/${caseId}/relations`, location.search)}>审核关联候选 →</Link></p>}
+    <Link to={preserveLocationSearch(`/events/${caseId}/relations`, location.search)}>查看全部关联 →</Link>
+  </section>;
+}
+
+export function CaseEvidencePage() {
+  const location = useLocation();
+  return (
+    <CaseFrame>
+      {(data, caseId) => (
+        <section className="ros-evidence-page">
+          <header className="ros-section-heading">
+            <div>
+              <p className="ros-eyebrow">命题与证据</p>
+              <h2>每一条关系都保留原文、时点与审核边界</h2>
+            </div>
+            <Link
+              className="ros-button ros-button--secondary"
+              to={preserveLocationSearch(`/events/${caseId}/documents`, location.search)}
+            >
+              原文资料
+            </Link>
+          </header>
+          <FactorList data={data} />
+          <section className="ros-evidence-list">
+            <p className="ros-eyebrow">已关联资料</p>
+            {data.evidence.length === 0 ? (
+              <div className="ros-empty">
+                当前没有可展示的关联资料；未审核候选不会被写成正式依据。
+              </div>
+            ) : (
+              data.evidence.map((evidence, index) => (
+                <article
+                  className="ros-evidence-row"
+                  key={`${evidence.factorStatement}-${index}`}
+                >
+                  <div>
+                    <span
+                      className={`ros-pill ${evidence.reviewState === "reviewed" ? "ros-pill--system" : "ros-pill--human"}`}
+                    >
+                      {evidence.reviewState === "reviewed"
+                        ? "已审核关系"
+                        : "AI 候选，未经复核"}
+                    </span>
+                    <h3>{evidence.factorStatement}</h3>
+                    {evidence.sourceVisibleInCase ? (
+                      <blockquote>{evidence.excerpt}</blockquote>
+                    ) : (
+                      <p className="ros-muted">
+                        原文内容受当前来源许可控制，不能在此 Case 展示。
+                      </p>
+                    )}
+                  </div>
+                  <dl>
+                    <div>
+                      <dt>关系角色</dt>
+                      <dd>{evidence.role}</dd>
+                    </div>
+                    {evidence.sourceVisibleInCase && (
+                      <div>
+                        <dt>精确定位</dt>
+                        <dd>{JSON.stringify(evidence.locator)}</dd>
+                      </div>
+                    )}
+                    <div>
+                      <dt>可用时点</dt>
+                      <dd>{evidence.availableAt}</dd>
+                    </div>
+                  </dl>
+                  <div className="ros-evidence-row__actions">
+                    {evidence.sourceTitle && (
+                      <span>{evidence.sourceTitle}</span>
+                    )}
+                    {evidence.sourceVisibleInCase && evidence.documentVersionId ? (
+                      <Link
+                        className="ros-button ros-button--secondary"
+                        to={preserveLocationSearch(`/events/${caseId}/documents?document=${encodeURIComponent(evidence.documentVersionId)}`, location.search)}
+                      >
+                        定位到冻结原文
+                      </Link>
+                    ) : (
+                      <span>当前未获在此 Case 定位原文的许可</span>
+                    )}
+                  </div>
+                </article>
+              ))
+            )}
+          </section>
+        </section>
+      )}
+    </CaseFrame>
+  );
+}
+
+export function CaseDocumentsPage() {
+  return (
+    <CaseFrame>
+      {(data, caseId) => (
+        <CaseDocumentsContent
+          caseId={caseId}
+          isPublished={data.lifecycle.status === "published"}
+          publishedConclusion={
+            data.conclusion.state === "published" ? data.conclusion.text : null
+          }
+        />
+      )}
+    </CaseFrame>
+  );
+}
+function CaseDocumentsContent({
+  caseId,
+  isPublished,
+  publishedConclusion,
+}: {
+  caseId: string;
+  isPublished: boolean;
+  publishedConclusion: string | null;
+}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [documents, setDocuments] = useState<SourceDocumentView[] | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<{
+    document: SourceDocumentView;
+    spans: DocumentSpan[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [extractingId, setExtractingId] = useState<string | null>(null);
+  const [extractionNotice, setExtractionNotice] = useState<string | null>(null);
+  const [noClaimDocumentId, setNoClaimDocumentId] = useState<string | null>(
+    null,
+  );
+  const [documentReload, setDocumentReload] = useState(0);
+  const [preferredDocumentId, setPreferredDocumentId] = useState<string | null>(
+    null,
+  );
+  useEffect(() => {
+    let active = true;
+    setDocuments(null);
+    setError(null);
+    researchClient
+      .getDocuments({ caseId })
+      .then((value) => {
+        if (!active) return;
+        setDocuments(value);
+        const requested = preferredDocumentId || searchParams.get("document");
+        setSelectedId(
+          value.some((item) => item.id === requested)
+            ? requested
+            : (value[0]?.id ?? null),
+        );
+      })
+      .catch(
+        () =>
+          active &&
+          setError(
+            "无法读取这个 Case 的原文资料；系统没有展示其他 Case 的替代内容。",
+          ),
+      );
+    return () => {
+      active = false;
+    };
+  }, [caseId, searchParams, preferredDocumentId, documentReload]);
+  useEffect(() => {
+    let active = true;
+    if (!selectedId) return;
+    setDetail(null);
+    researchClient
+      .getDocumentDetail(selectedId, caseId)
+      .then((value) => active && setDetail(value))
+      .catch(() => active && setError("无法读取所选资料的冻结内容。"));
+    return () => {
+      active = false;
+    };
+  }, [caseId, selectedId]);
+  async function extractCandidates(document: SourceDocumentView) {
+    setExtractingId(document.id);
+    setError(null);
+    setExtractionNotice(null);
+    try {
+      const result = await researchClient.extractStatements(document.id);
+      if (result.candidateCount) {
+        setNoClaimDocumentId(null);
+        setExtractionNotice(
+          `已从此冻结版本创建 ${result.candidateCount} 条待人工审核的原子陈述；尚未发布为正式证据，也没有启动后台补证。`,
+        );
+      } else {
+        setNoClaimDocumentId(document.id);
+        setExtractionNotice(
+          `${result.reason || "本次抽取未产生候选"}；原文与抽取记录仍保留。你可以补充可定位正文后重新核验，不会创建新的 Case。`,
+        );
+      }
+    } catch {
+      setError(
+        "候选抽取没有完成；系统未发布任何正式陈述，也没有启动后台运行。",
+      );
+    } finally {
+      setExtractingId(null);
+    }
+  }
+  const focusSpanId = searchParams.get("span");
+  const recoveryTarget = decodeRecoveryRouteState(searchParams);
+  function beginRecovery(
+    documentId: string,
+    reason: "parse_failed" | "no_claims",
+  ) {
+    setSearchParams(encodeRecoveryRouteState({ documentId, reason }));
+  }
+  function cancelRecovery() {
+    const next = new URLSearchParams(searchParams);
+    next.delete("recovery");
+    next.delete("recovery_reason");
+    setSearchParams(next);
+  }
+  function selectDocument(documentId: string) {
+    setPreferredDocumentId(documentId);
+    setSelectedId(documentId);
+    const next = new URLSearchParams(searchParams);
+    next.set("document", documentId);
+    next.delete("span");
+    if (recoveryTarget?.documentId !== documentId) {
+      next.delete("recovery");
+      next.delete("recovery_reason");
+    }
+    setSearchParams(next);
+  }
+  const currentRecoveryReason =
+    detail?.document.parse_quality === "failed" ? "parse_failed" : "no_claims";
+  const needsSupplement = Boolean(
+    detail &&
+    (detail.document.parse_quality === "failed" ||
+      noClaimDocumentId === detail.document.id ||
+      (recoveryTarget?.documentId === detail.document.id &&
+        recoveryTarget.reason === "no_claims")),
+  );
+  return (
+    <section className="ros-documents">
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">来源阅读</p>
+          <h2>原文资料</h2>
+          <p>
+            只显示已关联当前 Case
+            的资料；正文、定位与版本来自资料记录，而非系统推测。
+          </p>
+        </div>
+        <Link
+          className="ros-button ros-button--secondary"
+          to={preserveLocationSearch(`/events/${caseId}/evidence`, location.search)}
+        >
+          返回命题与证据
+        </Link>
+      </header>
+      {isPublished && (
+        <PublishedMaterialDecisionForm
+          caseId={caseId}
+          publishedConclusion={publishedConclusion}
+          onFrozen={(id) => {
+            setPreferredDocumentId(id);
+            setDocumentReload((value) => value + 1);
+          }}
+        />
+      )}
+      {error && <p className="ros-error">{error}</p>}
+      {extractionNotice && (
+        <p className="ros-success">
+          {extractionNotice}{" "}
+          <Link to={preserveLocationSearch(`/events/${caseId}/review`, location.search)}>进入证据审核 →</Link>
+        </p>
+      )}
+      {!documents ? (
+        <div className="ros-empty">正在读取当前 Case 的原文资料…</div>
+      ) : documents.length === 0 ? (
+        <div className="ros-empty">
+          当前 Case 暂无可读取的原文资料；这不表示其他 Case 的资料可以被复用。
+        </div>
+      ) : (
+        <div className="ros-documents-grid">
+          <section
+            className="ros-document-list"
+            aria-label="当前 Case 原文资料"
+          >
+            {documents.map((document) => (
+              <button
+                type="button"
+                key={document.id}
+                className={`ros-document-row${document.id === selectedId ? " is-selected" : ""}`}
+                onClick={() => selectDocument(document.id)}
+              >
+                <span
+                  className={`ros-pill ${document.parse_quality === "ok" ? "ros-pill--system" : "ros-pill--human"}`}
+                >
+                  {document.parse_quality === "ok"
+                    ? "解析完成"
+                    : document.parse_quality === "partial"
+                      ? "解析不完整"
+                      : "解析失败"}
+                </span>
+                <strong>{document.title || (document.source_contract ? sourceTypeLabel(document.source_contract.source_type) : "未命名资料")}</strong>
+                <small>
+                  {document.publisher || "发布方未记录"} ·{" "}
+                  {document.document_type || (document.source_contract ? sourceTypeLabel(document.source_contract.source_type) : "类型未记录")}
+                </small>
+                <small>
+                  {document.version_label || "版本未记录"} ·{" "}
+                  {document.span_count} 个定位片段
+                </small>
+              </button>
+            ))}
+          </section>
+          <section className="ros-document-reader" aria-live="polite">
+            {!detail ? (
+              <div className="ros-empty ros-empty--compact">
+                正在读取冻结内容…
+              </div>
+            ) : (
+              <DocumentReader
+                caseId={caseId}
+                detail={detail}
+                isPublished={isPublished}
+                focusSpanId={focusSpanId}
+                extracting={extractingId === detail.document.id}
+                onExtract={() => extractCandidates(detail.document)}
+                onSupplementCreated={(id) => {
+                  setNoClaimDocumentId(null);
+                  setPreferredDocumentId(id);
+                  setDocumentReload((value) => value + 1);
+                }}
+                needsSupplement={needsSupplement}
+                recoveryReason={currentRecoveryReason}
+                recoveryActive={
+                  recoveryTarget?.documentId === detail.document.id &&
+                  recoveryTarget.reason === currentRecoveryReason
+                }
+                onBeginRecovery={() =>
+                  beginRecovery(detail.document.id, currentRecoveryReason)
+                }
+                onCancelRecovery={cancelRecovery}
+                onStartNewMaterials={() => navigate("/events/new")}
+              />
+            )}
+          </section>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PublishedMaterialDecisionForm({
+  caseId,
+  publishedConclusion,
+  onFrozen,
+}: {
+  caseId: string;
+  publishedConclusion: string | null;
+  onFrozen: (documentId: string) => void;
+}) {
+  const navigate = useNavigate();
+  const [rawInput, setRawInput] = useState("");
+  const [originalFile, setOriginalFile] = useState<File | null>(null);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceType, setSourceType] = useState<EventSourceType>("pasted_snapshot");
+  const [sourceMetadata, setSourceMetadata] = useState<Record<string, unknown>>({});
+  const [sourcePermissions, setSourcePermissions] = useState({ ai_processing: true, display: true, export: false, api: false });
+  const [sourceGovernance, setSourceGovernance] = useState(DEFAULT_SOURCE_GOVERNANCE);
+  const [providerName, setProviderName] = useState("");
+  const [providerRecordId, setProviderRecordId] = useState("");
+  const [providerRequestScope, setProviderRequestScope] = useState("");
+  const [decision, setDecision] = useState<"reopen" | "no_change">("reopen");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const governanceError = sourceGovernanceValidationError(sourceGovernance);
+  const sourceReady = sourceType === "licensed_provider"
+    ? Boolean(providerName.trim() && providerRecordId.trim() && providerRequestScope.trim())
+    : sourceType === "public_url"
+      ? Boolean(sourceUrl.trim())
+      : true;
+  const materialReady = sourceType === "uploaded_file"
+    ? Boolean(originalFile)
+    : Boolean(rawInput.trim());
+  async function submit() {
+    if (!materialReady || !reason.trim() || !sourceReady || governanceError) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const materialMetadata = {
+          ...sourceMetadata,
+          ...sourceGovernanceMetadata(sourceGovernance),
+          permissions: sourcePermissions,
+          ...(sourceType === "licensed_provider" ? { provider_name: providerName.trim(), provider_record_id: providerRecordId.trim(), request_scope: { declared_scope: providerRequestScope.trim() }, retrieval_reference: sourceUrl.trim() || undefined } : {}),
+          ...(sourceType === "uploaded_file" && sourceUrl.trim()
+            ? { retrieval_reference: sourceUrl.trim() }
+            : {}),
+          ...(sourceType === "public_url" ? { intake_note: "公开网页 URL 仅作为可复查线索；已冻结内容尚未完成原文核验。" } : {}),
+          authority_level:
+            sourceType === "licensed_provider"
+              ? "licensed_research"
+              : "user_supplied",
+        };
+      const result = sourceType === "uploaded_file" && originalFile
+        ? await researchClient.decidePublishedUploadedMaterial({
+            caseId,
+            file: originalFile,
+            sourceMetadata: materialMetadata,
+            decision,
+            reason: reason.trim(),
+            actor: "human:researcher",
+          })
+        : await researchClient.decidePublishedMaterial({
+            caseId,
+            rawInput: rawInput.trim(),
+            sourceUrl: sourceUrl.trim() || undefined,
+            sourceType,
+            sourceMetadata: materialMetadata,
+            decision,
+            reason: reason.trim(),
+            actor: "human:researcher",
+          });
+      onFrozen(result.documentVersionId);
+      setMessage(
+        result.recoveryRequired
+          ? `已冻结原件 ${result.documentVersionId}，但解析尚未完成；未创建后继运行，请从原文资料恢复后再决定是否重新复核。`
+          : result.decision === "reopen"
+          ? `已冻结新材料并创建后继运行 ${result.runId}；此前发布结论未被改写。`
+          : `已冻结新材料并记录“不改变当前判断”的人工决定 ${result.decisionEventId}；发布结论保持有效。`,
+      );
+      if (result.decision === "reopen" && !result.recoveryRequired) navigate(`/events/${caseId}/monitor`);
+    } catch {
+      setMessage(
+        "新材料或人工决定未保存；此前发布结论保持不变。请检查必填信息后重试。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function loadOriginalFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setOriginalFile(file);
+    setSourceMetadata((current) => ({
+      ...current,
+      file_name: file.name,
+      mime_type: file.type || "text/plain",
+      byte_size: file.size,
+    }));
+    if (file.type === "application/pdf") {
+      setRawInput("");
+      setMessage("PDF 原件将由服务端冻结并解析；浏览器不会把它伪装成可读正文。");
+      return;
+    }
+    try {
+      const text =
+        typeof file.text === "function"
+          ? await file.text()
+          : await readTextSnapshot(file);
+      setRawInput(text);
+      setMessage(null);
+    } catch {
+      setMessage(
+        "无法预览该文件；提交后仍会冻结原件，并由服务端记录可恢复的解析结果。",
+      );
+    }
+  }
+  function changeSourceType(next: EventSourceType) {
+    setSourceType(next);
+    if (next !== "uploaded_file") setOriginalFile(null);
+    setSourcePermissions(next === "licensed_provider"
+      ? { ai_processing: false, display: false, export: false, api: false }
+      : next === "public_url"
+        ? { ai_processing: false, display: true, export: false, api: false }
+        : { ai_processing: true, display: true, export: false, api: false });
+  }
+  return (
+    <section className="ros-material-continuation">
+      <p className="ros-eyebrow">已发布结论 · 新材料决定</p>
+      <h3>新材料是否需要改变复核范围？</h3>
+      <p>
+        先冻结这份材料，再由研究员决定纳入重新复核或记录为不改变当前判断。两种决定都会保留原因；系统不会静默改写发布结论。
+      </p>
+      <section className="ros-material-comparison" aria-label="已发布结论与新材料对照">
+        <article>
+          <p className="ros-eyebrow">当前已发布结论</p>
+          <blockquote>{publishedConclusion || "当前发布结论文本不可读取；不能据此推定内容。"}</blockquote>
+        </article>
+        <article>
+          <p className="ros-eyebrow">待冻结的新材料</p>
+          <blockquote>{originalFile
+            ? `${originalFile.name} · ${originalFile.type || "未知类型"} · ${originalFile.size.toLocaleString()} 字节${originalFile.type === "application/pdf" ? "。PDF 原件将在服务端冻结并解析；本页不伪造正文预览。" : rawInput.trim() ? `\n\n${rawInput.trim()}` : "。原件将被完整冻结后进入人工复核。"}`
+            : rawInput.trim() || "输入新材料后在此逐字对照；系统不会自动判断差异或改写结论。"}</blockquote>
+        </article>
+      </section>
+      <p className="ros-note">请在决定理由中说明它影响的判断、关键因素或反证条件；并列对照只帮助人工复核，不构成自动差异结论。</p>
+      <label>
+        新材料正文
+        <textarea
+          aria-label="新增材料正文"
+          value={rawInput}
+          onChange={(event) => setRawInput(event.target.value)}
+          placeholder="粘贴新研报、公告或其他已获准使用的正文…"
+        />
+      </label>
+      <label>
+        来源接入方式
+        <select
+          aria-label="新增材料来源接入方式"
+          value={sourceType}
+          onChange={(event) =>
+            changeSourceType(event.target.value as typeof sourceType)
+          }
+        >
+          <option value="pasted_snapshot">粘贴快照</option>
+          <option value="uploaded_file">上传原件（PDF/TXT/MD/CSV）</option>
+          <option value="licensed_provider">授权数据源快照</option>
+          <option value="public_url">公开网页快照</option>
+        </select>
+      </label>
+      {sourceType === "licensed_provider" && (
+        <section className="ros-source-governance">
+          <label>
+            新增材料供应商名称
+            <input aria-label="新增材料供应商名称" value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder="例如：聚源" />
+          </label>
+          <label>
+            新增材料供应商记录 ID
+            <input aria-label="新增材料供应商记录 ID" value={providerRecordId} onChange={(event) => setProviderRecordId(event.target.value)} placeholder="可重取的报告或公告记录 ID" />
+          </label>
+          <label>
+            新增材料供应商查询口径
+            <textarea aria-label="新增材料供应商查询口径" value={providerRequestScope} onChange={(event) => setProviderRequestScope(event.target.value)} placeholder="例如：研报 / 标的 000001 / 2026H1" />
+          </label>
+          <small>授权来源必须固定供应商、具体记录和查询口径；否则不能作为此决定的已冻结材料。</small>
+        </section>
+      )}
+      <fieldset className="ros-source-governance">
+        <legend>新增材料使用许可声明</legend>
+        <small>这些权限会随冻结版本保存；勾选并不代表材料已审核或足以改变已发布结论。</small>
+        {([['ai_processing', '新增材料允许 AI 处理'], ['display', '新增材料允许团队展示'], ['export', '新增材料允许导出'], ['api', '新增材料允许 API 使用']] as const).map(([key, label]) => (
+          <label key={key}><input aria-label={label} type="checkbox" checked={sourcePermissions[key]} onChange={(event) => setSourcePermissions((current) => ({ ...current, [key]: event.target.checked }))} /> {label}</label>
+        ))}
+      </fieldset>
+      <SourceGovernanceFields value={sourceGovernance} onChange={setSourceGovernance} />
+      {sourceType === "uploaded_file" && (
+        <label>
+          上传新增材料原件
+          <input
+            aria-label="上传新增材料原件"
+            type="file"
+            accept="application/pdf,text/plain,text/markdown,.txt,.md,.csv"
+            onChange={loadOriginalFile}
+          />
+          <small>
+            冻结原始 PDF、TXT、Markdown 或 CSV。PDF 正文只在服务端解析；解析失败也会保留原件、许可与恢复入口。
+          </small>
+        </label>
+      )}
+      <label>
+        {sourceType === "public_url" ? "公开网页链接（必填）" : "来源链接（可选）"}
+        <input
+          aria-label={sourceType === "public_url" ? "公开网页链接（必填）" : undefined}
+          value={sourceUrl}
+          onChange={(event) => setSourceUrl(event.target.value)}
+          placeholder="https://…"
+        />
+      </label>
+      {sourceType === "public_url" && <p className="ros-note">系统只冻结你提交的正文快照，不会抓取网页或将 URL 视为已核验内容；它仍需人工核对后才能进入正式复核。</p>}
+      <fieldset>
+        <legend>人工决定</legend>
+        <label>
+          <input
+            type="radio"
+            checked={decision === "reopen"}
+            onChange={() => setDecision("reopen")}
+          />
+          纳入重新复核：创建后继运行，旧结论保持可回放
+        </label>
+        <label>
+          <input
+            type="radio"
+            checked={decision === "no_change"}
+            onChange={() => setDecision("no_change")}
+          />
+          记录为不改变当前判断：保留材料和理由，不启动运行
+        </label>
+      </fieldset>
+      <label>
+        决定理由
+        <textarea
+          aria-label="新材料决定理由"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="说明它影响或不影响哪个已发布判断、关键因素或反证条件…"
+        />
+      </label>
+      <button
+        className="ros-button ros-button--primary"
+        type="button"
+        disabled={!materialReady || !reason.trim() || !sourceReady || Boolean(governanceError) || busy}
+        onClick={() => void submit()}
+      >
+        {busy
+          ? "正在冻结并记录决定…"
+          : decision === "reopen"
+            ? "冻结材料并纳入重新复核"
+            : "冻结材料并记录不改变判断"}
+      </button>
+      {message && (
+        <p
+          className={message.startsWith("已冻结")
+            ? "ros-success"
+            : message.startsWith("无法") || message.startsWith("新材料")
+              ? "ros-error"
+              : "ros-note"}
+        >
+          {message}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function readTextSnapshot(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsText(file);
+  });
+}
+function DocumentReader({
+  caseId,
+  detail,
+  isPublished,
+  focusSpanId,
+  extracting,
+  onExtract,
+  onSupplementCreated,
+  needsSupplement,
+  recoveryReason,
+  recoveryActive,
+  onBeginRecovery,
+  onCancelRecovery,
+  onStartNewMaterials,
+}: {
+  caseId: string;
+  detail: { document: SourceDocumentView; spans: DocumentSpan[] };
+  isPublished: boolean;
+  focusSpanId: string | null;
+  extracting: boolean;
+  onExtract: () => void;
+  onSupplementCreated: (documentId: string) => void;
+  needsSupplement: boolean;
+  recoveryReason: "parse_failed" | "no_claims";
+  recoveryActive: boolean;
+  onBeginRecovery: () => void;
+  onCancelRecovery: () => void;
+  onStartNewMaterials: () => void;
+}) {
+  const { document, spans } = detail;
+  const contract = document.source_contract;
+  const originalFile = document.original_file;
+  const permissionText = contract
+    ? `AI ${contract.permissions.ai_processing ? "允许" : "禁止"} · 展示 ${contract.permissions.display ? "允许" : "禁止"} · 导出 ${contract.permissions.export ? "允许" : "禁止"} · API ${contract.permissions.api ? "允许" : "禁止"}`
+    : "未记录；不得据此推定可处理或可导出";
+  const publicSourceUrl = document.source_url?.match(/^https?:\/\//i)
+    ? document.source_url
+    : null;
+  const contentDisplayAllowed = contract?.permissions.display !== false;
+  const displayableSpans = contentDisplayAllowed ? spans : [];
+  const extractionAllowed =
+    document.parse_quality !== "failed" &&
+    contentDisplayAllowed &&
+    contract?.permissions.ai_processing !== false &&
+    contract?.status === "admitted";
+  const continuationAllowed = contract?.status === "admitted";
+  const contractRestrictionNotice =
+    !contentDisplayAllowed
+      ? "来源合同禁止展示：系统仅保留审核元数据，不显示正文、定位或引用。"
+      : contract?.status === "restricted"
+      ? "来源合同当前受限：此快照仅用于审计回放，不能继续提取或提出候选。"
+      : !contract
+        ? "来源许可未完整记录：此快照不可据此继续处理或提出候选。"
+        : null;
+  const focused =
+    focusSpanId && displayableSpans.some((span) => span.id === focusSpanId);
+  const [reason, setReason] = useState("");
+  const [continuing, setContinuing] = useState(false);
+  const [continuationNotice, setContinuationNotice] = useState<string | null>(
+    null,
+  );
+  const [candidateSpanId, setCandidateSpanId] = useState<string | null>(null);
+  const [candidateText, setCandidateText] = useState("");
+  const [candidateType, setCandidateType] = useState<
+    "reported_claim" | "forecast" | "research_opinion"
+  >("reported_claim");
+  const [candidateSubmitting, setCandidateSubmitting] = useState(false);
+  const [candidateNotice, setCandidateNotice] = useState<string | null>(null);
+  async function continueFromMaterial() {
+    if (!reason.trim()) return;
+    setContinuing(true);
+    setContinuationNotice(null);
+    try {
+      const next = await researchClient.continueEventResearch({
+        caseId,
+        documentVersionId: document.id,
+        reason: reason.trim(),
+        triggeredBy: "human:researcher",
+      });
+      setContinuationNotice(
+        `已创建后继运行 ${next.runId}；此前发布结论未被改写，新材料将先进入审核。`,
+      );
+    } catch {
+      setContinuationNotice(
+        "无法创建后继研究；未改写此前结论。请确认资料已冻结、当前 Case 已配置监控，并重试。",
+      );
+    } finally {
+      setContinuing(false);
+    }
+  }
+  function beginCandidate(span: DocumentSpan) {
+    setCandidateSpanId(span.id);
+    setCandidateText(span.verbatim_text);
+    setCandidateType("reported_claim");
+    setCandidateNotice(null);
+  }
+  async function createCandidate(span: DocumentSpan) {
+    if (!candidateText.trim()) return;
+    setCandidateSubmitting(true);
+    setCandidateNotice(null);
+    try {
+      await researchOsApi.createAtomicClaim(caseId, {
+        source_span_id: span.id,
+        normalized_text: candidateText.trim(),
+        claim_type: candidateType,
+        assertion_actor: document.publisher,
+        scope: { research_case_id: caseId },
+        actor: "human:researcher",
+      });
+      setCandidateNotice("已创建待审候选，尚未写入正式结论。");
+      setCandidateSpanId(null);
+    } catch {
+      setCandidateNotice(
+        "无法创建待审候选；原文、既有候选和结论均未被改写。请确认本资料仍获展示许可后重试。",
+      );
+    } finally {
+      setCandidateSubmitting(false);
+    }
+  }
+  return (
+    <>
+      <header>
+        <span
+          className={`ros-pill ${contract?.status === "admitted" ? "ros-pill--system" : "ros-pill--human"}`}
+        >
+          {contract?.status === "admitted"
+            ? "来源已准入"
+            : contract
+              ? "来源当前受限"
+              : "许可未完整记录"}
+        </span>
+        <h3>{document.title || (document.source_contract ? sourceTypeLabel(document.source_contract.source_type) : "未命名资料")}</h3>
+        <p>
+          {!contentDisplayAllowed
+            ? "资料正文与原件信息不予展示；仅保留审计元数据。"
+            : originalFile
+            ? originalFile.mime_type === "application/pdf"
+              ? "PDF 原件已冻结；解析定位另行保存。"
+              : "文本原件已冻结；解析内容作为定位片段另行展示。"
+            : "内容快照（当前 V1 未提供原件文件）"}
+        </p>
+      </header>
+      {contractRestrictionNotice && (
+        <p className="ros-error" role="alert">
+          {contractRestrictionNotice}
+        </p>
+      )}
+      <dl className="ros-definition">
+        <div>
+          <dt>冻结资料 ID</dt>
+          <dd>
+            <code>{document.id}</code>
+          </dd>
+        </div>
+        <div>
+          <dt>来源类型</dt>
+          <dd>{sourceTypeLabel(contract?.source_type || document.document_type)}</dd>
+        </div>
+        <div>
+          <dt>来源定位</dt>
+          <dd>
+            {contentDisplayAllowed && publicSourceUrl ? (
+              <a
+                href={publicSourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="打开来源链接"
+              >
+                {publicSourceUrl}
+              </a>
+            ) : contentDisplayAllowed && document.source_url ? (
+              <code>{document.source_url}</code>
+            ) : (
+              "未记录"
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>来源权威性</dt>
+          <dd>{sourceAuthorityLabel(document.source_authority)}</dd>
+        </div>
+        <div>
+          <dt>发布方</dt>
+          <dd>
+            {contract?.provider_or_tenant || document.publisher || "未记录"}
+          </dd>
+        </div>
+        {contract?.provider_record && (
+          <>
+            <div>
+              <dt>供应商记录</dt>
+              <dd>
+                {contract.provider_record.provider_name} · {contract.provider_record.provider_record_id}
+              </dd>
+            </div>
+            <div>
+              <dt>获取口径</dt>
+              <dd>{JSON.stringify(contract.provider_record.request_scope) || "未记录"}</dd>
+            </div>
+            <div>
+              <dt>可重取凭证</dt>
+              <dd>{contract.provider_record.retrieval_reference || "未记录"}</dd>
+            </div>
+            <div>
+              <dt>供应商获取时点</dt>
+              <dd>{contract.provider_record.retrieved_at}</dd>
+            </div>
+            <div>
+              <dt>供应商响应 hash</dt>
+              <dd><code>{contract.provider_record.content_sha256}</code></dd>
+            </div>
+            <div>
+              <dt>供应商合同版本</dt>
+              <dd>{contract.provider_record.contract_version || "未记录"}</dd>
+            </div>
+          </>
+        )}
+        <div>
+          <dt>发布日期</dt>
+          <dd>{document.publish_date || "未记录"}</dd>
+        </div>
+        <div>
+          <dt>可用 / 采集时点</dt>
+          <dd>
+            {document.available_at} / {document.acquired_at}
+          </dd>
+        </div>
+        <div>
+          <dt>解析版本</dt>
+          <dd>
+            {parseQualityLabel(document.parse_quality)} · 解析器 {document.parser_version}
+          </dd>
+        </div>
+        {contentDisplayAllowed && originalFile && (
+          <>
+            <div>
+              <dt>原件文件</dt>
+              <dd>{originalFile.file_name} · {originalFile.mime_type} · {originalFile.byte_size} B</dd>
+            </div>
+            <div>
+              <dt>对象版本</dt>
+              <dd><code>{originalFile.object_version}</code></dd>
+            </div>
+            <div>
+              <dt>上传人 / 保留</dt>
+              <dd>{originalFile.uploaded_by} · {originalFile.retention_policy}</dd>
+            </div>
+          </>
+        )}
+        <div>
+          <dt>许可 / 展示范围</dt>
+          <dd>{permissionText}</dd>
+        </div>
+        {contract && (
+          <>
+            <div>
+              <dt>授权有效期</dt>
+              <dd>
+                {contract.effective_from || "未记录"} 至 {contract.effective_until || "未记录"}
+              </dd>
+            </div>
+            <div>
+              <dt>合同 / 许可版本</dt>
+              <dd>{contract.contract_version || "未记录"}</dd>
+            </div>
+            <div>
+              <dt>保留策略</dt>
+              <dd>
+                {sourceRetentionLabel(contract.retention_policy)} · {sourceRetentionLabel(contract.deletion_policy)}
+              </dd>
+            </div>
+            <div>
+              <dt>下游限制</dt>
+              <dd>
+                {contract.downstream_restrictions.join("；") || "无额外记录"}
+              </dd>
+            </div>
+          </>
+        )}
+      </dl>
+      {isPublished && (
+        <section className="ros-material-continuation">
+          <p className="ros-eyebrow">新材料后的后继研究</p>
+          <h4>以此冻结版本重新核验</h4>
+          <p>
+            这会记录触发原因并创建新的受控运行；此前发布结论保持不变，新材料先经过原文与证据审核。
+          </p>
+          <label>
+            重新研究原因
+            <textarea
+              aria-label="重新研究原因"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="说明这份资料可能影响哪个关键因素或已发布判断…"
+            />
+          </label>
+          <button
+            className="ros-button ros-button--primary"
+            type="button"
+            disabled={!reason.trim() || !continuationAllowed || continuing}
+            onClick={continueFromMaterial}
+          >
+            {continuing ? "正在创建后继运行…" : "以此资料启动重新研究"}
+          </button>
+          {!continuationAllowed && (
+            <small>
+              此资料的来源合同当前不允许继续研究；可查看冻结审计记录，但不能作为后继运行输入。
+            </small>
+          )}
+          {continuationNotice && (
+            <p
+              className={
+                continuationNotice.startsWith("已创建")
+                  ? "ros-success"
+                  : "ros-error"
+              }
+            >
+              {continuationNotice}
+            </p>
+          )}
+        </section>
+      )}
+      {needsSupplement ? (
+        <SupplementRecovery
+          caseId={caseId}
+          documentId={document.id}
+          failureStage={
+            recoveryReason === "parse_failed"
+              ? document.parse_failure_stage || "未记录阶段"
+              : "未产生可研究陈述"
+          }
+          onCreated={onSupplementCreated}
+          active={recoveryActive}
+          onBegin={onBeginRecovery}
+          onCancel={onCancelRecovery}
+          onStartNewMaterials={onStartNewMaterials}
+        />
+      ) : (
+        <>
+          <section className="ros-document-extract">
+            <p>
+              <b>下一步：从冻结原文提取候选。</b>
+              只会创建待人工审核的原子陈述；不会发布
+              SourceStatement、不会启动补证、监控或市场任务。
+            </p>
+            <button
+              className="ros-button ros-button--primary"
+              type="button"
+              disabled={!extractionAllowed || extracting}
+              onClick={onExtract}
+            >
+              {extracting ? "正在提取候选…" : "从冻结资料提取候选"}
+            </button>
+            {!extractionAllowed && (
+              <small>
+                此版本解析失败、来源合同禁止 AI 处理，或合同当前不在有效期内，不能请求候选抽取。
+              </small>
+            )}
+          </section>
+          <section className="ros-source-spans">
+            <p className="ros-eyebrow">可定位正文片段</p>
+            {candidateNotice && (
+              <p
+                className={
+                  candidateNotice.startsWith("已创建")
+                    ? "ros-note"
+                    : "ros-error"
+                }
+                role={candidateNotice.startsWith("已创建") ? "status" : "alert"}
+              >
+                {candidateNotice}
+                {candidateNotice.startsWith("已创建") && (
+                  <>
+                    {" "}
+                    <Link to={`/events/${caseId}/review`}>
+                      前往审核此候选
+                    </Link>
+                  </>
+                )}
+              </p>
+            )}
+            {focused && (
+              <p className="ros-note">
+                已定位到审核候选对应的冻结原文片段；请核对原文、定位、许可与候选表述后再决定。
+              </p>
+            )}
+            {displayableSpans.length ? (
+              displayableSpans.map((span) => (
+                <article
+                  className={span.id === focusSpanId ? "is-focused" : ""}
+                  key={span.id}
+                >
+                  <code>{JSON.stringify(span.locator)}</code>
+                  <blockquote>{span.verbatim_text}</blockquote>
+                  <small>
+                    {span.cited_by.length
+                      ? `已被 ${span.cited_by.length} 条证据关系引用`
+                      : "尚未被证据关系引用"}
+                  </small>
+                  <button
+                    className="ros-button ros-button--secondary"
+                    type="button"
+                    disabled={contract?.status !== "admitted"}
+                    onClick={() => beginCandidate(span)}
+                  >
+                    将此段纳入待审候选
+                  </button>
+                  {candidateSpanId === span.id && (
+                    <form
+                      className="ros-inline-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void createCandidate(span);
+                      }}
+                    >
+                      <p>
+                        这只创建待审原子陈述。原文引用、定位和正式结论不会被直接修改。
+                      </p>
+                      <label>
+                        候选性质
+                        <select
+                          aria-label="候选性质"
+                          value={candidateType}
+                          onChange={(event) =>
+                            setCandidateType(
+                              event.target.value as typeof candidateType,
+                            )
+                          }
+                        >
+                          <option value="reported_claim">来源陈述</option>
+                          <option value="forecast">预测</option>
+                          <option value="research_opinion">研究观点</option>
+                        </select>
+                      </label>
+                      <label>
+                        候选表述
+                        <textarea
+                          aria-label="候选表述"
+                          value={candidateText}
+                          onChange={(event) => setCandidateText(event.target.value)}
+                        />
+                      </label>
+                      <div className="ros-header-actions">
+                        <button
+                          className="ros-button ros-button--primary"
+                          type="submit"
+                          disabled={!candidateText.trim() || candidateSubmitting}
+                        >
+                          {candidateSubmitting ? "正在创建候选…" : "创建待审候选"}
+                        </button>
+                        <button
+                          className="ros-button ros-button--secondary"
+                          type="button"
+                          disabled={candidateSubmitting}
+                          onClick={() => setCandidateSpanId(null)}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </article>
+              ))
+            ) : (
+              <div className="ros-empty ros-empty--compact">
+                当前资料没有返回可定位正文片段。
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </>
+  );
+}
+
+function SupplementRecovery({
+  caseId,
+  documentId,
+  failureStage,
+  onCreated,
+  active,
+  onBegin,
+  onCancel,
+  onStartNewMaterials,
+}: {
+  caseId: string;
+  documentId: string;
+  failureStage: string;
+  onCreated: (documentId: string) => void;
+  active: boolean;
+  onBegin: () => void;
+  onCancel: () => void;
+  onStartNewMaterials: () => void;
+}) {
+  const [rawText, setRawText] = useState("");
+  const [page, setPage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const noClaims = failureStage === "未产生可研究陈述";
+  async function submit() {
+    if (!rawText.trim() || !page.trim()) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await researchOsApi.createDocumentSupplement(documentId, {
+        case_id: caseId,
+        raw_text: rawText.trim(),
+        claimed_page_reference: page.trim(),
+        created_by: "human:researcher",
+        source_metadata: { authority_level: "user_supplied" },
+      });
+      setMessage(
+        result.extraction_allowed
+          ? "补充正文已独立冻结；已切换到新版本，可提取待审候选。"
+          : "补充正文已独立冻结；已切换到新版本，但继承后的许可不允许 AI 处理。可保留供人工核验。",
+      );
+      onCreated(result.document_version_id);
+      onCancel();
+    } catch {
+      setMessage(
+        "补充正文未保存；原件保持不变。请检查 Case 权限和必填项后重试。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="ros-recovery">
+      <p className="ros-rulebox">
+        {noClaims
+          ? "该资料尚未产生可研究陈述；原文与本次抽取记录均保留，暂不能把它写成证据。"
+          : `该资料在 ${failureStage} 解析失败；保留资料记录，暂不能把它写成证据。`}
+        补充正文会作为独立版本关联原件，页码仅作为你的声明。
+      </p>
+      <p>不会改写原件，也不会自动启动研究、发布正式陈述或市场任务。</p>
+      {!active ? (
+        <button
+          className="ros-button ros-button--primary"
+          type="button"
+          onClick={onBegin}
+        >
+          继续补充原 Case
+        </button>
+      ) : (
+        <div className="ros-recovery__form">
+          <p className="ros-note">
+            恢复目标已固定为当前冻结资料。刷新此链接会继续同一目标；未知恢复状态不会提交补充正文。
+          </p>
+          <label>
+            补充正文
+            <textarea
+              aria-label="补充正文"
+              value={rawText}
+              onChange={(event) => setRawText(event.target.value)}
+              placeholder="粘贴可核验的原文内容…"
+            />
+          </label>
+          <label>
+            声称页码或位置
+            <input
+              aria-label="声称页码或位置"
+              value={page}
+              onChange={(event) => setPage(event.target.value)}
+              placeholder="例如：第 3 页"
+            />
+          </label>
+          <div>
+            <button
+              className="ros-button ros-button--primary"
+              type="button"
+              disabled={!rawText.trim() || !page.trim() || busy}
+              onClick={submit}
+            >
+              {busy ? "正在冻结补充正文…" : "冻结补充正文"}
+            </button>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              disabled={busy}
+              onClick={onCancel}
+            >
+              取消恢复
+            </button>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              disabled={busy}
+              onClick={onStartNewMaterials}
+            >
+              放弃恢复并新建资料
+            </button>
+          </div>
+        </div>
+      )}
+      {message && (
+        <p
+          className={
+            message.startsWith("补充正文已") ? "ros-success" : "ros-error"
+          }
+        >
+          {message}
+        </p>
+      )}
+    </section>
+  );
+}
+
+export function CaseConclusionPage() {
+  const location = useLocation();
+  const workflowNotice = workflowNoticeFromState(location.state);
+  return (
+    <CaseFrame>
+      {(data, caseId) => {
+        const action = eventActionPresentation(data, caseId);
+        return <>
+          {workflowNotice && (
+            <p className="ros-success" role="status">{workflowNotice}</p>
+          )}
+          <section className="ros-case-columns">
+          <div>
+            <article className="ros-panel ros-panel--conclusion">
+              <p className="ros-eyebrow">
+                当前判断 ·{" "}
+                {data.conclusion.state === "published"
+                  ? "已人工发布"
+                  : data.conclusion.state === "ai_draft"
+                    ? "AI 草案，未发布"
+                    : "暂不下结论"}
+              </p>
+              <h2>{data.conclusion.text}</h2>
+              <p className="ros-conclusion-text">
+                {data.conclusion.state === "published"
+                  ? "该版本只基于已审核资料；新运行只会追加待审证据，不会自动重写结论。"
+                  : "尚未审核的候选、二手转述和无授权材料都不会自动进入当前判断。"}
+              </p>
+            </article>
+            <FactorList data={data} />
+          </div>
+          <aside className="ros-case-rail">
+            <section className="ros-action-card">
+              <div className="ros-action-card__owner"><span>{action.owner}</span><small>{data.nextAction.count ? `${data.nextAction.count} 项待处理` : EVENT_STATUS_LABEL[data.lifecycle.status]}</small></div>
+              <h2>{action.title}</h2>
+              <p>{action.why}</p>
+              <div className="ros-action-card__steps">
+                <span>进入后需要完成</span>
+                <ol>{action.steps.map((step, index) => <li key={step}><b>{index + 1}</b><span>{step}</span></li>)}</ol>
+              </div>
+              <dl className="ros-action-card__outcome">
+                <dt>完成后会发生什么</dt>
+                <dd>{action.unlock}</dd>
+              </dl>
+              <Link
+                className="ros-button ros-button--primary"
+                to={preserveLocationSearch(action.to, location.search)}
+              >
+                {action.buttonLabel}
+              </Link>
+            </section>
+            <section className="ros-rail-section">
+              <p className="ros-eyebrow">持续研究</p>
+              <h2>
+                {data.lifecycle.activeRunId
+                  ? "系统正在受控补证"
+                  : data.lifecycle.status === "published"
+                    ? "主研究已发布；后续补证独立记录"
+                    : "尚未授权后台运行"}
+              </h2>
+              <p>
+                {data.lifecycle.activeRunId
+                  ? `范围版本 v${data.scope.version} · 仅允许来源内的材料可进入后续审核。`
+                  : data.lifecycle.status === "published"
+                    ? "发布的结论保持不变；后续单因素补证和定时任务会在“监测与运行”中独立显示。"
+                    : "完成原文核验、来源许可与研究协议后，才可配置并触发一次可回放的补证运行。"}
+              </p>
+              <Link to={preserveLocationSearch(`/events/${caseId}/monitor`, location.search)}>查看运行记录 →</Link>
+            </section>
+            <section className="ros-rail-section">
+              <p className="ros-eyebrow">结论依据</p>
+              <p>
+                {data.conclusion.citations.length}{" "}
+                条可回溯引用；每条都保留原文定位、可用时点与审核状态。
+              </p>
+            </section>
+            <CaseRelationRail caseId={caseId} />
+          </aside>
+          </section>
+        </>;
+      }}
+    </CaseFrame>
+  );
+}
+
+export function CaseConclusionHistoryPage() {
+  return (
+    <CaseFrame>
+      {(_data, caseId) => <ConclusionHistoryContent caseId={caseId} />}
+    </CaseFrame>
+  );
+}
+export function CaseScopePage() {
+  return (
+    <CaseFrame>
+      {(data, caseId) => (
+        <ScopeEditor
+          caseId={caseId}
+          initialFactors={data.scope.factors}
+          currentVersion={data.scope.version}
+        />
+      )}
+    </CaseFrame>
+  );
+}
+function ScopeEditor({
+  caseId,
+  initialFactors,
+  currentVersion,
+}: {
+  caseId: string;
+  initialFactors: EventWorkbench["scope"]["factors"];
+  currentVersion: number;
+}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [factors, setFactors] = useState(() =>
+    initialFactors.map((factor) => factor.statement),
+  );
+  const [reason, setReason] = useState("调整关键因素以补足当前验证缺口");
+  const [history, setHistory] = useState<
+    Awaited<ReturnType<typeof researchOsApi.scopeHistory>>["items"]
+  >([]);
+  const [historyError, setHistoryError] = useState(false);
+  const [historyReload, setHistoryReload] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const caseIdRef = useRef(caseId);
+  const generationRef = useRef(0);
+  if (caseIdRef.current !== caseId) {
+    caseIdRef.current = caseId;
+    generationRef.current += 1;
+  }
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    setFactors(initialFactors.map((factor) => factor.statement));
+    setNotice(null);
+  }, [initialFactors]);
+  useEffect(() => {
+    let active = true;
+    setHistoryError(false);
+    researchOsApi
+      .scopeHistory(caseId)
+      .then((value) => {
+        if (!active) return;
+        setHistory(value.items);
+        setHistoryError(false);
+      })
+      .catch(() => active && setHistoryError(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId, notice, historyReload]);
+  const normalized = factors.map((factor) => factor.trim()).filter(Boolean);
+  const scopeMissingRequirements = [
+    normalized.length < 3 || normalized.length > 5
+      ? "保留 3–5 个关键因素"
+      : null,
+    new Set(normalized).size !== normalized.length
+      ? "移除重复的关键因素"
+      : null,
+    !reason.trim() ? "填写本次调整原因" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const scopeSaveReady = !busy && scopeMissingRequirements.length === 0;
+  function edit(index: number, value: string) {
+    setFactors((current) =>
+      current.map((factor, position) => (position === index ? value : factor)),
+    );
+  }
+  async function save() {
+    if (!scopeSaveReady) return;
+    setBusy(true);
+    setNotice(null);
+    const request = {
+      caseId,
+      generation: generationRef.current,
+      search: location.search,
+    };
+    const requestIsCurrent = () =>
+      mounted.current
+      && caseIdRef.current === request.caseId
+      && generationRef.current === request.generation;
+    try {
+      await researchClient.updateEventResearchScope({
+        caseId,
+        factors: normalized,
+        changedBy: "human:researcher",
+        changeReason: reason.trim(),
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+      if (!requestIsCurrent()) return;
+      navigate(
+        preserveLocationSearch(`/events/${request.caseId}`, request.search),
+        {
+          state: {
+            workflowNotice: "研究范围已更新，系统已按新范围继续补证。",
+          },
+        },
+      );
+    } catch {
+      if (requestIsCurrent()) {
+        setNotice(
+          "范围未更新。已发布 Case 不能直接改写范围；请先从新材料启动后继研究。 ",
+        );
+      }
+    } finally {
+      if (requestIsCurrent()) setBusy(false);
+    }
+  }
+  return (
+    <section className="ros-scope-editor">
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">范围版本 v{currentVersion}</p>
+          <h2>调整关键因素，创建新的研究范围</h2>
+          <p>
+            范围更新会重新映射已审核证据，并只影响后续研究；过去的运行和结论仍使用各自冻结的范围版本。
+          </p>
+        </div>
+        <Link
+          className="ros-button ros-button--secondary"
+          to={preserveLocationSearch(`/events/${caseId}/evidence`, location.search)}
+        >
+          查看当前证据
+        </Link>
+      </header>
+      <div className="ros-scope-editor__form">
+        {factors.map((factor, index) => (
+          <label key={index}>
+            关键因素 {index + 1}
+            <textarea
+              aria-label={`关键因素 ${index + 1}`}
+              value={factor}
+              onChange={(event) => edit(index, event.target.value)}
+            />
+          </label>
+        ))}
+        <label>
+          本次调整原因
+          <textarea
+            aria-label="本次调整原因"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="ros-scope-editor__actions">
+        <button
+          className="ros-button ros-button--secondary"
+          type="button"
+          disabled={factors.length <= 3}
+          onClick={() => setFactors((current) => current.slice(0, -1))}
+        >
+          移除最后一项
+        </button>
+        <button
+          className="ros-button ros-button--secondary"
+          type="button"
+          disabled={factors.length >= 5}
+          onClick={() => setFactors((current) => [...current, ""])}
+        >
+          增加因素
+        </button>
+        <button
+          className="ros-button ros-button--primary"
+          type="button"
+          disabled={!scopeSaveReady}
+          onClick={save}
+        >
+          {busy ? "正在创建范围版本…" : "保存新的研究范围"}
+        </button>
+      </div>
+      {scopeMissingRequirements.length > 0 && (
+        <p className="ros-note" role="status">
+          保存研究范围前还需填写：{scopeMissingRequirements.join("、")}。系统会创建新版本，不会改写已冻结的范围。
+        </p>
+      )}
+      {notice && (
+        <p
+          className={notice.startsWith("已创建") ? "ros-success" : "ros-error"}
+        >
+          {notice}
+        </p>
+      )}
+      <section className="ros-rule-history">
+        <p className="ros-eyebrow">范围版本历史</p>
+        <h2>谁在何时因何调整了范围</h2>
+        {historyError ? (
+          <div className="ros-empty ros-empty--compact" role="alert">
+            <strong>无法读取范围版本历史</strong>
+            <p>当前编辑内容仍未保存；系统不会把空列表写成没有历史。</p>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              onClick={() => setHistoryReload((value) => value + 1)}
+            >
+              重新读取范围版本历史
+            </button>
+          </div>
+        ) : (
+          <ol>
+            {history.map((item) => (
+              <li key={item.version}>
+                <strong>v{item.version}</strong>
+                <span>
+                  {item.changed_by} · {item.created_at}
+                </span>
+                <p>{item.change_reason}</p>
+                <small>
+                  {item.factors.map((factor) => factor.statement).join("；")}
+                </small>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+    </section>
+  );
+}
+function ConclusionHistoryContent({ caseId }: { caseId: string }) {
+  const [versions, setVersions] = useState<Awaited<
+    ReturnType<EventResearchClient["getEventConclusionHistory"]>
+  > | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setVersions(null);
+    setLoadError(false);
+    researchClient
+      .getEventConclusionHistory(caseId)
+      .then((value) => {
+        if (!active) return;
+        setVersions(value);
+        setLoadError(false);
+      })
+      .catch(() => active && setLoadError(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId, reload]);
+  if (versions === null)
+    return (
+      <section className="ros-empty ros-page-gap" role={loadError ? "alert" : undefined}>
+        {loadError ? (
+          <>
+            <strong>无法读取不可变结论版本</strong>
+            <p>系统不会以当前结论替代历史记录。</p>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              onClick={() => setReload((value) => value + 1)}
+            >
+              重试读取结论版本
+            </button>
+          </>
+        ) : (
+          "正在读取不可变结论版本；未返回记录时不会以当前结论替代历史。"
+        )}
+      </section>
+    );
+  return (
+    <section className="ros-conclusion-history">
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">结论审计链</p>
+          <h2>结论版本与人工发布边界</h2>
+          <p>
+            每一版保留当时的范围、依据数量、草案来源与人工发布人。新的材料只能进入待审流程，不能自动改写这里的任何结论。
+          </p>
+        </div>
+        <Link
+          className="ros-button ros-button--secondary"
+          to={`/events/${caseId}/monitor`}
+        >
+          查看补证运行
+        </Link>
+      </header>
+      {versions.length === 0 ? (
+        <div className="ros-empty">
+          当前尚无已保存的结论版本；系统不会把临时页面文字当作历史结论。
+        </div>
+      ) : (
+        <ol className="ros-conclusion-history__list">
+          {versions.map((version) => (
+            <li key={version.id}>
+              <span
+                className={`ros-pill ${version.state === "published" ? "ros-pill--system" : "ros-pill--human"}`}
+              >
+                {version.state === "published" ? "人工发布" : "AI 草案，未发布"}
+              </span>
+              <article>
+                <header>
+                  <div>
+                    <p className="ros-eyebrow">
+                      版本 {version.sequence} · {version.createdAt}
+                    </p>
+                    <h3>{version.primaryFactor || "未声明主要因素"}</h3>
+                  </div>
+                  <small>
+                    范围 v{version.scopeVersion ?? "历史未记录"} ·{" "}
+                    {version.evidenceCount} 条冻结依据
+                  </small>
+                </header>
+                <blockquote>{version.text}</blockquote>
+                <p>
+                  {version.basedOnConclusionId
+                    ? `基于草案 ${version.basedOnConclusionId}`
+                    : "独立草案起点"}{" "}
+                  ·{" "}
+                  {version.reviewer
+                    ? `发布/审核人：${version.reviewer}`
+                    : "尚未人工发布"}
+                </p>
+              </article>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+export function CaseReviewPage() {
+  return (
+    <CaseFrame>
+      {(data, caseId) => <ReviewContent caseId={caseId} workbench={data} />}
+    </CaseFrame>
+  );
+}
+
+function ReviewContent({
+  caseId,
+  workbench,
+}: {
+  caseId: string;
+  workbench: EventWorkbench;
+}) {
+  if (workbench.nextAction.kind === "review_conclusion") {
+    const draftIdentity = JSON.stringify([
+      caseId,
+      workbench.scope.version,
+      workbench.conclusion.state,
+      workbench.conclusion.text,
+    ]);
+    return (
+      <ConclusionReviewTask
+        caseId={caseId}
+        key={draftIdentity}
+        workbench={workbench}
+      />
+    );
+  }
+  return <EvidenceReviewTask caseId={caseId} />;
+}
+
+export function ConclusionReviewTask({
+  caseId,
+  workbench,
+}: {
+  caseId: string;
+  workbench: EventWorkbench;
+}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const draftIdentity = JSON.stringify([
+    caseId,
+    workbench.scope.version,
+    workbench.conclusion.state,
+    workbench.conclusion.text,
+  ]);
+  const [text, setText] = useState(workbench.conclusion.text);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const submissionInFlight = useRef(false);
+  const identityRef = useRef(draftIdentity);
+  const generationRef = useRef(0);
+
+  if (identityRef.current !== draftIdentity) {
+    identityRef.current = draftIdentity;
+    generationRef.current += 1;
+  }
+
+  const allowNavigation = useDirtyNavigationGuard(
+    text !== workbench.conclusion.text,
+  );
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    submissionInFlight.current = false;
+    setText(workbench.conclusion.text);
+    setError(null);
+    setSubmitting(false);
+  }, [draftIdentity, workbench.conclusion.text]);
+
+  async function publishConclusion() {
+    const trimmed = text.trim();
+    if (!trimmed || submissionInFlight.current) return;
+    submissionInFlight.current = true;
+    setSubmitting(true);
+    setError(null);
+    const request = {
+      caseId,
+      generation: generationRef.current,
+      identity: draftIdentity,
+      search: location.search,
+    };
+    const requestIsCurrent = () =>
+      mounted.current
+      && identityRef.current === request.identity
+      && generationRef.current === request.generation;
+    try {
+      await researchClient.publishEventConclusion({
+        caseId,
+        text: trimmed,
+        reviewer: "human:researcher",
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+      if (!requestIsCurrent()) return;
+      allowNavigation();
+      navigate(`/events/${request.caseId}${request.search}`, {
+        state: {
+          workflowNotice: "结论已发布，当前事件进入持续跟踪。",
+        },
+      });
+    } catch {
+      if (requestIsCurrent()) {
+        setError("发布结论失败；草案未发布，请检查后重试。");
+      }
+    } finally {
+      if (requestIsCurrent()) {
+        submissionInFlight.current = false;
+        setSubmitting(false);
+      }
+    }
+  }
+
+  return (
+    <section className="ros-review-workbench" aria-busy={submitting}>
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">人工结论复核</p>
+          <h2>复核并发布结论草案</h2>
+          <p>
+            这是 AI 草案，正式发布需人工确认。编辑只改变本次结论文字，
+            引用/证据边界不会自动扩张。
+          </p>
+        </div>
+        <span className="ros-pill ros-pill--human">AI 草案，未发布</span>
+      </header>
+      <label className="ros-conclusion-review__field">
+        结论草案
+        <textarea
+          aria-label="结论草案"
+          className="ros-conclusion-review__editor"
+          disabled={submitting}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+        />
+      </label>
+      {error && <p className="ros-error" role="alert">{error}</p>}
+      <button
+        className="ros-button ros-button--primary"
+        type="button"
+        disabled={!text.trim() || submitting}
+        onClick={publishConclusion}
+      >
+        {submitting ? "正在发布结论…" : "发布结论并进入持续跟踪"}
+      </button>
+    </section>
+  );
+}
+
+function EvidenceReviewTask({ caseId }: { caseId: string }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [queue, setQueue] = useState<Awaited<
+    ReturnType<EventResearchClient["getEventReviewQueue"]>
+  > | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setQueue(null);
+    setLoadError(false);
+    researchClient
+      .getEventReviewQueue(caseId)
+      .then((value) => {
+        if (!active) return;
+        setQueue(value);
+        setLoadError(false);
+      })
+      .catch(() => active && setLoadError(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId, reload]);
+  if (!queue)
+    return (
+      <div className="ros-empty ros-page-gap" role={loadError ? "alert" : undefined}>
+        {loadError ? (
+          <>
+            <strong>无法读取待审核证据</strong>
+            <p>不可访问的来源不会进入审核动作；系统也不会把它当作空队列。</p>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              onClick={() => setReload((value) => value + 1)}
+            >
+              重试读取待审核证据
+            </button>
+          </>
+        ) : (
+          "正在读取待审核证据；不可访问的来源不会进入审核动作。"
+        )}
+      </div>
+    );
+  const actionable = queue.items.filter((item) => item.canAccept);
+  const blocked = queue.items.filter((item) => !item.canAccept);
+  function handleDecided(outcome: EvidenceReviewOutcome) {
+    navigate(`/events/${caseId}${location.search}`, {
+      state: { workflowNotice: EVIDENCE_REVIEW_NOTICE[outcome] },
+    });
+  }
+  return (
+    <section className="ros-review-workbench">
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">人工审核</p>
+          <h2>{queue.summary.pending} 条待审核关系</h2>
+        </div>
+        <span className="ros-muted">候选仅供核对；不会自动采纳</span>
+      </header>
+      {actionable.length === 0 ? (
+        <div className="ros-empty">当前没有待审核候选。</div>
+      ) : (
+        actionable.map((item) => (
+          <ReviewItem
+            item={item}
+            onDecided={handleDecided}
+            key={item.proposalId}
+          />
+        ))
+      )}
+      {blocked.length > 0 && (
+        <section className="ros-rulebox">
+          <p className="ros-eyebrow">资料受限，不能采纳</p>
+          <p>以下候选保留审计记录，但不会进入结论或审核动作。</p>
+          {blocked.map((item) => (
+            <article key={item.proposalId}>
+              <strong>{item.sourceTitle || "来源未记录"}</strong>
+              <p>{item.sourceStatusReason}</p>
+            </article>
+          ))}
+        </section>
+      )}
+      <AtomicClaimReviewPanel caseId={caseId} />
+    </section>
+  );
+}
+
+function AtomicClaimReviewPanel({ caseId }: { caseId: string }) {
+  const [claims, setClaims] = useState<AtomicClaimCandidate[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setClaims(null);
+    setError(null);
+    researchOsApi
+      .atomicClaims(caseId)
+      .then((value) => active && setClaims(value.items))
+      .catch(
+        () =>
+          active &&
+          setError("原子陈述队列暂不可读；系统不会据此推定抽取结果已审核。"),
+      );
+    return () => {
+      active = false;
+    };
+  }, [caseId, reload]);
+  return (
+    <section className="ros-atomic-review">
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">抽取证据门禁</p>
+          <h2>原子陈述审核</h2>
+          <p>
+            模型和表格规则的输出只能停在这里；只有人工决定才会发布为正式
+            SourceStatement。
+          </p>
+        </div>
+        <span className="ros-muted">
+          {claims
+            ? `${claims.filter((item) => item.review_state === "awaiting_review").length} 条待审核`
+            : "正在读取"}
+        </span>
+      </header>
+      {error ? (
+        <div className="ros-empty ros-empty--compact" role="alert">
+          <strong>原子陈述队列暂不可读</strong>
+          <p>{error}</p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => setReload((value) => value + 1)}
+          >
+            重试读取原子陈述队列
+          </button>
+        </div>
+      ) : claims === null ? (
+        <div className="ros-empty ros-empty--compact">
+          正在读取带原文定位的抽取候选…
+        </div>
+      ) : claims.length === 0 ? (
+        <div className="ros-empty ros-empty--compact">
+          当前 Case 没有待展示的原子陈述候选。
+        </div>
+      ) : (
+        claims.map((claim) => (
+          <AtomicClaimItem key={claim.id} caseId={caseId} claim={claim} />
+        ))
+      )}
+    </section>
+  );
+}
+
+function AtomicClaimItem({
+  caseId,
+  claim,
+}: {
+  caseId: string;
+  claim: AtomicClaimCandidate;
+}) {
+  const location = useLocation();
+  const [reason, setReason] = useState("");
+  const [editedText, setEditedText] = useState(claim.normalized_text);
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reviewState, setReviewState] = useState(claim.review_state);
+  const [sourceDetail, setSourceDetail] = useState<{
+    document: SourceDocumentView;
+    spans: DocumentSpan[];
+  } | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [loadingSource, setLoadingSource] = useState(false);
+  const quotedSpan = sourceDetail?.spans.find(
+    (span) => span.id === claim.source_span_id,
+  );
+
+  async function inspectSource() {
+    if (sourceDetail || loadingSource) return;
+    setLoadingSource(true);
+    setSourceError(null);
+    try {
+      setSourceDetail(
+        await researchClient.getDocumentDetail(claim.document_version_id, caseId),
+      );
+    } catch {
+      setSourceError(
+        "无法读取冻结原文；候选不会因此被自动确认。可刷新后重试或使用原文资料页。 ",
+      );
+    } finally {
+      setLoadingSource(false);
+    }
+  }
+  async function decide(outcome: "confirmed" | "modified" | "rejected") {
+    if (!reason.trim() || (outcome === "modified" && !editedText.trim()))
+      return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const review = await researchOsApi.reviewAtomicClaim(claim.id, {
+        outcome,
+        normalized_text: outcome === "modified" ? editedText.trim() : null,
+        reviewer: "human:researcher",
+        reason: reason.trim(),
+        idempotency_key: `atomic-review:${claim.id}:${Date.now()}`,
+      });
+      setReviewState(review.outcome);
+      setNotice(
+        review.published_source_statement
+          ? "已发布为正式陈述；候选、原文定位和审核记录仍可回放。"
+          : "已驳回候选；原文和审核理由保留在审计记录中。",
+      );
+    } catch {
+      setError("提交原子陈述审核失败；当前候选没有被自动发布。请刷新后重试。 ");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const isPending = reviewState === "awaiting_review";
+  return (
+    <article className="ros-atomic-claim">
+      <div className="ros-atomic-claim__main">
+        <span
+          className={`ros-pill ${isPending ? "ros-pill--human" : "ros-pill--system"}`}
+        >
+          {isPending
+            ? "待人工审核"
+            : reviewState === "rejected"
+              ? "已驳回"
+              : "已审核"}
+        </span>
+        <h3>{claim.normalized_text}</h3>
+        <blockquote>{claim.quote}</blockquote>
+        <p className="ros-atomic-claim__hash">
+          连续定位 {claim.quote_start}–{claim.quote_end} · SHA-256{" "}
+          {claim.quote_sha256.slice(0, 12)}…
+        </p>
+      </div>
+      <dl>
+        <div>
+          <dt>来源定位</dt>
+          <dd>{JSON.stringify(claim.locator)}</dd>
+        </div>
+        <div>
+          <dt>权威等级</dt>
+          <dd>{claim.authority_level}</dd>
+        </div>
+        <div>
+          <dt>抽取运行</dt>
+          <dd>{String(claim.structured_fields.run_ref || "未记录")}</dd>
+        </div>
+        <div>
+          <dt>历史审核</dt>
+          <dd>
+            {claim.review_history.length
+              ? claim.review_history
+                  .map((review) => `${review.outcome} · ${review.reviewer}`)
+                  .join("；")
+              : "尚未审核"}
+          </dd>
+        </div>
+      </dl>
+      <div className="ros-review-actions">
+        <button
+          className="ros-button ros-button--secondary"
+          type="button"
+          onClick={() => void inspectSource()}
+          disabled={loadingSource}
+        >
+          {loadingSource ? "正在读取冻结原文…" : "在此页核对原文"}
+        </button>
+        <Link
+          className="ros-button ros-button--secondary"
+          to={preserveLocationSearch(
+            `/events/${caseId}/documents?document=${encodeURIComponent(claim.document_version_id)}&span=${encodeURIComponent(claim.source_span_id)}`,
+            location.search,
+          )}
+        >
+          定位到冻结原文
+        </Link>
+        {claim.document_source_url?.match(/^https?:\/\//i) ? (
+          <a
+            className="ros-button ros-button--secondary"
+            href={claim.document_source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            打开原始链接
+          </a>
+        ) : (
+          <span>原始链接未记录</span>
+        )}
+        <span>候选 ID · {claim.id}</span>
+      </div>
+      {sourceDetail && (
+        <section className="ros-atomic-source-check">
+          <div>
+            <p className="ros-eyebrow">在此页核对的冻结原文</p>
+            <strong>{sourceDetail.document.title || (sourceDetail.document.source_contract ? sourceTypeLabel(sourceDetail.document.source_contract.source_type) : "未命名资料")}</strong>
+            <small>
+              {sourceDetail.document.publisher || "发布方未记录"} ·{" "}
+              {sourceDetail.document.available_at}
+            </small>
+          </div>
+          <blockquote>
+            {quotedSpan?.verbatim_text ||
+              "资料已读取，但候选引用的定位片段不在本次返回中；不可据此确认候选。请前往原文资料页复核。"}
+          </blockquote>
+          <code>{JSON.stringify(quotedSpan?.locator || claim.locator)}</code>
+        </section>
+      )}
+      {sourceError && <p className="ros-error">{sourceError}</p>}
+      {isPending && (
+        <div className="ros-review-decision">
+          <label>
+            原子陈述审核理由
+            <textarea
+              aria-label="原子陈述审核理由"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="核对原文、定位、主体、数值、期间与来源权限"
+            />
+          </label>
+          {editing && (
+            <label>
+              审核后规范表述
+              <textarea
+                aria-label="审核后规范表述"
+                value={editedText}
+                onChange={(event) => setEditedText(event.target.value)}
+              />
+            </label>
+          )}
+          <div>
+            <button
+              className="ros-button ros-button--primary"
+              type="button"
+              disabled={!reason.trim() || busy}
+              onClick={() => decide("confirmed")}
+            >
+              确认并发布
+            </button>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              disabled={busy}
+              onClick={() => setEditing((value) => !value)}
+            >
+              {editing ? "取消修改" : "修改后发布"}
+            </button>
+            {editing && (
+              <button
+                className="ros-button ros-button--primary"
+                type="button"
+                disabled={!reason.trim() || !editedText.trim() || busy}
+                onClick={() => decide("modified")}
+              >
+                发布审核后表述
+              </button>
+            )}
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              disabled={!reason.trim() || busy}
+              onClick={() => decide("rejected")}
+            >
+              驳回候选
+            </button>
+          </div>
+          {error && <p className="ros-error">{error}</p>}
+        </div>
+      )}
+      {notice && <p className="ros-success">{notice}</p>}
+    </article>
+  );
+}
+
+function ReviewItem({
+  item,
+  onDecided,
+}: {
+  item: Awaited<
+    ReturnType<EventResearchClient["getEventReviewQueue"]>
+  >["items"][number];
+  onDecided: (outcome: EvidenceReviewOutcome) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  async function decide(
+    outcome: EvidenceReviewOutcome,
+  ) {
+    if (!reason.trim()) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await researchClient.reviewProposal(item.proposalId, {
+        outcome,
+        reason: reason.trim(),
+        reviewer_id: "human:researcher",
+        expected_version: item.proposalVersion,
+      });
+      window.dispatchEvent(new Event("research-os-workflow-refresh"));
+      if (!mounted.current) return;
+      onDecided(outcome);
+    } catch {
+      if (mounted.current) {
+        setError("提交审核决定失败；候选未被自动采纳。请刷新后重试。");
+      }
+    } finally {
+      if (mounted.current) setSubmitting(false);
+    }
+  }
+  return (
+    <article className="ros-review-item">
+      <div>
+        <span className="ros-pill ros-pill--human">未经人工复核</span>
+        <h3>{item.thesisStatement || "未关联关键因素"}</h3>
+        <blockquote>
+          {item.verbatimText || item.statementText || "未抽取到可定位原文"}
+        </blockquote>
+      </div>
+      <dl>
+        <div>
+          <dt>原文定位</dt>
+          <dd>{JSON.stringify(item.locator)}</dd>
+        </div>
+        <div>
+          <dt>可用时点</dt>
+          <dd>{item.availableAt || "未记录"}</dd>
+        </div>
+        <div>
+          <dt>来源与许可</dt>
+          <dd>{item.sourceStatusReason}</dd>
+        </div>
+      </dl>
+      <div className="ros-review-actions">
+        <span>
+          {item.aiRole || "候选关系"} · {item.proposalReason}
+        </span>
+        {item.documentSourceUrl ? (
+          <a
+            className="ros-button ros-button--secondary"
+            href={item.documentSourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            打开冻结来源
+          </a>
+        ) : (
+          <span>冻结来源地址未记录</span>
+        )}
+      </div>
+      <div className="ros-review-decision">
+        <label>
+          审核理由
+          <textarea
+            aria-label="审核理由"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="说明为何原文支持或不支持这个关系"
+          />
+        </label>
+        <div>
+          <button
+            className="ros-button ros-button--primary"
+            type="button"
+            disabled={!reason.trim() || submitting}
+            onClick={() => decide("confirmed")}
+          >
+            确认采纳
+          </button>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            disabled={!reason.trim() || submitting}
+            onClick={() => decide("needs_more_evidence")}
+          >
+            要求补充证据
+          </button>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            disabled={!reason.trim() || submitting}
+            onClick={() => decide("rejected")}
+          >
+            驳回候选
+          </button>
+        </div>
+        {error && <p className="ros-error">{error}</p>}
+      </div>
+    </article>
+  );
+}
+
+export function CaseWikiPage() {
+  return (
+    <CaseFrame>
+      {(_data, caseId) => <WikiInspectorContent caseId={caseId} />}
+    </CaseFrame>
+  );
+}
+export function CaseRelationsPage() {
+  return (
+    <CaseFrame>
+      {(_data, caseId) => <CaseRelationsContent caseId={caseId} />}
+    </CaseFrame>
+  );
+}
+
+export function CaseMarketPage() {
+  return (
+    <CaseFrame>
+      {(data, caseId) => (
+        <MarketExpressionContent
+          caseId={caseId}
+          theses={data.factors.flatMap((factor) =>
+            factor.thesisId
+              ? [{ id: factor.thesisId, statement: factor.statement }]
+              : [],
+          )}
+        />
+      )}
+    </CaseFrame>
+  );
+}
+export function CaseStockProfilePage() {
+  const { stockId = "" } = useParams();
+  return (
+    <CaseFrame>
+      {(_data, caseId) => (
+        <MarketStockProfile caseId={caseId} stockId={stockId} />
+      )}
+    </CaseFrame>
+  );
+}
+export function CaseFundProfilePage() {
+  const { fundId = "" } = useParams();
+  return (
+    <CaseFrame>
+      {(_data, caseId) => <MarketFundProfile caseId={caseId} fundId={fundId} />}
+    </CaseFrame>
+  );
+}
+const protocolReason: Record<string, string> = {
+  missing_outcome_binding: "尚未固定结果指标、实体范围、可回溯基线和观察窗口",
+  binding_not_approved: "结果绑定仍是草案，尚未经过人工审核",
+  missing_mechanism_template: "尚未选择可检验的机制模板",
+  missing_verification_rule: "尚未声明支持、反证与证据优先级规则",
+  insufficient_primary_metrics:
+    "仅一个独立主指标：只能受限监测，正式判断仅可为证据不足或未到验证时点",
+  missing_counter_hypothesis: "尚未定义竞争解释或反向检验",
+};
+
+export function CaseProtocolPage() {
+  return (
+    <CaseFrame>
+      {(data, caseId) => (
+        <>
+          <ProtocolContent caseId={caseId} data={data} />
+          <MechanismProtocolPanel caseId={caseId} />
+          <MechanismRuleConfig caseId={caseId} />
+          <MechanismRuleHistory caseId={caseId} />
+        </>
+      )}
+    </CaseFrame>
+  );
+}
+function ProtocolContent({
+  caseId,
+  data,
+}: {
+  caseId: string;
+  data: EventWorkbench;
+}) {
+  const [selectedId, setSelectedId] = useState(data.factors[0]?.thesisId ?? "");
+  const [states, setStates] = useState<Record<string, Researchability>>({});
+  const [metrics, setMetrics] = useState<MetricDefinition[]>([]);
+  const [baselineDocuments, setBaselineDocuments] = useState<
+    SourceDocumentView[] | null
+  >(null);
+  const [baselineDocumentsError, setBaselineDocumentsError] = useState(false);
+  const [baselineDocumentsReload, setBaselineDocumentsReload] = useState(0);
+  const [showForm, setShowForm] = useState(false);
+  const [metricId, setMetricId] = useState("");
+  const [companyId, setCompanyId] = useState("");
+  const [scopeName, setScopeName] = useState("");
+  const [baselineSource, setBaselineSource] = useState("");
+  const [baselineValue, setBaselineValue] = useState("");
+  const [baselinePeriod, setBaselinePeriod] = useState("");
+  const [availableAt, setAvailableAt] = useState("");
+  const [horizonStart, setHorizonStart] = useState("");
+  const [horizonEnd, setHorizonEnd] = useState("");
+  const [reason, setReason] = useState("");
+  const [approvalReason, setApprovalReason] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const selected =
+    data.factors.find((factor) => factor.thesisId === selectedId) ??
+    data.factors[0];
+  const state = selected?.thesisId ? states[selected.thesisId] : undefined;
+  const selectedMetric = metrics.find((metric) => metric.id === metricId);
+  const approvalReady =
+    !busy && Boolean(state?.effective_binding_id && approvalReason.trim());
+  async function refresh() {
+    const factors = data.factors.filter((factor) => factor.thesisId);
+    const results = await Promise.all(
+      factors.map(
+        async (factor) =>
+          [
+            factor.thesisId!,
+            await researchOsApi.researchability(factor.thesisId!),
+          ] as const,
+      ),
+    );
+    setStates(Object.fromEntries(results));
+  }
+  useEffect(() => {
+    refresh().catch(() =>
+      setNotice("研究协议状态暂不可读；系统不会以默认通过替代真实状态。"),
+    );
+    researchOsApi
+      .metrics()
+      .then((items) => {
+        setMetrics(items);
+        setMetricId((current) => current || items[0]?.id || "");
+      })
+      .catch(() =>
+        setNotice("指标库暂不可读；尚未创建或授权的指标不能被当作可用指标。"),
+      );
+  }, [data.event.id]);
+  useEffect(() => {
+    let active = true;
+    setBaselineDocuments(null);
+    setBaselineDocumentsError(false);
+    researchClient
+      .getDocuments({ caseId })
+      .then((items) => {
+        if (active)
+          setBaselineDocuments(
+            items.filter(
+              (item) =>
+                item.source_contract?.status === "admitted" &&
+                item.source_contract.permissions.display,
+            ),
+          );
+      })
+      .catch(() => active && setBaselineDocumentsError(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId, baselineDocumentsReload]);
+  async function saveBinding() {
+    if (
+      !selected?.thesisId ||
+      !selectedMetric ||
+      !companyId.trim() ||
+      !scopeName.trim() ||
+      !baselineSource.trim() ||
+      !baselineValue.trim() ||
+      !baselinePeriod ||
+      !availableAt ||
+      !horizonStart ||
+      !horizonEnd ||
+      !reason.trim()
+    ) {
+      setNotice(
+        "请完整填写指标、实体范围、可回溯基线、时间窗和记录原因。系统不会补写缺失字段。",
+      );
+      return;
+    }
+    if (baselineDocumentsError) {
+      setNotice(
+        "无法读取当前 Case 的冻结资料，不能据此登记结果基线；请重试读取后再继续。",
+      );
+      return;
+    }
+    if (baselineDocuments === null) {
+      setNotice(
+        "正在核对当前 Case 的冻结资料；资料未核对完成前不能登记结果基线。",
+      );
+      return;
+    }
+    const normalizedSource = baselineSource.trim();
+    const knownDocument = baselineDocuments.find(
+      (document) => normalizedSource === `document:${document.id}`,
+    );
+    if (!knownDocument) {
+      setNotice(
+        "基线来源必须是当前 Case 已冻结、已准入资料的 document:<资料 ID>；请从“原文资料”页复制冻结资料 ID。",
+      );
+      return;
+    }
+    if (availableAt !== knownDocument.available_at) {
+      setNotice(
+        "基线可用时点必须与所选冻结资料记录完全一致；请从“原文资料”页复制该时点。",
+      );
+      return;
+    }
+    setBusy(true);
+    setNotice(null);
+    try {
+      const binding = await researchOsApi.createOutcomeBinding(
+        selected.thesisId,
+        {
+          metric_definition_id: selectedMetric.id,
+          entity_scope: {
+            company_id: companyId.trim(),
+            [selectedMetric.entity_scope]: scopeName.trim(),
+          },
+          direction: "increase",
+          baseline: {
+            source_ref: normalizedSource,
+            value: baselineValue.trim(),
+            unit: selectedMetric.unit,
+            observed_period: baselinePeriod,
+            available_at: availableAt,
+          },
+          horizon_start: horizonStart,
+          horizon_end: horizonEnd,
+          reviewer: "human:researcher",
+          reason: reason.trim(),
+        },
+      );
+      setNotice(`结果绑定已登记为草案 ${binding.id}；仍需独立审核后才生效。`);
+      await refresh();
+    } catch {
+      setNotice(
+        "未能登记结果绑定；当前协议没有被部分写入。请检查字段与服务状态。",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function approveBinding() {
+    if (!approvalReady || !state?.effective_binding_id) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      await researchOsApi.approveOutcomeBinding(state.effective_binding_id, {
+        reviewer: "human:reviewer",
+        reason: approvalReason.trim(),
+      });
+      setNotice(
+        "结果绑定已审核并固定为新的不可变版本；后续机制和验证规则仍需补齐。",
+      );
+      await refresh();
+    } catch {
+      setNotice("审核未完成；原结果绑定没有被改写。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="ros-protocol">
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">研究协议 · 可研究性门槛</p>
+          <h2>研究协议与可研究性门槛</h2>
+          <p>
+            先固定“验证什么、在哪个实体、以什么基线、到何时”为可回放记录；门槛缺口不能由模型或市场涨跌自动填补。
+          </p>
+        </div>
+        <span
+          className={`ros-pill ${state?.status === "ready" ? "ros-pill--system" : "ros-pill--human"}`}
+        >
+          {state?.status === "ready"
+            ? "可进入正式验证"
+            : state?.status === "not_applicable"
+              ? "既有流程"
+              : "尚未满足门槛"}
+        </span>
+      </header>
+      <div className="ros-protocol-grid">
+        <section className="ros-protocol-list">
+          <p className="ros-eyebrow">当前 Case 命题</p>
+          {data.factors.map((factor) => (
+            <button
+              key={factor.position}
+              type="button"
+              className={`ros-protocol-factor${factor.thesisId === selected?.thesisId ? " is-selected" : ""}`}
+              onClick={() => setSelectedId(factor.thesisId ?? "")}
+            >
+              <span>{String(factor.position).padStart(2, "0")}</span>
+              <div>
+                <strong>{factor.statement}</strong>
+                <small>
+                  {factor.thesisId
+                    ? states[factor.thesisId]?.status === "ready"
+                      ? "门槛已满足"
+                      : states[factor.thesisId]?.status === "not_applicable"
+                        ? "既有流程，不适用严格门槛"
+                        : states[factor.thesisId]
+                          ? "等待补齐研究协议"
+                          : "正在读取协议状态"
+                    : "未绑定可研究命题"}
+                </small>
+              </div>
+            </button>
+          ))}
+        </section>
+        <section className="ros-protocol-main">
+          <p className="ros-eyebrow">
+            选中命题 · {selected ? selected.statement : "无可用命题"}
+          </p>
+          {state?.status === "not_applicable" ? (
+            <div className="ros-empty">
+              <strong>该命题属于既有研究流程</strong>
+              <p>
+                它创建时没有启用严格研究协议。历史 Case
+                仍可保留原有证据链，但不能因此被描述为已经通过结果指标、机制与反证门槛。
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="ros-protocol-next">
+                <span>下一步</span>
+                <strong>{state?.next_action || "正在读取可研究性状态"}</strong>
+                <p>
+                  {state
+                    ? "下面列出阻塞原因和可执行配置，任何缺口都会保留到人工补齐。"
+                    : "系统正在读取该命题的冻结协议状态。"}
+                </p>
+              </div>
+              <div className="ros-protocol-reasons">
+                {state?.reason_codes.map((code) => (
+                  <article key={code}>
+                    <i aria-hidden="true">!</i>
+                    <div>
+                      <strong>{protocolReason[code] || code}</strong>
+                      <small>{code}</small>
+                    </div>
+                  </article>
+                )) || (
+                  <p className="ros-empty ros-empty--compact">
+                    尚未获得门槛状态，不能假设研究已可执行。
+                  </p>
+                )}
+              </div>
+              <div className="ros-header-actions">
+                <button
+                  className="ros-button ros-button--primary"
+                  type="button"
+                  onClick={() => setShowForm((value) => !value)}
+                >
+                  {showForm ? "收起配置" : "设定结果指标与验证窗口"}
+                </button>
+                {state?.reason_codes.includes("binding_not_approved") && (
+                  <div className="ros-protocol-approval">
+                    <label>
+                      结果绑定审核理由
+                      <input
+                        aria-label="结果绑定审核理由"
+                        value={approvalReason}
+                        onChange={(event) => setApprovalReason(event.target.value)}
+                        placeholder="说明为什么此草案可固定为研究协议"
+                      />
+                    </label>
+                    <button
+                      className="ros-button ros-button--secondary"
+                      type="button"
+                      disabled={!approvalReady}
+                      onClick={approveBinding}
+                    >
+                      {busy ? "正在审核…" : "审核并固定结果绑定"}
+                    </button>
+                    {!approvalReason.trim() && (
+                      <p className="ros-note" role="status">
+                        审核结果绑定前还需填写：填写审核理由。审核会追加新版本，不会修改原草案。
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+              {showForm && (
+                <ProtocolBindingForm
+                  metrics={metrics}
+                  metricId={metricId}
+                  setMetricId={setMetricId}
+                  companyId={companyId}
+                  setCompanyId={setCompanyId}
+                  scopeName={scopeName}
+                  setScopeName={setScopeName}
+                  baselineSource={baselineSource}
+                  setBaselineSource={setBaselineSource}
+                  baselineValue={baselineValue}
+                  setBaselineValue={setBaselineValue}
+                  baselinePeriod={baselinePeriod}
+                  setBaselinePeriod={setBaselinePeriod}
+                  availableAt={availableAt}
+                  setAvailableAt={setAvailableAt}
+                  horizonStart={horizonStart}
+                  setHorizonStart={setHorizonStart}
+                  horizonEnd={horizonEnd}
+                  setHorizonEnd={setHorizonEnd}
+                  reason={reason}
+                  setReason={setReason}
+                  busy={busy}
+                  onSave={saveBinding}
+                  documents={baselineDocuments}
+                  documentsError={baselineDocumentsError}
+                  onRetryDocuments={() =>
+                    setBaselineDocumentsReload((value) => value + 1)
+                  }
+                />
+              )}
+            </>
+          )}
+        </section>
+        <aside className="ros-protocol-rail">
+          <p className="ros-eyebrow">审计边界</p>
+          <dl className="ros-definition">
+            <div>
+              <dt>命题 ID</dt>
+              <dd>{selected?.thesisId || "未记录"}</dd>
+            </div>
+            <div>
+              <dt>有效绑定</dt>
+              <dd>{state?.effective_binding_id || "尚未形成"}</dd>
+            </div>
+            <div>
+              <dt>处理原则</dt>
+              <dd>草案不能替代已审核协议；新版本不覆写旧版本。</dd>
+            </div>
+          </dl>
+          <p className="ros-rulebox">
+            <b>不做黑盒：</b>
+            指标定义、基线来源、可用时点、窗口、审核人与原因都进入可回放记录。市场观测不能自行证明研究命题。
+          </p>
+        </aside>
+      </div>
+      {notice && (
+        <p
+          className={
+            notice.startsWith("结果绑定已") ? "ros-success" : "ros-error"
+          }
+        >
+          {notice}
+        </p>
+      )}
+    </section>
+  );
+}
+function ProtocolBindingForm(props: {
+  metrics: MetricDefinition[];
+  metricId: string;
+  setMetricId: (value: string) => void;
+  companyId: string;
+  setCompanyId: (value: string) => void;
+  scopeName: string;
+  setScopeName: (value: string) => void;
+  baselineSource: string;
+  setBaselineSource: (value: string) => void;
+  baselineValue: string;
+  setBaselineValue: (value: string) => void;
+  baselinePeriod: string;
+  setBaselinePeriod: (value: string) => void;
+  availableAt: string;
+  setAvailableAt: (value: string) => void;
+  horizonStart: string;
+  setHorizonStart: (value: string) => void;
+  horizonEnd: string;
+  setHorizonEnd: (value: string) => void;
+  reason: string;
+  setReason: (value: string) => void;
+  busy: boolean;
+  onSave: () => void;
+  documents: SourceDocumentView[] | null;
+  documentsError: boolean;
+  onRetryDocuments: () => void;
+}) {
+  const metric = props.metrics.find((item) => item.id === props.metricId);
+  const selectedBaselineDocument = props.documents?.find(
+    (document) => props.baselineSource.trim() === `document:${document.id}`,
+  );
+  const missingSaveRequirements = [
+    !metric ? "选择已审核的结果指标" : null,
+    !props.companyId.trim() ? "填写公司 ID" : null,
+    !props.scopeName.trim() ? `填写${metric?.entity_scope || "实体"}范围` : null,
+    props.documentsError
+      ? "重试读取当前 Case 的冻结资料"
+      : props.documents === null
+        ? "等待冻结资料核对完成"
+        : props.documents.length === 0
+          ? "补充一份当前 Case 已准入的冻结资料"
+          : !selectedBaselineDocument
+            ? "选择当前 Case 的冻结基线资料"
+            : null,
+    selectedBaselineDocument &&
+    props.availableAt !== selectedBaselineDocument.available_at
+      ? "使基线可用时点与冻结资料一致"
+      : null,
+    !props.baselineValue.trim() ? "填写基线数值" : null,
+    !props.baselinePeriod ? "填写基线观察期" : null,
+    !props.availableAt ? "填写基线可用时点" : null,
+    !props.horizonStart ? "填写验证窗口起点" : null,
+    !props.horizonEnd ? "填写验证窗口终点" : null,
+    !props.reason.trim() ? "填写登记原因" : null,
+  ].filter((value): value is string => Boolean(value));
+  const saveReady = !props.busy && missingSaveRequirements.length === 0;
+  function selectBaseline(documentId: string) {
+    const document = props.documents?.find((item) => item.id === documentId);
+    if (!document) return;
+    props.setBaselineSource(`document:${document.id}`);
+    props.setAvailableAt(document.available_at);
+  }
+  return (
+    <section className="ros-protocol-form">
+      <p className="ros-eyebrow">登记结果绑定 · 先形成草案</p>
+      {props.metrics.length === 0 ? (
+        <div className="ros-empty ros-empty--compact">
+          指标库为空。请先由数据治理角色登记并审核指标定义；系统不会根据自然语言临时造出指标。
+        </div>
+      ) : (
+        <>
+          <label>
+            结果指标
+            <select
+              value={props.metricId}
+              onChange={(event) => props.setMetricId(event.target.value)}
+            >
+              {props.metrics.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.display_name} · v{item.version} · {item.unit}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="ros-protocol-form__two">
+            <label>
+              公司 ID
+              <input
+                value={props.companyId}
+                onChange={(event) => props.setCompanyId(event.target.value)}
+                placeholder="company:tsmc"
+              />
+            </label>
+            <label>
+              {metric?.entity_scope || "实体"} 范围
+              <input
+                value={props.scopeName}
+                onChange={(event) => props.setScopeName(event.target.value)}
+                placeholder="例如：先进封装业务线"
+              />
+            </label>
+          </div>
+          <div className="ros-rulebox">
+            <b>基线必须可回放：</b>仅接受当前 Case 已冻结且已准入资料的{" "}
+            <code>document:&lt;资料 ID&gt;</code>
+            ；可用时点必须与资料记录完全一致。
+          </div>
+          <label>
+            选择冻结基线资料
+            <select
+              value={props.baselineSource.replace("document:", "")}
+              onChange={(event) => selectBaseline(event.target.value)}
+              disabled={
+                props.documentsError ||
+                props.documents === null ||
+                props.documents.length === 0
+              }
+            >
+              <option value="">
+                {props.documentsError
+                  ? "无法读取当前 Case 的冻结资料"
+                  : props.documents === null
+                  ? "正在核对当前 Case 的资料…"
+                  : props.documents.length === 0
+                    ? "当前没有可用的已准入资料"
+                    : "选择一份已准入冻结资料"}
+              </option>
+              {props.documents?.map((document) => (
+                <option key={document.id} value={document.id}>
+                  {document.title || (document.source_contract ? sourceTypeLabel(document.source_contract.source_type) : "未命名资料")} · {document.available_at}
+                </option>
+              ))}
+            </select>
+          </label>
+          {props.documentsError && (
+            <div className="ros-empty ros-empty--compact" role="alert">
+              <strong>无法读取当前 Case 的冻结资料，不能据此判断为空。</strong>
+              <button
+                className="ros-button ros-button--secondary"
+                type="button"
+                onClick={props.onRetryDocuments}
+              >
+                重试读取冻结资料
+              </button>
+            </div>
+          )}
+          <div className="ros-protocol-form__two">
+            <label>
+              基线来源引用
+              <input
+                value={props.baselineSource}
+                onChange={(event) =>
+                  props.setBaselineSource(event.target.value)
+                }
+                placeholder="document:&lt;当前 Case 冻结资料 UUID&gt;"
+              />
+            </label>
+            <label>
+              基线数值
+              <input
+                value={props.baselineValue}
+                onChange={(event) => props.setBaselineValue(event.target.value)}
+                placeholder={metric?.unit || "数值"}
+              />
+            </label>
+          </div>
+          <div className="ros-protocol-form__two">
+            <label>
+              基线观察期
+              <input
+                type="date"
+                value={props.baselinePeriod}
+                onChange={(event) =>
+                  props.setBaselinePeriod(event.target.value)
+                }
+              />
+            </label>
+            <label>
+              基线可用时点（ISO 8601）
+              <input
+                value={props.availableAt}
+                onChange={(event) => props.setAvailableAt(event.target.value)}
+                placeholder="2026-03-01T00:00:00Z"
+              />
+            </label>
+          </div>
+          <div className="ros-protocol-form__two">
+            <label>
+              验证窗口起点
+              <input
+                type="date"
+                value={props.horizonStart}
+                onChange={(event) => props.setHorizonStart(event.target.value)}
+              />
+            </label>
+            <label>
+              验证窗口终点
+              <input
+                type="date"
+                value={props.horizonEnd}
+                onChange={(event) => props.setHorizonEnd(event.target.value)}
+              />
+            </label>
+          </div>
+          <label>
+            登记原因
+            <textarea
+              value={props.reason}
+              onChange={(event) => props.setReason(event.target.value)}
+              placeholder="说明为何选择该指标、基线与窗口"
+            />
+          </label>
+          {!saveReady && (
+            <div className="ros-rulebox" role="status">
+              <b>保存前还需填写：</b>
+              {missingSaveRequirements.join("、")}。系统不会补写缺失字段。
+            </div>
+          )}
+          <button
+            className="ros-button ros-button--primary"
+            type="button"
+            disabled={!saveReady}
+            onClick={props.onSave}
+          >
+            {props.busy ? "正在登记…" : "登记为待审核结果绑定"}
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
+function MechanismProtocolPanel({ caseId }: { caseId: string }) {
+  const [templates, setTemplates] = useState<MechanismTemplate[]>([]);
+  const [protocol, setProtocol] = useState<CaseMechanismProtocol | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function refresh() {
+    const [templateItems, protocolItem] = await Promise.all([
+      researchOsApi.mechanismTemplates(),
+      researchOsApi.caseMechanismProtocol(caseId),
+    ]);
+    setTemplates(templateItems);
+    setProtocol(protocolItem);
+  }
+  useEffect(() => {
+    refresh().catch(() =>
+      setMessage("机制模板暂不可读；系统不会自行假设路径成立。"),
+    );
+  }, [caseId]);
+  async function select(templateId: string) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await researchOsApi.selectMechanismTemplate(caseId, {
+        template_version_id: templateId,
+        reviewer: "human:researcher",
+        reason: "研究员确认本 Case 使用该机制范围",
+      });
+      await refresh();
+      setMessage("机制模板已作为新的 Case 协议版本保存；旧选择仍可回放。");
+    } catch {
+      setMessage("未能选择机制模板；当前 Case 协议未被改写。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const template = protocol?.template;
+  const nodeById = new Map(
+    template?.nodes.map((node) => [node.id, node]) ?? [],
+  );
+  const newerTemplate = template
+    ? templates
+        .filter(
+          (item) =>
+            item.template_key === template.template_key &&
+            item.version > template.version,
+        )
+        .sort((left, right) => right.version - left.version)[0]
+    : null;
+  return (
+    <section className="ros-mechanism">
+      <header>
+        <div>
+          <p className="ros-eyebrow">机制模板与验证规则</p>
+          <h2>
+            {template
+              ? `${template.display_name} · v${template.version}`
+              : "先选择可检验的机制模板"}
+          </h2>
+          <p>
+            系统不会把市场表现自动写成机制成立。模板只定义要验证的路径、竞争解释和范围保护；每条边仍需独立规则与来源。
+          </p>
+        </div>
+      </header>
+      {message && (
+        <p
+          className={
+            message.startsWith("机制模板已") ? "ros-success" : "ros-error"
+          }
+        >
+          {message}
+        </p>
+      )}
+      {!protocol ? (
+        <div className="ros-empty ros-empty--compact">
+          正在读取当前 Case 的机制协议…
+        </div>
+      ) : !template ? (
+        <div className="ros-mechanism-choices">
+          {templates.map((item) => (
+            <article key={item.id}>
+              <strong>
+                {item.display_name} · v{item.version}
+              </strong>
+              <p>{item.reason}</p>
+              <button
+                className="ros-button ros-button--primary"
+                type="button"
+                disabled={busy}
+                onClick={() => select(item.id)}
+              >
+                {busy ? "正在保存…" : "选择此模板"}
+              </button>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="ros-mechanism-meta">
+            <span>审核人：{protocol.selection?.reviewer}</span>
+            <span>选择理由：{protocol.selection?.reason}</span>
+            <span>版本时间：{protocol.selection?.created_at}</span>
+          </div>
+          {newerTemplate && (
+            <section className="ros-rulebox">
+              <b>发现已审核模板 v{newerTemplate.version}：</b>
+              {newerTemplate.reason}
+              <p>
+                它不会自动改变当前
+                Case。采用前必须重新确认适用范围，随后为新模板中的每条机制边重新配置验证与反证规则。
+              </p>
+              <button
+                className="ros-button ros-button--secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => select(newerTemplate.id)}
+              >
+                {busy
+                  ? "正在保存…"
+                  : `重新复核并采用 v${newerTemplate.version}`}
+              </button>
+            </section>
+          )}
+          <div className="ros-mechanism-nodes">
+            {template.nodes.map((node) => (
+              <article key={node.id}>
+                <span>{node.role}</span>
+                <strong>{node.display_name}</strong>
+                <small>{node.node_key}</small>
+              </article>
+            ))}
+          </div>
+          <section className="ros-mechanism-edges">
+            <h3>验证规则与反证</h3>
+            {template.edges.map((edge) => {
+              const rule = protocol.rules.find(
+                (item) => item.mechanism_edge_id === edge.id,
+              );
+              return (
+                <article key={edge.id}>
+                  <div>
+                    <strong>
+                      {nodeById.get(edge.source_node_id)?.display_name} →{" "}
+                      {nodeById.get(edge.target_node_id)?.display_name}
+                    </strong>
+                    <small>{edge.edge_key}</small>
+                  </div>
+                  {rule ? (
+                    <dl>
+                      <div>
+                        <dt>支持</dt>
+                        <dd>{rule.support_predicate}</dd>
+                      </div>
+                      <div>
+                        <dt>反证</dt>
+                        <dd>{rule.contradiction_predicate}</dd>
+                      </div>
+                      <div>
+                        <dt>允许来源</dt>
+                        <dd>{rule.allowed_source_roles.join("、")}</dd>
+                      </div>
+                      <div>
+                        <dt>下一验证</dt>
+                        <dd>{rule.next_verification_event}</dd>
+                      </div>
+                    </dl>
+                  ) : (
+                    <p>尚未定义可执行验证规则；该边不能被自动视为成立。</p>
+                  )}
+                </article>
+              );
+            })}
+          </section>
+        </>
+      )}
+    </section>
+  );
+}
+
+function MechanismRuleConfig({ caseId }: { caseId: string }) {
+  const [protocol, setProtocol] = useState<CaseMechanismProtocol | null>(null);
+  const [metrics, setMetrics] = useState<MetricDefinition[]>([]);
+  const [edgeId, setEdgeId] = useState("");
+  const [metricId, setMetricId] = useState("");
+  const [support, setSupport] = useState("");
+  const [contradiction, setContradiction] = useState("");
+  const [direction, setDirection] = useState<
+    "increase" | "decrease" | "stable" | "mixed"
+  >("increase");
+  const [sourceRoles, setSourceRoles] = useState("primary_disclosure");
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
+  const [availableDeadline, setAvailableDeadline] = useState("");
+  const [nextEvent, setNextEvent] = useState("");
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    const [current, metricItems] = await Promise.all([
+      researchOsApi.caseMechanismProtocol(caseId),
+      researchOsApi.metrics(),
+    ]);
+    setProtocol(current);
+    setMetrics(metricItems);
+    setEdgeId((value) => value || current.template?.edges[0]?.id || "");
+    setMetricId((value) => value || metricItems[0]?.id || "");
+  }
+  useEffect(() => {
+    load().catch(() =>
+      setMessage("规则配置暂不可读；不会用空白规则放行研究。"),
+    );
+  }, [caseId]);
+  useEffect(() => {
+    const current = protocol?.rules.find(
+      (rule) => rule.mechanism_edge_id === edgeId,
+    );
+    if (!current) return;
+    setMetricId(current.metric_definition_id);
+    setDirection(current.expected_direction as typeof direction);
+    setSourceRoles(current.allowed_source_roles.join(", "));
+    setPeriodStart(current.observed_period_start);
+    setPeriodEnd(current.observed_period_end);
+    setAvailableDeadline(current.available_at_deadline);
+    setNextEvent(current.next_verification_event);
+    setSupport(current.support_predicate);
+    setContradiction(current.contradiction_predicate);
+    setReason(current.reason);
+  }, [edgeId, protocol]);
+  const allowedSourceRoles = sourceRoles
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const missingRuleRequirements = [
+    !edgeId ? "选择机制边" : null,
+    !metricId ? "选择验证指标" : null,
+    !support.trim() ? "支持条件" : null,
+    !contradiction.trim() ? "反证条件" : null,
+    !allowedSourceRoles.length ? "允许来源角色" : null,
+    !periodStart ? "观察期起点" : null,
+    !periodEnd ? "观察期终点" : null,
+    !availableDeadline ? "最晚可用时点" : null,
+    !nextEvent.trim() ? "下一验证事件" : null,
+    !reason.trim() ? "登记原因" : null,
+  ].filter((value): value is string => Boolean(value));
+  const ruleSaveReady = !busy && missingRuleRequirements.length === 0;
+  async function save() {
+    if (!ruleSaveReady) {
+      setMessage(
+        "请填写支持与反证条件、来源角色、观察期、可用截止日、下一验证事件和记录原因。",
+      );
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await researchOsApi.createVerificationRule(caseId, edgeId, {
+        metric_definition_id: metricId,
+        expected_direction: direction,
+        support_predicate: support.trim(),
+        contradiction_predicate: contradiction.trim(),
+        allowed_source_roles: allowedSourceRoles,
+        observed_period_start: periodStart,
+        observed_period_end: periodEnd,
+        available_at_deadline: availableDeadline,
+        next_verification_event: nextEvent.trim(),
+        reviewer: "human:researcher",
+        reason: reason.trim(),
+      });
+      await load();
+      setMessage("验证规则已保存为新版本；上一规则仍可回放。");
+    } catch {
+      setMessage("验证规则未保存；当前协议保持原样。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!protocol?.template) return null;
+  const activeRule = protocol.rules.find(
+    (rule) => rule.mechanism_edge_id === edgeId,
+  );
+  return (
+    <section className="ros-rule-config">
+      <header>
+        <p className="ros-eyebrow">配置验证规则 · 当前 Case 独有</p>
+        <h2>为机制边写下可观察的支持与反证</h2>
+        <p>
+          提交会为当前 Case 新增版本，不覆盖旧规则，也不会被其他 Case
+          继承；来源角色必须在所选指标的允许范围内。
+        </p>
+        {activeRule && (
+          <p className="ros-note">
+            正在调整 {activeRule.reviewer} 于 {activeRule.created_at}{" "}
+            记录的当前版本；保存后可按版本回放。
+          </p>
+        )}
+      </header>
+      <div className="ros-rule-config__fields">
+        <label>
+          机制边
+          <select
+            value={edgeId}
+            onChange={(event) => setEdgeId(event.target.value)}
+          >
+            {protocol.template.edges.map((edge) => (
+              <option key={edge.id} value={edge.id}>
+                {edge.edge_key}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          验证指标
+          <select
+            value={metricId}
+            onChange={(event) => setMetricId(event.target.value)}
+          >
+            {metrics.map((metric) => (
+              <option key={metric.id} value={metric.id}>
+                {metric.display_name} · v{metric.version}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          预期方向
+          <select
+            value={direction}
+            onChange={(event) =>
+              setDirection(event.target.value as typeof direction)
+            }
+          >
+            <option value="increase">增长</option>
+            <option value="decrease">下降</option>
+            <option value="stable">稳定</option>
+            <option value="mixed">混合</option>
+          </select>
+        </label>
+        <label>
+          允许来源角色（逗号分隔）
+          <input
+            value={sourceRoles}
+            onChange={(event) => setSourceRoles(event.target.value)}
+            placeholder="primary_disclosure"
+          />
+        </label>
+        <label>
+          观察期起点
+          <input
+            type="date"
+            value={periodStart}
+            onChange={(event) => setPeriodStart(event.target.value)}
+          />
+        </label>
+        <label>
+          观察期终点
+          <input
+            type="date"
+            value={periodEnd}
+            onChange={(event) => setPeriodEnd(event.target.value)}
+          />
+        </label>
+        <label>
+          最晚可用时点
+          <input
+            type="date"
+            value={availableDeadline}
+            onChange={(event) => setAvailableDeadline(event.target.value)}
+          />
+        </label>
+        <label>
+          下一验证事件
+          <input
+            value={nextEvent}
+            onChange={(event) => setNextEvent(event.target.value)}
+            placeholder="例如：2026Q1 财报"
+          />
+        </label>
+        <label>
+          支持条件
+          <textarea
+            value={support}
+            onChange={(event) => setSupport(event.target.value)}
+            placeholder="例如：公司一手披露的实际 CapEx 同比增长"
+          />
+        </label>
+        <label>
+          反证条件
+          <textarea
+            value={contradiction}
+            onChange={(event) => setContradiction(event.target.value)}
+            placeholder="例如：同口径 CapEx 下调或未投向目标架构"
+          />
+        </label>
+        <label>
+          登记原因
+          <textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="说明为何该条件能支持或反驳此机制边"
+          />
+        </label>
+      </div>
+      {!ruleSaveReady && (
+        <p className="ros-note" role="status">
+          保存前还需填写：{missingRuleRequirements.join("、")}。系统不会用默认规则补写机制边。
+        </p>
+      )}
+      <button
+        className="ros-button ros-button--primary"
+        type="button"
+        disabled={!ruleSaveReady}
+        onClick={save}
+      >
+        {busy ? "正在保存…" : "保存为新的验证规则版本"}
+      </button>
+      {message && (
+        <p
+          className={
+            message.startsWith("验证规则已") ? "ros-success" : "ros-error"
+          }
+        >
+          {message}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function MechanismRuleHistory({ caseId }: { caseId: string }) {
+  const [protocol, setProtocol] = useState<CaseMechanismProtocol | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    setLoading(true);
+    setError(false);
+    researchOsApi
+      .caseMechanismProtocol(caseId)
+      .then((value) => {
+        setProtocol(value);
+        setError(false);
+        setLoading(false);
+      })
+      .catch(() => {
+        setProtocol(null);
+        setError(true);
+        setLoading(false);
+      });
+  }, [caseId, reload]);
+  if (error) {
+    return (
+      <section className="ros-rule-history">
+        <header>
+          <p className="ros-eyebrow">验证规则版本记录</p>
+          <h2>每次调整都可回放</h2>
+        </header>
+        <div className="ros-empty ros-empty--compact" role="alert">
+          <strong>验证规则版本暂不可读，不能将其当作没有历史记录。</strong>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => setReload((value) => value + 1)}
+          >
+            重试读取验证规则版本
+          </button>
+        </div>
+      </section>
+    );
+  }
+  if (loading) {
+    return <section className="ros-rule-history"><p className="ros-eyebrow">验证规则版本记录</p><h2>每次调整都可回放</h2><div className="ros-empty ros-empty--compact">正在读取当前 Case 的验证规则版本；未返回前不会把它当作没有历史。</div></section>;
+  }
+  const history = protocol?.rule_history ?? [];
+  if (!protocol?.template) return null;
+  const edgeById = new Map(
+    protocol.template.edges.map((edge) => [edge.id, edge]),
+  );
+  return (
+    <section className="ros-rule-history">
+      <header>
+        <p className="ros-eyebrow">验证规则版本记录</p>
+        <h2>每次调整都可回放</h2>
+        <p>
+          以下记录只属于当前
+          Case；当前有效规则与历史版本均保留审核人、原因和时点。
+        </p>
+      </header>
+      {history.length === 0 ? (
+        <div className="ros-empty ros-empty--compact">
+          尚无规则版本；系统不会把空白配置当作默认规则。
+        </div>
+      ) : (
+        <ol>
+          {history.map((rule) => (
+            <li key={rule.id}>
+              <strong>
+                {edgeById.get(rule.mechanism_edge_id)?.edge_key ||
+                  rule.mechanism_edge_id}
+              </strong>
+              <span>{rule.supersedes_id ? "替代上一版本" : "首个版本"}</span>
+              <p>
+                {rule.support_predicate}；反证：{rule.contradiction_predicate}
+              </p>
+              <small>
+                {rule.reviewer} · {rule.created_at} · {rule.reason}
+              </small>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+type RunEvent = {
+  seq: number;
+  stage: string | null;
+  status: string | null;
+  message: string | null;
+  details: Record<string, unknown>;
+  createdAt?: string;
+};
+export function CaseMonitorPage() {
+  return (
+    <CaseFrame>
+      {(data, caseId) => (
+        <MonitorContent
+          caseId={caseId}
+        />
+      )}
+    </CaseFrame>
+  );
+}
+function MonitorContent({
+  caseId,
+}: {
+  caseId: string;
+}) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedRunId = searchParams.get("run");
+  const [detail, setDetail] = useState<MonitorDetail | null>(null);
+  const [workerStatus, setWorkerStatus] = useState<ResearchWorkerStatus | null>(null);
+  const [workerStatusError, setWorkerStatusError] = useState(false);
+  const [events, setEvents] = useState<RunEvent[]>([]);
+  const [runDetail, setRunDetail] = useState<ResearchRunDetail | null>(null);
+  const [runDetailLoadError, setRunDetailLoadError] = useState(false);
+  const [drawer, setDrawer] = useState(() => Boolean(selectedRunId));
+  const [error, setError] = useState<string | null>(null);
+  const [monitorLoadError, setMonitorLoadError] = useState(false);
+  const [runEventsLoadError, setRunEventsLoadError] = useState(false);
+  const [protocolLoadError, setProtocolLoadError] = useState(false);
+  const [protocolReload, setProtocolReload] = useState(0);
+  const [runHistory, setRunHistory] = useState<ResearchRunSummary[]>([]);
+  const [runHistoryLoaded, setRunHistoryLoaded] = useState(false);
+  const [runHistoryLoadError, setRunHistoryLoadError] = useState(false);
+  const selectedRunIdRef = useRef<string | null>(selectedRunId);
+  const beganWithRunParameterRef = useRef(Boolean(selectedRunId));
+  const [starting, setStarting] = useState(false);
+  const [protocolStates, setProtocolStates] = useState<
+    Record<string, Researchability>
+  >({});
+  useEffect(() => {
+    selectedRunIdRef.current = selectedRunId;
+  }, [selectedRunId]);
+  function selectRun(
+    runId: string,
+    {
+      replace = false,
+      openDrawer = true,
+    }: {
+      replace?: boolean;
+      openDrawer?: boolean;
+    } = {},
+  ) {
+    selectedRunIdRef.current = runId;
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("run", runId);
+      return next;
+    }, { replace });
+    if (openDrawer) setDrawer(true);
+  }
+  const loadMonitor = () => {
+    setMonitorLoadError(false);
+    return researchOsApi
+      .monitor(caseId)
+      .then((value) => {
+        setDetail(value);
+        if (!selectedRunIdRef.current && value.latest_run?.id) {
+          selectRun(value.latest_run.id, {
+            replace: true,
+            openDrawer: false,
+          });
+        }
+      })
+      .catch(() => setMonitorLoadError(true));
+  };
+  const loadRunHistory = () => {
+    setRunHistoryLoadError(false);
+    setRunHistoryLoaded(false);
+    return researchClient
+      .listResearchRuns(caseId)
+      .then((items) => {
+        setRunHistory(items);
+        setRunHistoryLoaded(true);
+      })
+      .catch(() => {
+        setRunHistory([]);
+        setRunHistoryLoadError(true);
+      });
+  };
+  const loadEvents = (runId: string) => {
+    setRunEventsLoadError(false);
+    return researchOsApi
+      .runEvents(runId)
+      .then((response) => {
+        if (selectedRunIdRef.current !== runId) return;
+        setEvents(
+          response.items.map((event) => ({
+            seq: event.seq,
+            stage: event.stage ?? null,
+            status: event.status ?? null,
+            message: event.message ?? null,
+            details: event.details ?? {},
+            createdAt: event.created_at,
+          })),
+        );
+      })
+      .catch(() => {
+        if (selectedRunIdRef.current !== runId) return;
+        setEvents([]);
+        setRunEventsLoadError(true);
+      });
+  };
+  const loadRunDetail = (runId: string) => {
+    setRunDetailLoadError(false);
+    return researchClient
+      .getResearchRun(runId)
+      .then((value) => {
+        if (selectedRunIdRef.current === runId) setRunDetail(value);
+      })
+      .catch(() => {
+        if (selectedRunIdRef.current !== runId) return;
+        setRunDetail(null);
+        setRunDetailLoadError(true);
+      });
+  };
+  const selectedRunKnown = !selectedRunId
+    || !beganWithRunParameterRef.current
+    || !runHistoryLoaded
+    || runHistory.length === 0
+    || runHistory.some((run) => run.id === selectedRunId);
+  const cannotReplaySelectedRun = Boolean(selectedRunId && !selectedRunKnown);
+  const runReplayLoadFailed = Boolean(
+    selectedRunId
+      && beganWithRunParameterRef.current
+      && runDetailLoadError,
+  );
+  useEffect(() => {
+    void loadMonitor();
+    void loadRunHistory();
+  }, [caseId]);
+  useEffect(() => {
+    let active = true;
+    const loadWorkerStatus = () => researchOsApi
+      .workerStatus()
+      .then((value) => {
+        if (!active) return;
+        setWorkerStatus(value);
+        setWorkerStatusError(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setWorkerStatus(null);
+        setWorkerStatusError(true);
+      });
+    void loadWorkerStatus();
+    const refresh = window.setInterval(() => void loadWorkerStatus(), 15_000);
+    return () => {
+      active = false;
+      window.clearInterval(refresh);
+    };
+  }, []);
+  useEffect(() => {
+    if (!selectedRunId || cannotReplaySelectedRun) {
+      setEvents([]);
+      setRunDetail(null);
+      setRunDetailLoadError(false);
+      return;
+    }
+    void loadEvents(selectedRunId);
+    const refresh = window.setInterval(
+      () => void loadEvents(selectedRunId),
+      5_000,
+    );
+    return () => window.clearInterval(refresh);
+  }, [selectedRunId, cannotReplaySelectedRun]);
+  useEffect(() => {
+    if (!selectedRunId || cannotReplaySelectedRun) return;
+    void loadRunDetail(selectedRunId);
+  }, [selectedRunId, cannotReplaySelectedRun]);
+  useEffect(() => {
+    let active = true;
+    // A manual run is frozen from CaseMonitor.factor_ids.  Checking every
+    // confirmed Case factor here would make an out-of-scope protocol gap
+    // incorrectly block the exact run the researcher configured.
+    const monitoredIds = new Set(detail?.monitor?.factor_ids ?? []);
+    const factors = detail?.monitor
+      ? (detail.confirmed_factors ?? []).filter((factor) => monitoredIds.has(factor.id))
+      : [];
+    setProtocolLoadError(false);
+    if (!factors.length) {
+      setProtocolStates({});
+      return () => {
+        active = false;
+      };
+    }
+    Promise.all(
+      factors.map(
+        async (factor) =>
+          [factor.id, await researchOsApi.researchability(factor.id)] as const,
+      ),
+    )
+      .then((items) => {
+        if (active) setProtocolStates(Object.fromEntries(items));
+      })
+      .catch(() => {
+        if (!active) return;
+        setProtocolStates({});
+        setProtocolLoadError(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [detail, protocolReload]);
+  const run =
+    selectedRunId && detail?.latest_run?.id === selectedRunId
+      ? detail.latest_run
+      : runDetail?.id === selectedRunId
+        ? runDetail
+        : null;
+  const runTimestamp = run
+    ? "updated_at" in run && run.updated_at
+      ? run.updated_at
+      : "created_at" in run
+        ? run.created_at
+        : null
+    : null;
+  const latestRunId = detail?.latest_run?.id ?? null;
+  const protocolBlockers = Object.entries(protocolStates)
+    .filter(([, state]) => state.status === "blocked")
+    .flatMap(([id, state]) =>
+      state.reason_codes.map((code) => ({
+        id,
+        code,
+        nextAction: state.next_action,
+      })),
+    );
+  async function startNow() {
+    if (!detail?.monitor) {
+      setError("请先保存一份 CaseMonitor 配置，系统才能冻结本次补证范围。");
+      return;
+    }
+    setStarting(true);
+    setError(null);
+    try {
+      const created = await researchOsApi.startMonitorRun(caseId);
+      selectRun(created.id);
+      await Promise.all([loadMonitor(), loadRunHistory(), loadEvents(created.id)]);
+    } catch {
+      setError(
+        "无法按当前 CaseMonitor 版本创建立即补证运行；没有写入部分运行。请检查服务状态后重试。",
+      );
+    } finally {
+      setStarting(false);
+    }
+  }
+  async function cancelRun(changeReason: string) {
+    if (!selectedRunId) return;
+    setError(null);
+    try {
+      await researchOsApi.cancelRun(selectedRunId, changeReason);
+      await Promise.all([loadMonitor(), loadRunHistory(), loadEvents(selectedRunId)]);
+    } catch {
+      setError(
+        "停止运行失败；原运行状态与记录未被页面伪造修改。请刷新后重试。",
+      );
+    }
+  }
+  async function reloadAfterAssessmentReview() {
+    if (!selectedRunId) return;
+    await Promise.all([
+      loadMonitor(),
+      loadRunHistory(),
+      loadRunDetail(selectedRunId),
+      loadEvents(selectedRunId),
+    ]);
+  }
+  return (
+    <section className="ros-monitor">
+      <header className="ros-section-heading">
+        <div>
+          <p className="ros-eyebrow">监控与版本</p>
+          <h2>每一次运行均可检查、复现与配置</h2>
+        </div>
+        <div className="ros-header-actions">
+          <button
+            className="ros-button ros-button--primary"
+            type="button"
+            disabled={
+              starting ||
+              !detail?.monitor ||
+              protocolLoadError ||
+              protocolBlockers.length > 0
+            }
+            onClick={startNow}
+          >
+            {starting ? "正在创建运行…" : "立即补证一次"}
+          </button>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            disabled={!selectedRunId}
+            onClick={() => setDrawer(true)}
+          >
+            打开运行详情
+          </button>
+        </div>
+      </header>
+      {protocolBlockers.length > 0 && (
+        <section className="ros-rulebox">
+          <b>研究协议尚未通过，不能启动补证。</b>
+          {protocolBlockers.map((blocker) => (
+            <p key={`${blocker.id}:${blocker.code}`}>
+              {protocolReason[blocker.code] || blocker.code}；下一步：
+              {blocker.nextAction}
+            </p>
+          ))}
+          <Link
+            className="ros-button ros-button--primary"
+            to={`/events/${caseId}/protocol`}
+          >
+            补齐研究协议
+          </Link>
+        </section>
+      )}
+      {monitorLoadError && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>监控配置暂不可用</strong>
+          <p>
+            当前无法确认此 Case 的监控范围、配置版本或最近运行；不会以旧页面状态代替真实记录。
+          </p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => void loadMonitor()}
+          >
+            重新读取监控配置
+          </button>
+        </section>
+      )}
+      {run?.status === "queued" && workerStatus?.status === "unavailable" && (
+        <section className="ros-empty ros-empty--compact" role="status">
+          <strong>执行器未启动；已排队的研究不会自动推进。</strong>
+          <p>本次冻结范围和已有事件均已保存。执行器恢复前不会领取任务，系统也不会偷偷启用 mock 模型或外部数据。</p>
+        </section>
+      )}
+      {run?.status === "queued" && workerStatus?.status === "stale" && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>执行器心跳已失联；已排队的研究暂不会自动推进。</strong>
+          <p>最后心跳：{workerStatus.last_seen_at ? new Date(workerStatus.last_seen_at).toLocaleString("zh-CN") : "未记录"}。恢复后请通过本页运行事件确认任务已被领取。</p>
+        </section>
+      )}
+      {run?.status === "queued" && workerStatusError && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>执行器状态暂不可读取</strong>
+          <p>已知本次运行仍在排队，但页面无法确认是否有 worker 可领取，不能把它显示为正在执行。</p>
+        </section>
+      )}
+      {runEventsLoadError && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>本次运行事件暂不可读取</strong>
+          <p>
+            当前无法确认此运行的阶段、排除理由或候选输出；不会将上一次读取到的事件当作本次真实记录。
+          </p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            disabled={!selectedRunId}
+            onClick={() => selectedRunId && void loadEvents(selectedRunId)}
+          >
+            重新读取本次运行事件
+          </button>
+        </section>
+      )}
+      {selectedRunId && (cannotReplaySelectedRun || runReplayLoadFailed) && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>无法回放此运行</strong>
+          <p>
+            运行 {selectedRunId} 不在当前案例可访问的历史中，或详情暂不可读取；页面不会自动切换为另一条运行。
+          </p>
+          {latestRunId && (
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              onClick={() => selectRun(latestRunId)}
+            >
+              返回最新运行
+            </button>
+          )}
+        </section>
+      )}
+      {protocolLoadError && (
+        <section className="ros-empty ros-empty--compact" role="alert">
+          <strong>研究协议状态暂不可读取</strong>
+          <p>
+            系统无法确认当前因素是否满足结果指标、范围和验证规则，立即补证保持关闭，避免创建无法解释的运行。
+          </p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => setProtocolReload((value) => value + 1)}
+          >
+            重新读取研究协议状态
+          </button>
+        </section>
+      )}
+      {error && <p className="ros-error">{error}</p>}
+      <div className="ros-monitor-grid">
+        <aside className="ros-run-history" aria-label="运行历史">
+          <p className="ros-eyebrow">运行历史</p>
+          <h2>冻结记录</h2>
+          {runHistoryLoadError ? (
+            <section className="ros-empty ros-empty--compact" role="alert">
+              <strong>运行历史暂不可读取</strong>
+              <p>已选运行的详情不会因此被其他记录替代。</p>
+              <button
+                className="ros-button ros-button--secondary"
+                type="button"
+                onClick={() => void loadRunHistory()}
+              >
+                重新读取运行历史
+              </button>
+            </section>
+          ) : runHistory.length ? (
+            <ol>
+              {runHistory.slice(0, 20).map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    className={item.id === selectedRunId ? "is-selected" : undefined}
+                    aria-current={item.id === selectedRunId ? "true" : undefined}
+                    aria-label={`${runStatusLabel(item.status)} · ${runStageLabel(item.stage)} · ${item.id}`}
+                    onClick={() => selectRun(item.id)}
+                  >
+                    <strong>
+                      {runStatusLabel(item.status)} · {runStageLabel(item.stage)}
+                    </strong>
+                    <span>
+                      {new Date(item.created_at).toLocaleString("zh-CN", {
+                        timeZone: "Asia/Shanghai",
+                      })}
+                    </span>
+                    <small>{item.stop_reason || "尚无停止原因"}</small>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : runHistoryLoaded ? (
+            <div className="ros-empty ros-empty--compact">尚无运行记录。</div>
+          ) : (
+            <div className="ros-empty ros-empty--compact">正在读取运行历史…</div>
+          )}
+        </aside>
+        <section className="ros-card ros-run-card">
+          <header className="ros-card-head">
+            <div>
+              <p className="ros-eyebrow">
+                {run ? "选中的运行" : selectedRunId ? "运行状态待重读" : "尚未开始运行"}
+              </p>
+              <h2>{run ? `${runStageLabel(run.stage)} · ${runStatusLabel(run.status)}` : selectedRunId ? "运行状态暂不可读取" : "先配置持续研究"}</h2>
+            </div>
+            <span>{run ? runTimestamp ? `更新于 ${runTimestamp}` : "更新时间未记录" : selectedRunId ? "等待服务返回实际状态" : ""}</span>
+          </header>
+          <div className="ros-run-summary">
+            <strong>
+              {run?.status === "queued"
+                ? "已入队，等待研究 worker 领取"
+                : events.length
+                ? "系统的每一步都在记录"
+                : "运行将从范围冻结开始记录"}
+            </strong>
+            <p>
+              {run?.status === "queued"
+                ? "范围冻结已完成。worker 尚未领取前，页面会持续显示等待状态；不会假装已经采集、审核或改写结论。"
+                : events.length
+                ? "查看每个阶段的输入、允许来源、排除理由和输出；系统不会在后台悄悄改写结论。"
+                : "立即运行或定时任务都会绑定有效的 CaseMonitor 配置版本。"}
+            </p>
+          </div>
+          <ol className="ros-run-log">
+            {events.length ? (
+              events.map((event) => (
+                <li key={event.seq}>
+                  <span>{event.seq}</span>
+                  <div>
+                    <strong>
+                      {runStageLabel(event.stage)} · {runStatusLabel(event.status)}
+                    </strong>
+                    <p>{event.message || "无文字摘要"}</p>
+                    <small>
+                      {formatRunEventDetails(event.details) || "无额外字段"}
+                    </small>
+                  </div>
+                </li>
+              ))
+            ) : (
+              <li>
+                <span>1</span>
+                <div>
+                  <strong>等待运行</strong>
+                  <p>
+                    尚无结构化运行事件；新运行会从读取并冻结配置开始逐条记录。
+                  </p>
+                </div>
+              </li>
+            )}
+          </ol>
+        </section>
+        <aside className="ros-monitor-config">
+          <section className="ros-panel">
+            <p className="ros-eyebrow">
+              当前 CaseMonitor ·{" "}
+              {detail?.monitor ? `配置 v${detail.monitor.version}` : "未配置"}
+            </p>
+            <h2>用于未来运行的配置</h2>
+            <p>
+              它只决定下一次立即补证与定时任务；历史运行必须以它自己的冻结事件回放。
+            </p>
+            {detail?.monitor ? (
+              <dl className="ros-definition">
+                <div>
+                  <dt>运行频率</dt>
+                  <dd>{runFrequencyLabel(detail.monitor.frequency)} · 中国标准时间</dd>
+                </div>
+                <div>
+                  <dt>最近一次运行</dt>
+                  <dd>
+                    {detail.latest_run
+                      ? new Date(detail.latest_run.updated_at).toLocaleString(
+                          "zh-CN",
+                          { timeZone: "Asia/Shanghai" },
+                        )
+                      : "尚无运行记录"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>下次定时检查</dt>
+                  <dd>
+                    {detail.next_scheduled_at
+                      ? new Date(detail.next_scheduled_at).toLocaleString(
+                          "zh-CN",
+                          { timeZone: "Asia/Shanghai" },
+                        )
+                      : detail.monitor.status === "paused"
+                        ? "已暂停"
+                        : "当前频率未被调度器支持"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>允许来源</dt>
+                  <dd>{sourceTypeListLabel(detail.monitor.allowed_source_types)}</dd>
+                </div>
+                <div>
+                  <dt>下一验证</dt>
+                  <dd>{detail.monitor.next_verification_event}</dd>
+                </div>
+                <div>
+                  <dt>单次上限</dt>
+                  <dd>{detail.monitor.budget} 份候选资料</dd>
+                </div>
+              </dl>
+            ) : (
+              <div className="ros-empty ros-empty--compact">
+                尚未设置监控条件。
+              </div>
+            )}
+            <Link
+              className="ros-button ros-button--primary"
+              to={`/events/${caseId}/monitor/config`}
+            >
+              调整配置
+            </Link>
+          </section>
+          <p className="ros-rulebox">
+            <b>可复现要求：</b>
+            触发人/原因、配置版本、查询口径、来源许可、资料版本、阶段输出、排除理由和失败原因均要可查看。
+          </p>
+        </aside>
+      </div>
+      {drawer && selectedRunId && !cannotReplaySelectedRun && !runReplayLoadFailed && (
+        <RunDrawer
+          run={run}
+          detail={detail}
+          runDetail={runDetail}
+          runDetailLoadError={runDetailLoadError}
+          events={events}
+          onCancel={cancelRun}
+          onAssessmentReviewed={reloadAfterAssessmentReview}
+          onClose={() => setDrawer(false)}
+        />
+      )}
+    </section>
+  );
+}
+
+function RunDrawer({
+  run,
+  detail,
+  runDetail,
+  runDetailLoadError,
+  events,
+  onCancel,
+  onAssessmentReviewed,
+  onClose,
+}: {
+  run:
+    | MonitorDetail["latest_run"]
+    | { id: string; status: string; stage: string; updated_at: string }
+    | { id: string; status: string; stage: string; created_at: string }
+    | null;
+  detail: MonitorDetail | null;
+  runDetail: ResearchRunDetail | null;
+  runDetailLoadError: boolean;
+  events: RunEvent[];
+  onCancel: (reason: string) => Promise<void>;
+  onAssessmentReviewed: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [stopping, setStopping] = useState(false);
+  const scope = events.find((event) => event.stage === "scope")?.details;
+  const value = (key: string) => scope?.[key];
+  const list = (key: string) => {
+    const current = value(key);
+    return Array.isArray(current)
+      ? current.join("、")
+      : current
+        ? String(current)
+        : null;
+  };
+  const canStop = ["queued", "running", "waiting_for_review"].includes(
+    run?.status || "",
+  );
+  async function stop() {
+    if (!reason.trim()) return;
+    setStopping(true);
+    try {
+      await onCancel(reason.trim());
+      setReason("");
+    } finally {
+      setStopping(false);
+    }
+  }
+  return (
+    <aside className="ros-run-drawer" aria-label="运行详情">
+      <header>
+        <div>
+          <p className="ros-eyebrow">ResearchRun · {run?.id || "尚无运行"}</p>
+          <h2>{run ? `${runStageLabel(run.stage)} · ${runStatusLabel(run.status)}` : "运行详情"}</h2>
+          <p>
+            {scope
+              ? "以下口径来自本次运行的冻结事件。"
+              : "冻结口径尚未在事件记录中提供，不能用当前配置替代。"}
+          </p>
+        </div>
+        <button aria-label="关闭运行详情" type="button" onClick={onClose}>
+          ×
+        </button>
+      </header>
+      <div className="ros-drawer-body">
+        <section className="ros-run-scope">
+          <p className="ros-eyebrow">本次运行口径</p>
+          <dl>
+            <div>
+              <dt>触发方式</dt>
+              <dd>{runTriggerLabel(list("trigger"))}</dd>
+            </div>
+            <div>
+              <dt>配置版本</dt>
+              <dd>{list("monitor_version_id") || "未记录"}</dd>
+            </div>
+            <div>
+              <dt>范围因素</dt>
+              <dd>
+                {list("factor_statements") || list("factor_ids") || "未记录"}
+              </dd>
+            </div>
+            <div>
+              <dt>允许来源</dt>
+              <dd>
+                {sourceTypeListLabel(
+                  value("allowed_source_types") as string[] | null | undefined,
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>检索预算</dt>
+              <dd>{list("budget") || "未记录"}</dd>
+            </div>
+            <div>
+              <dt>运行事件</dt>
+              <dd>{events.length} 条</dd>
+            </div>
+          </dl>
+          {!scope && detail?.monitor && (
+            <p className="ros-note">
+              当前配置为 v{detail.monitor.version}，仅供下一次运行使用。
+            </p>
+          )}
+        </section>
+        {canStop && (
+          <section className="ros-run-control">
+            <p className="ros-eyebrow">人工停止</p>
+            <p>
+              停止会取消尚未完成的任务，但不覆盖本次冻结范围、已产生的阶段记录或历史结论。
+            </p>
+            <label>
+              停止原因
+              <textarea
+                aria-label="停止原因"
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="说明为什么现在应停止这次运行"
+              />
+            </label>
+            <button
+              className="ros-button ros-button--secondary"
+              type="button"
+              disabled={!reason.trim() || stopping}
+              onClick={() => void stop()}
+            >
+              {stopping ? "正在停止…" : "停止本次运行"}
+            </button>
+          </section>
+        )}
+        {runDetailLoadError ? (
+          <section className="ros-empty ros-empty--compact" role="alert">
+            <strong>临时评估审核详情暂不可读取</strong>
+            <p>页面不会把读取失败显示为没有待审评估；请刷新运行详情后再决定。</p>
+          </section>
+        ) : runDetail ? (
+          <AssessmentReviewPanel
+            runId={run?.id || ""}
+            assessments={runDetail.pending_assessments ?? []}
+            onReviewed={onAssessmentReviewed}
+          />
+        ) : run?.status === "waiting_for_review" ? (
+          <section className="ros-empty ros-empty--compact">
+            正在读取本次运行的待审临时评估…
+          </section>
+        ) : null}
+        <ol className="ros-run-log">
+          {events.map((event) => (
+            <li key={event.seq}>
+              <span>{event.seq}</span>
+              <div>
+                <strong>{runStageLabel(event.stage)} · {runStatusLabel(event.status)}</strong>
+                <p>{event.message || "无文字摘要"}</p>
+                <small>
+                  {event.createdAt
+                    ? new Date(event.createdAt).toLocaleString("zh-CN")
+                    : "时间未记录"}{" "}
+                  ·{" "}
+                  {formatRunEventDetails(event.details) || "无额外字段"}
+                </small>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </aside>
+  );
+}
+
+function AssessmentReviewPanel({
+  runId,
+  assessments,
+  onReviewed,
+}: {
+  runId: string;
+  assessments: ResearchRunDetail["pending_assessments"];
+  onReviewed: () => Promise<void>;
+}) {
+  if (!assessments.length) return null;
+  return (
+    <section className="ros-run-control">
+      <p className="ros-eyebrow">临时 AI 评估待审核</p>
+      <p>这项判断来自本次冻结运行；人工决定会追加审核记录，不会改写 AI 原始结论。</p>
+      {assessments.map((assessment) => (
+        <AssessmentReviewItem
+          key={assessment.assessment_id}
+          runId={runId}
+          assessment={assessment}
+          onReviewed={onReviewed}
+        />
+      ))}
+    </section>
+  );
+}
+
+function AssessmentReviewItem({
+  runId,
+  assessment,
+  onReviewed,
+}: {
+  runId: string;
+  assessment: ResearchRunDetail["pending_assessments"][number];
+  onReviewed: () => Promise<void>;
+}) {
+  const [reason, setReason] = useState("");
+  const [replacement, setReplacement] = useState(assessment.conclusion);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function decide(outcome: "confirmed" | "modified" | "rejected") {
+    if (!reason.trim()) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await researchClient.reviewAssessment(assessment.assessment_id, {
+        outcome,
+        conclusion: outcome === "modified" ? replacement : assessment.conclusion,
+        reason: reason.trim(),
+        reviewer: "human:researcher",
+      });
+      await onReviewed();
+      setNotice("审核决定已记录；页面已从服务端重读本次运行状态。");
+    } catch {
+      setError("提交临时评估审核失败；原评估与运行状态均未在页面中伪造更新。请刷新后重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <article className="ros-review-item">
+      <div>
+        <span className="ros-pill ros-pill--human">本次运行待审</span>
+        <h3>{assessment.conclusion}</h3>
+        <p>冻结运行 · {runId}</p>
+        <blockquote>{assessment.rationale}</blockquote>
+        {assessment.gaps.length > 0 && (
+          <p>待补材料：{assessment.gaps.join("；")}</p>
+        )}
+      </div>
+      <label>
+        临时评估审核理由
+        <textarea
+          aria-label="临时评估审核理由"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="说明确认、修改或驳回此评估的依据"
+        />
+      </label>
+      <label>
+        修改后的结论
+        <select
+          aria-label="修改后的结论"
+          value={replacement}
+          onChange={(event) => setReplacement(event.target.value as typeof replacement)}
+        >
+          <option value="supported">supported</option>
+          <option value="contradicted">contradicted</option>
+          <option value="insufficient_evidence">insufficient_evidence</option>
+        </select>
+      </label>
+      <div>
+        <button
+          className="ros-button ros-button--primary"
+          type="button"
+          disabled={!reason.trim() || busy}
+          onClick={() => void decide("confirmed")}
+        >
+          确认临时评估
+        </button>
+        <button
+          className="ros-button ros-button--secondary"
+          type="button"
+          disabled={!reason.trim() || busy}
+          onClick={() => void decide("modified")}
+        >
+          修改后确认
+        </button>
+        <button
+          className="ros-button ros-button--secondary"
+          type="button"
+          disabled={!reason.trim() || busy}
+          onClick={() => void decide("rejected")}
+        >
+          驳回临时评估
+        </button>
+      </div>
+      {error && <p className="ros-error">{error}</p>}
+      {notice && <p className="ros-success">{notice}</p>}
+    </article>
+  );
+}
+
+export function MonitorConfigPage() {
+  const [historyReload, setHistoryReload] = useState(0);
+  return (
+    <CaseFrame>
+      {(_data, caseId) => (
+        <>
+          <MonitorConfigForm
+            caseId={caseId}
+            onSaved={() => setHistoryReload((value) => value + 1)}
+          />
+          <MonitorHistory caseId={caseId} reloadToken={historyReload} />
+        </>
+      )}
+    </CaseFrame>
+  );
+}
+function MonitorHistory({
+  caseId,
+  reloadToken,
+}: {
+  caseId: string;
+  reloadToken: number;
+}) {
+  const [history, setHistory] = useState<Monitor[]>([]);
+  const [loadError, setLoadError] = useState(false);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setLoadError(false);
+    researchOsApi
+      .monitor(caseId)
+      .then((value) => {
+        if (!active) return;
+        setHistory(value.history ?? []);
+        setLoadError(false);
+      })
+      .catch(() => active && setLoadError(true));
+    return () => {
+      active = false;
+    };
+  }, [caseId, reload, reloadToken]);
+  return (
+    <section className="ros-rule-history">
+      <p className="ros-eyebrow">CaseMonitor 版本历史</p>
+      <h2>配置由谁、为何变更</h2>
+      {loadError ? (
+        <div className="ros-empty ros-empty--compact" role="alert">
+          <strong>无法读取 CaseMonitor 版本历史</strong>
+          <p>当前不会把不可读取的审计记录表示为“尚无配置”。</p>
+          <button
+            className="ros-button ros-button--secondary"
+            type="button"
+            onClick={() => setReload((value) => value + 1)}
+          >
+            重新读取监控版本历史
+          </button>
+        </div>
+      ) : history.length ? (
+        <ol>
+          {history.map((monitor) => (
+            <li key={monitor.id}>
+              <strong>
+                v{monitor.version} · {monitorStatusLabel(monitor.status)}
+              </strong>
+              <span>
+                {monitor.changed_by} · {monitor.created_at}
+              </span>
+              <p>{monitor.change_reason}</p>
+              <small>
+                {runFrequencyLabel(monitor.frequency)} · {sourceTypeListLabel(monitor.allowed_source_types)}{" "}
+                · 预算 {monitor.budget}
+              </small>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="ros-empty ros-empty--compact">
+          尚无可展示的监控配置版本。
+        </div>
+      )}
+    </section>
+  );
+}
+function MonitorConfigForm({
+  caseId,
+  onSaved,
+}: {
+  caseId: string;
+  onSaved: () => void;
+}) {
+  const [detail, setDetail] = useState<MonitorDetail | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [frequency, setFrequency] = useState("weekday_08_30");
+  const [sources, setSources] = useState<string[]>(["licensed_provider"]);
+  const [nextEvent, setNextEvent] = useState("");
+  const [budget, setBudget] = useState(20);
+  const [reason, setReason] = useState("调整监控范围");
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    researchOsApi
+      .monitor(caseId)
+      .then((value) => {
+        setDetail(value);
+        setSelected(
+          value.monitor?.factor_ids ??
+            value.confirmed_factors.map((factor) => factor.id),
+        );
+        setFrequency(value.monitor?.frequency ?? "weekday_08_30");
+        setSources(
+          value.monitor?.allowed_source_types ?? ["licensed_provider"],
+        );
+        setNextEvent(value.monitor?.next_verification_event ?? "");
+        setBudget(value.monitor?.budget ?? 20);
+      })
+      .catch(() => setMessage("无法读取当前可确认因素。"));
+  }, [caseId]);
+  const toggleFactor = (id: string) =>
+    setSelected((current) =>
+      current.includes(id)
+        ? current.filter((value) => value !== id)
+        : [...current, id],
+    );
+  const toggleSource = (source: string) =>
+    setSources((current) =>
+      current.includes(source)
+        ? current.filter((value) => value !== source)
+        : [...current, source],
+    );
+  const monitorMissingRequirements = [
+    !selected.length ? "选择至少一个已确认因素" : null,
+    !sources.length ? "选择至少一个允许来源" : null,
+    !nextEvent.trim() ? "填写下一验证事件" : null,
+    !reason.trim() ? "填写新版本变更原因" : null,
+  ].filter((requirement): requirement is string => Boolean(requirement));
+  const monitorSaveReady = !busy && monitorMissingRequirements.length === 0;
+  async function save() {
+    if (!monitorSaveReady) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const saved = await researchOsApi.saveMonitor(caseId, {
+        actor: "human:researcher",
+        frequency,
+        factor_ids: selected,
+        allowed_source_types: sources as (
+          | "licensed_provider"
+          | "company_disclosure"
+          | "uploaded_file"
+          | "pasted_snapshot"
+        )[],
+        next_verification_event: nextEvent,
+        budget,
+        change_reason: reason,
+      });
+      setDetail((current) =>
+        current ? { ...current, monitor: saved } : current,
+      );
+      setSelected(saved.factor_ids);
+      setFrequency(saved.frequency);
+      setSources(saved.allowed_source_types);
+      setNextEvent(saved.next_verification_event);
+      setBudget(saved.budget);
+      setReason(saved.change_reason);
+      setMessage(`已保存监控版本 v${saved.version}；此前版本保持不变。`);
+      onSaved();
+    } catch {
+      setMessage("保存失败，未写入任何配置版本。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="ros-panel ros-config">
+      <p className="ros-eyebrow">配置监控</p>
+      <h2>调整后会创建新的可复现版本</h2>
+      <p>
+        系统只使用这里明确允许的来源和已确认因素；立即补证与定时运行都引用同一版本。
+      </p>
+      {detail?.monitor && (
+        <div className="ros-config-current" aria-live="polite">
+          <strong>当前生效版本 v{detail.monitor.version}</strong>
+          <span>
+            {detail.monitor.status === "paused"
+              ? "定时任务已暂停"
+              : "定时任务已启用"}{" "}
+            · {sourceTypeListLabel(detail.monitor.allowed_source_types)} · 下一验证：
+            {detail.monitor.next_verification_event}
+          </span>
+        </div>
+      )}
+      {!detail ? (
+        <div className="ros-empty ros-empty--compact">正在读取可配置因素…</div>
+      ) : (
+        <div className="ros-config-form">
+          <fieldset>
+            <legend>已确认关键因素</legend>
+            {detail.confirmed_factors.map((factor) => (
+              <label key={factor.id}>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(factor.id)}
+                  onChange={() => toggleFactor(factor.id)}
+                />
+                {factor.statement}
+              </label>
+            ))}
+          </fieldset>
+          <label>
+            频率
+            <select
+              value={frequency}
+              onChange={(event) => setFrequency(event.target.value)}
+            >
+              <option value="weekday_08_30">工作日 08:30</option>
+              <option value="weekday_12_30">工作日 12:30</option>
+              <option value="daily_20_00">每日 20:00</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>允许来源</legend>
+            {[
+              ["licensed_provider", "授权数据源"],
+              ["company_disclosure", "公司披露"],
+              ["uploaded_file", "人工上传"],
+              ["pasted_snapshot", "粘贴快照"],
+            ].map(([value, label]) => (
+              <label key={value}>
+                <input
+                  type="checkbox"
+                  checked={sources.includes(value)}
+                  onChange={() => toggleSource(value)}
+                />
+                {label}
+              </label>
+            ))}
+          </fieldset>
+          <label>
+            下一验证事件
+            <input
+              value={nextEvent}
+              onChange={(event) => setNextEvent(event.target.value)}
+              placeholder="例如：2026Q1 财报披露"
+            />
+          </label>
+          <fieldset>
+            <legend>定时任务</legend>
+            <p>
+              当前状态：
+              {detail.monitor?.status === "paused"
+                ? "已暂停，人工立即补证仍可单独执行"
+                : "启用"}
+            </p>
+            <MonitorStatusControl
+              caseId={caseId}
+              status={detail.monitor?.status ?? "active"}
+              onChanged={(monitor) => {
+                setDetail({ ...detail, monitor });
+                setMessage(`已保存监控版本 v${monitor.version}。`);
+                onSaved();
+              }}
+            />
+          </fieldset>
+          <label>
+            检索预算
+            <input
+              type="number"
+              min="1"
+              value={budget}
+              onChange={(event) => setBudget(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            新版本变更原因
+            <textarea
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </label>
+          <button
+            className="ros-button ros-button--primary"
+            type="button"
+            disabled={!monitorSaveReady}
+            onClick={save}
+          >
+            {busy ? "正在保存监控版本…" : "保存为新监控版本"}
+          </button>
+          {monitorMissingRequirements.length > 0 && (
+            <p className="ros-note" role="status">
+              保存监控版本前还需填写：{monitorMissingRequirements.join("、")}。立即补证和定时任务都不会引用未完整冻结的配置。
+            </p>
+          )}
+        </div>
+      )}
+      {message && (
+        <p
+          className={message.startsWith("已保存") ? "ros-success" : "ros-error"}
+        >
+          {message}
+        </p>
+      )}
+      <Link
+        className="ros-button ros-button--secondary"
+        to={`/events/${caseId}/monitor`}
+      >
+        返回运行记录
+      </Link>
+    </section>
+  );
+}
+
+function MonitorStatusControl({
+  caseId,
+  status,
+  onChanged,
+}: {
+  caseId: string;
+  status: string;
+  onChanged: (monitor: NonNullable<MonitorDetail["monitor"]>) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const target = status === "paused" ? "active" : "paused";
+  const statusChangeReady = !busy && Boolean(reason.trim());
+  async function change() {
+    if (!statusChangeReady) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const monitor = await researchOsApi.setMonitorStatus(
+        caseId,
+        target,
+        reason.trim(),
+      );
+      onChanged(monitor);
+      setReason("");
+    } catch {
+      setError("无法变更定时任务状态；当前版本未被改写。");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="ros-monitor-status">
+      <label>
+        变更原因
+        <input
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder={
+            target === "paused"
+              ? "例如：等待下一次财报后再运行"
+              : "例如：恢复常规验证"
+          }
+        />
+      </label>
+      <button
+        className="ros-button ros-button--secondary"
+        type="button"
+        disabled={!statusChangeReady}
+        onClick={change}
+      >
+        {busy
+          ? "正在保存…"
+          : target === "paused"
+            ? "暂停未来定时任务"
+            : "恢复定时任务"}
+      </button>
+      {!reason.trim() && (
+        <p className="ros-note" role="status">
+          变更定时任务前还需填写：填写变更原因。系统会保留本次状态变更，不会默默暂停或恢复后续运行。
+        </p>
+      )}
+      {error && <p className="ros-error">{error}</p>}
+    </div>
+  );
+}

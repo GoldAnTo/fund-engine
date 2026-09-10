@@ -3,27 +3,9 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-# Tests must never see a developer's local .env credentials.  Force test mode
-# before importing application modules and discard every ambient setting that
-# could construct a live provider.  Database service URLs are intentionally
-# preserved so opt-in PostgreSQL and Neo4j integration tests still work.
-os.environ["APP_ENV"] = "test"
-for provider_env_name in (
-    "LLM_API_KEY",
-    "LLM_BASE_URL",
-    "LLM_MODEL",
-    "LLM_TEMPERATURE",
-    "LLM_SEED",
-    "LLM_TIMEOUT_SECONDS",
-    "LLM_MAX_ATTEMPTS",
-    "LLM_RETRY_BUDGET_SECONDS",
-    "LLM_MAX_INPUT_BYTES",
-    "LLM_MAX_RESPONSE_BYTES",
-    "LLM_MAX_COMPLETION_TOKENS",
-    "GILDATA_MAX_ATTEMPTS",
-    "GILDATA_TOKEN",
-):
-    os.environ.pop(provider_env_name, None)
+# Tests must never see a developer's local .env credentials: APP_ENV=test
+# makes app.env.load_local_env() a no-op, so providers stay mock/fake.
+os.environ.setdefault("APP_ENV", "test")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -199,10 +181,10 @@ def statement(research_service, span):
 
 
 @pytest.fixture
-def assessment_service(research_repository, session):
+def assessment_service(research_repository):
     from app.services.assessment import AssessmentService
 
-    return AssessmentService(research_repository, session)
+    return AssessmentService(research_repository)
 
 
 @pytest.fixture
@@ -764,18 +746,3 @@ def cmd_seeded(cmd_session):
     ))
     cmd_session.commit()
     return cmd_session
-
-
-@pytest.fixture(autouse=True)
-def isolate_postgres_concurrency_test(request):
-    """Independent-connection tests commit outside the ordinary session fixture."""
-    if not USE_PG or request.node.get_closest_marker('pg_only') is None:
-        yield
-        return
-    from app.models.ledger import Base
-    test_engine = request.getfixturevalue('engine')
-    _truncate_postgresql_tables(test_engine, Base)
-    try:
-        yield
-    finally:
-        _truncate_postgresql_tables(test_engine, Base)

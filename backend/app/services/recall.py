@@ -360,7 +360,7 @@ class RecallService:
             ):
                 continue
             if allowed_source_types and (
-                contract is None or contract.research_source_type not in allowed_source_types
+                contract is None or contract.source_type not in allowed_source_types
             ):
                 continue
             candidates.append(statement)

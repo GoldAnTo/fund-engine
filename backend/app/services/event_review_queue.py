@@ -198,9 +198,7 @@ class EventReviewQueueService:
             context = proposal_evidence_context(self._session, proposal)
             if context.admission.status == SourceStatus.INVALID:
                 invalid_ids.append(proposal.id)
-                task_repo.close_review_task(
-                    "review_proposal", "proposal", proposal.id, research_case_id=case_id
-                )
+                task_repo.close_review_task("review_proposal", "proposal", proposal.id)
                 if not self._has_admission_audit(proposal.id):
                     emit_event(
                         self._session,
@@ -219,9 +217,7 @@ class EventReviewQueueService:
                     )
                 continue
             if not self._is_current_scope_proposal(proposal, active_thesis_ids):
-                task_repo.close_review_task(
-                    "review_proposal", "proposal", proposal.id, research_case_id=case_id
-                )
+                task_repo.close_review_task("review_proposal", "proposal", proposal.id)
                 if not self._has_out_of_scope_audit(proposal.id):
                     emit_event(
                         self._session,
@@ -248,7 +244,7 @@ class EventReviewQueueService:
             context.span,
             context.document,
         )
-        payload = proposal.payload if isinstance(proposal.payload, dict) and not context.display_withheld else {}
+        payload = proposal.payload if isinstance(proposal.payload, dict) else {}
         return EventReviewQueueItemDTO(
             proposal_id=str(proposal.id),
             proposal_version=proposal.version,
@@ -275,7 +271,6 @@ class EventReviewQueueService:
             source_status=str(context.admission.status),
             source_status_reason=context.admission.reason,
             can_accept=context.admission.can_accept,
-            display_withheld=context.display_withheld,
             proposal_reason=payload.get("reason", ""),
             position=self._factor_position(case_id, thesis.statement if thesis else None),
         )

@@ -47,8 +47,6 @@ playwright/.cache/
 .env
 .env.local
 .env.*.local
-.env.one-click.local
-.one-click-runtime/
 *.pem
 *.key
 

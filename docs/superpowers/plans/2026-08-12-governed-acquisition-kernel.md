@@ -19,7 +19,7 @@ Do not implement this plan from commit `22377db` directly. First create a fresh 
 
 Record the resulting base commit in the implementation task commentary. Preserve every uncommitted file in the existing worktrees. The implementation branch must be named `codex/governed-acquisition-kernel` and must start clean.
 
-The integrated source-category change uses Alembic revision `0052`; this plan uses `0053` for the acquisition schema and `0054` for automatic-admission uniqueness. If integration adds one of those revisions first, rename the affected migration to the next free revision everywhere before writing its test—never create two Alembic heads accidentally.
+The source-category branch currently introduces Alembic revision `0051`; this plan reserves `0052` for the acquisition schema. If integration adds another `0052` first, rename this migration to the next free revision everywhere before writing its test—never create two Alembic heads accidentally.
 
 Create the implementation worktree's local Python environment before Task 1:
 
@@ -158,7 +158,7 @@ git commit -m "feat: define governed acquisition contract"
 
 **Files:**
 - Create: `backend/app/models/acquisition.py`
-- Create: `backend/alembic/versions/0053_governed_acquisition.py`
+- Create: `backend/alembic/versions/0052_governed_acquisition.py`
 - Modify: `backend/app/models/__init__.py`
 - Modify: `backend/app/models/ledger.py`
 - Test: `backend/tests/test_acquisition_schema.py`

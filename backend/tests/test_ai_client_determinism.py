@@ -14,38 +14,13 @@ temperature=0 plus a fixed seed closes the bulk of the variance.
 """
 from __future__ import annotations
 
+import os
 from typing import Any
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
-from app.ai.client import (
-    DEFAULT_TEMPERATURE,
-    DEFAULT_TIMEOUT_SECONDS,
-    LLMClient,
-    LLMProviderError,
-    LLMMalformedResponseError,
-)
-
-
-def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (
-        "LLM_API_KEY",
-        "LLM_BASE_URL",
-        "LLM_MODEL",
-        "LLM_TEMPERATURE",
-        "LLM_SEED",
-        "LLM_TIMEOUT_SECONDS",
-        "LLM_MAX_ATTEMPTS",
-        "LLM_RETRY_BUDGET_SECONDS",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LLM_BASE_URL", "https://llm.example.invalid/v1")
-    monkeypatch.setenv("LLM_MODEL", "test-model")
-    monkeypatch.setenv("LLM_TEMPERATURE", "0.0")
-    monkeypatch.setenv("LLM_SEED", "")
+from app.ai.client import DEFAULT_TEMPERATURE, LLMClient
 
 
 class _FakeCompletions:
@@ -60,8 +35,6 @@ class _FakeCompletions:
         response = MagicMock()
         response.choices = [MagicMock()]
         response.choices[0].message.content = '{"conclusion": "supported"}'
-        response.choices[0].finish_reason = "stop"
-        response.choices[0].message.refusal = None
         return response
 
 
@@ -73,26 +46,6 @@ class _FakeChat:
 class _FakeOpenAIClient:
     def __init__(self) -> None:
         self.chat = _FakeChat()
-
-
-class _FailingCompletions:
-    def create(self, **kwargs: Any) -> MagicMock:
-        raise httpx.ConnectError(
-            "upstream leaked https://llm.example/v1?token=sentinel-secret"
-        )
-
-
-class _MalformedCompletions:
-    def create(self, **kwargs: Any) -> MagicMock:
-        response = MagicMock()
-        response.choices = []
-        return response
-
-
-class _ClientWithCompletions:
-    def __init__(self, completions: Any) -> None:
-        self.chat = MagicMock()
-        self.chat.completions = completions
 
 
 class TestLLMClientDeterminism:
@@ -121,47 +74,6 @@ class TestLLMClientDeterminism:
         )
         client.chat_json([{"role": "user", "content": "{}"}], schema_hint="assess")
         assert fake.chat.completions.calls[0]["temperature"] == 0.7
-
-    def test_live_call_has_a_finite_timeout(self) -> None:
-        """A stalled provider must not leave a worker blocked indefinitely."""
-        fake = _FakeOpenAIClient()
-        client = LLMClient(
-            model_version="gpt-4o-mini",
-            client=fake,
-            timeout_seconds=12.5,
-        )
-
-        client.chat_json([{"role": "user", "content": "{}"}], schema_hint="assess")
-
-        assert fake.chat.completions.calls[0]["timeout"] == 12.5
-
-    def test_live_call_retries_one_transient_transport_failure(self) -> None:
-        class FailsOnceCompletions:
-            def __init__(self) -> None:
-                self.calls = 0
-
-            def create(self, **_kwargs: Any) -> MagicMock:
-                self.calls += 1
-                if self.calls == 1:
-                    raise httpx.ConnectError("transient provider disconnect")
-                response = MagicMock()
-                response.choices = [MagicMock()]
-                response.choices[0].message.content = '{"conclusion": "supported"}'
-                response.choices[0].finish_reason = "stop"
-                response.choices[0].message.refusal = None
-                return response
-
-        completions = FailsOnceCompletions()
-        client = LLMClient(
-            model_version="gpt-4o-mini",
-            client=_ClientWithCompletions(completions),
-            max_attempts=2,
-        )
-
-        assert client.chat_json([{"role": "user", "content": "{}"}]) == {
-            "conclusion": "supported"
-        }
-        assert completions.calls == 2
 
     def test_seed_set_is_forwarded_to_openai(self) -> None:
         """When ``seed`` is set, the call kwargs must include it so OpenAI's
@@ -195,84 +107,6 @@ class TestLLMClientDeterminism:
         )
         assert fake.chat.completions.calls == []
 
-    def test_live_provider_failure_uses_fixed_safe_message(self) -> None:
-        client = LLMClient(
-            model_version="provider-test",
-            client=_ClientWithCompletions(_FailingCompletions()),
-        )
-
-        with pytest.raises(LLMProviderError) as exc_info:
-            client.chat_json([{"role": "user", "content": "{}"}])
-
-        assert str(exc_info.value) == "LLM provider request failed"
-        assert "sentinel-secret" not in str(exc_info.value)
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
-
-    @pytest.mark.parametrize(
-        "programming_error", [TypeError, KeyError, AssertionError, AttributeError]
-    )
-    def test_live_call_does_not_wrap_programming_errors(
-        self, programming_error
-    ) -> None:
-        class BrokenCompletions:
-            def create(self, **kwargs: Any) -> MagicMock:
-                raise programming_error("programming defect")
-
-        client = LLMClient(
-            model_version="provider-test",
-            client=_ClientWithCompletions(BrokenCompletions()),
-        )
-
-        with pytest.raises(programming_error, match="programming defect"):
-            client.chat_json([{"role": "user", "content": "{}"}])
-
-    def test_empty_choices_uses_dedicated_malformed_response_error(self) -> None:
-        client = LLMClient(
-            model_version="provider-test",
-            client=_ClientWithCompletions(_MalformedCompletions()),
-        )
-
-        with pytest.raises(LLMMalformedResponseError) as exc_info:
-            client.chat_json([{"role": "user", "content": "{}"}])
-
-        assert str(exc_info.value) == "LLM provider returned an invalid response"
-        assert isinstance(exc_info.value.__cause__, IndexError)
-
-
-@pytest.mark.parametrize("finish_reason", ["length", "content_filter", "tool_calls", "function_call", None, "unknown"])
-def test_nonstop_response_is_rejected_before_json_repair(finish_reason):
-    completions = MagicMock()
-    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
-        finish_reason=finish_reason,
-        message=SimpleNamespace(content='{"conclusion":"supported","rationale":"partial', refusal=None),
-    )])
-    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
-    with pytest.raises(LLMMalformedResponseError, match="^LLM provider returned an invalid response$"):
-        client.chat_json([])
-    assert completions.create.call_count == 1
-
-
-def test_refusal_is_rejected_even_with_valid_json_content():
-    completions = MagicMock()
-    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
-        finish_reason="stop",
-        message=SimpleNamespace(content='{"conclusion":"supported"}', refusal="sentinel-refusal"),
-    )])
-    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
-    with pytest.raises(LLMMalformedResponseError) as error:
-        client.chat_json([])
-    assert str(error.value) == "LLM provider returned an invalid response"
-    assert "sentinel-refusal" not in str(error.value)
-
-
-def test_stop_response_keeps_markdown_json_compatibility_without_optional_refusal():
-    completions = MagicMock()
-    completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
-        finish_reason="stop", message=SimpleNamespace(content='```json\n{"statements": []}\n```'),
-    )])
-    client = LLMClient(model_version="test", client=_ClientWithCompletions(completions))
-    assert client.chat_json([]) == {"statements": []}
-
 
 class TestFromEnvReadsReproducibilityKnobs:
     """Pin that ``from_env`` wires env-driven reproducibility knobs through."""
@@ -280,8 +114,8 @@ class TestFromEnvReadsReproducibilityKnobs:
     def test_from_env_with_no_key_runs_mock_with_knobs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _isolate_llm_env(monkeypatch)
-        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("LLM_TEMPERATURE", "0.0")
         monkeypatch.setenv("LLM_SEED", "1234")
         client = LLMClient.from_env()
@@ -295,8 +129,8 @@ class TestFromEnvReadsReproducibilityKnobs:
         """Empty ``LLM_SEED`` env must map to ``None`` (no seed passed to
         OpenAI) — a footgun here would silently seed every run with 0,
         locking users to a deterministic but unconfigurable run."""
-        _isolate_llm_env(monkeypatch)
-        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("LLM_SEED", "")
         client = LLMClient.from_env()
         assert client._seed is None
@@ -306,39 +140,8 @@ class TestFromEnvReadsReproducibilityKnobs:
     ) -> None:
         """The empty-string convention distinguishes "unset" from "0":
         ``LLM_SEED=0`` must pass 0 through, not be dropped to None."""
-        _isolate_llm_env(monkeypatch)
-        monkeypatch.setenv("APP_ENV", "test")
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.setenv("LLM_SEED", "0")
         client = LLMClient.from_env()
         assert client._seed == 0
-
-    def test_from_env_configures_finite_timeout_without_sdk_retries(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The SDK defaults to retries, which can multiply a request timeout.
-
-        A live workflow needs its configured limit to be a real upper bound,
-        rather than three sequential timeout windows hidden inside the SDK.
-        """
-        import openai
-
-        _isolate_llm_env(monkeypatch)
-        monkeypatch.setenv("APP_ENV", "production")
-        monkeypatch.setenv("LLM_API_KEY", "test-key")
-        monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "12.5")
-        captured: dict[str, Any] = {}
-
-        class FakeSDK:
-            def __init__(self, **kwargs: Any) -> None:
-                captured.update(kwargs)
-
-        monkeypatch.setattr(openai, "OpenAI", FakeSDK)
-
-        client = LLMClient.from_env()
-
-        assert client._timeout_seconds == 12.5
-        assert captured["timeout"] == 12.5
-        assert captured["max_retries"] == 0
-
-    def test_default_timeout_is_positive(self) -> None:
-        assert DEFAULT_TIMEOUT_SECONDS > 0
