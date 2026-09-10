@@ -22,7 +22,6 @@ from app.schemas.v1.forecast_verdicts import (
     ForecastVerdictHistoryResponse,
 )
 from app.schemas.v1.market_expression import ExpressionSourceDTO
-from app.queries.time import api_datetime
 from app.services.source_admission import source_contract_is_active
 
 
@@ -31,7 +30,6 @@ class ForecastVerdictQueries:
         self._db = db
 
     def history(self, case_id: uuid.UUID, *, cutoff: datetime) -> ForecastVerdictHistoryResponse:
-        cutoff = api_datetime(cutoff)
         verdicts = self._db.scalars(
             select(ForecastVerdict)
             .join(ForecastEvaluationCandidate, ForecastEvaluationCandidate.id == ForecastVerdict.candidate_id)
@@ -76,7 +74,7 @@ class ForecastVerdictQueries:
                 outcome=verdict.outcome,
                 reason=verdict.reason,
                 reviewed_by=verdict.reviewed_by,
-                reviewed_at=api_datetime(verdict.reviewed_at),
+                reviewed_at=verdict.reviewed_at,
                 target=ForecastTargetDTO(
                     id=str(target.id), case_id=str(target.research_case_id),
                     key_factor_id=str(target.key_factor_id), report_claim_id=str(target.report_claim_id),
@@ -88,14 +86,14 @@ class ForecastVerdictQueries:
                     comparator=target.comparator,
                     relative_tolerance=float(target.relative_tolerance) if target.relative_tolerance is not None else None,
                     reviewed_by=target.reviewed_by, review_reason=target.review_reason,
-                    reviewed_at=api_datetime(target.reviewed_at), forecast_source=forecast_source,
+                    reviewed_at=target.reviewed_at, forecast_source=forecast_source,
                     baseline_source=self._source(target.baseline_source_statement_id) if target.baseline_source_statement_id else None,
                 ),
                 actual=ActualMetricObservationDTO(
                     id=str(actual.id), forecast_target_id=str(actual.forecast_target_id),
                     entity_key=actual.entity_key, observed_value=float(actual.observed_value), unit=actual.unit,
                     observed_period_start=actual.observed_period_start,
-                    observed_period_end=actual.observed_period_end, available_at=api_datetime(actual.available_at),
+                    observed_period_end=actual.observed_period_end, available_at=actual.available_at,
                     recorded_by=actual.recorded_by, record_reason=actual.record_reason,
                     source=actual_source,
                 ),
@@ -127,7 +125,7 @@ class ForecastVerdictQueries:
             id=str(verdict.id), candidate_id=str(candidate.id),
             supersedes_id=str(verdict.supersedes_id) if verdict.supersedes_id else None,
             decision=verdict.decision, outcome=verdict.outcome, reason=verdict.reason,
-            reviewed_by=verdict.reviewed_by, reviewed_at=api_datetime(verdict.reviewed_at),
+            reviewed_by=verdict.reviewed_by, reviewed_at=verdict.reviewed_at,
             target=ForecastTargetDTO(
                 id=str(target.id), case_id=str(target.research_case_id),
                 key_factor_id=str(target.key_factor_id), report_claim_id=str(target.report_claim_id),
@@ -138,14 +136,14 @@ class ForecastVerdictQueries:
                 forecast_period_end=target.forecast_period_end, comparator=target.comparator,
                 relative_tolerance=float(target.relative_tolerance) if target.relative_tolerance is not None else None,
                 reviewed_by=target.reviewed_by, review_reason=target.review_reason,
-                reviewed_at=api_datetime(target.reviewed_at), forecast_source=forecast_source,
+                reviewed_at=target.reviewed_at, forecast_source=forecast_source,
                 baseline_source=self._source(target.baseline_source_statement_id) if target.baseline_source_statement_id else None,
             ),
             actual=ActualMetricObservationDTO(
                 id=str(actual.id), forecast_target_id=str(actual.forecast_target_id),
                 entity_key=actual.entity_key, observed_value=float(actual.observed_value), unit=actual.unit,
                 observed_period_start=actual.observed_period_start,
-                observed_period_end=actual.observed_period_end, available_at=api_datetime(actual.available_at),
+                observed_period_end=actual.observed_period_end, available_at=actual.available_at,
                 recorded_by=actual.recorded_by, record_reason=actual.record_reason,
                 source=actual_source,
             ),
@@ -181,6 +179,6 @@ class ForecastVerdictQueries:
             document_title=document.title if document else None,
             source_url=document.source_url if document else None,
             locator=span.locator if span else None,
-            available_at=api_datetime(document.available_at) if document else None,
+            available_at=document.available_at if document else None,
             permission_status="admitted",
         )

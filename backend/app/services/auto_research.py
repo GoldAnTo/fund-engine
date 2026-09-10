@@ -9,15 +9,8 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.ai.runs import research_audit_context
 from app.ai.assessment_gen import AssessmentGenerator
 from app.ai.client import LLMClient
-from app.ai.error_safety import (
-    AI_COMPLIANCE_ERROR_MESSAGE,
-    AI_COMPLIANCE_ERROR_TYPE,
-    AI_OPERATION_ERROR_MESSAGE,
-    AI_OPERATION_ERROR_TYPE,
-)
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.errors import ValidationFailedError
@@ -35,7 +28,7 @@ from app.models.proposals import Proposal
 from app.models.operational import Job, ResearchRun, ResearchTask, TaskItem
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent
 from app.models.research_expression import KeyFactor
-from app.models.event_research import EventResearchBrief, EventResearchConclusion
+from app.models.event_research import EventResearchConclusion
 from app.models.source_governance import SourceContract
 from app.repositories.operational import TaskRepository
 from app.repositories.auto_research import AutoResearchRepository
@@ -112,16 +105,6 @@ class AutoResearchService:
         if thesis_ids is not None:
             thesis_stmt = thesis_stmt.where(Thesis.id.in_(thesis_ids))
         theses = list(self.session.scalars(thesis_stmt))
-        if thesis_ids is not None:
-            if len(thesis_ids) != len(set(thesis_ids)):
-                raise ValueError("run thesis scope contains duplicate theses")
-            theses_by_id = {thesis.id: thesis for thesis in theses}
-            if set(theses_by_id) != set(thesis_ids):
-                raise ValueError("run thesis scope contains an unknown Case thesis")
-            # Explicit scopes are immutable ordered snapshots.  SQL IN does
-            # not preserve caller order, so restore it before writing both the
-            # run identity and scope event.
-            theses = [theses_by_id[thesis_id] for thesis_id in thesis_ids]
         # A protocol-required thesis may not create a run merely because a
         # caller reached the run endpoint. The same immutable protocol gate
         # used by assessment generation is enforced at orchestration time.
@@ -179,24 +162,6 @@ class AutoResearchService:
                     thesis_id=thesis.id,
                     task_type=task_type,
                     query=f"{label}: {thesis.statement}",
-                )
-            material_document_id = (scope_context or {}).get(
-                "intake_material_document_version_id"
-            )
-            if (scope_context or {}).get("input_kind") == "material":
-                if not isinstance(material_document_id, str):
-                    raise ValueError(
-                        "automatic material scope is missing its frozen document"
-                    )
-                self.repo.create_task(
-                    run_id=run.id,
-                    research_case_id=case_id,
-                    thesis_id=thesis.id,
-                    task_type="intake_material",
-                    query=(
-                        "先处理用户提供材料: "
-                        f"{material_document_id}: {thesis.statement}"
-                    ),
                 )
         self.repo.enqueue_run_job(run)
         # HTTP commands only persist a run + job.  A separately supervised
@@ -286,7 +251,13 @@ class AutoResearchService:
         *,
         reviewer: str,
     ) -> list[uuid.UUID]:
-        """Resume only runs whose recorded atomic-claim gate is now clear."""
+        """Resume affected runs only once every Case candidate has a verdict.
+
+        Atomic claims may be deduplicated at document level, while run state is
+        Case-scoped.  A human decision therefore checks every admitted Case
+        using the candidate's frozen document and requeues only its runs that
+        were paused specifically at the atomic-claim gate.
+        """
         document_id = self.session.scalar(
             select(SourceSpan.document_version_id)
             .where(SourceSpan.id == AtomicClaimCandidate.source_span_id)
@@ -302,41 +273,32 @@ class AutoResearchService:
             )
         )
         resumed: list[uuid.UUID] = []
-        run_ids: set[uuid.UUID] = set()
         for case_id in case_ids:
-            # JSON candidate IDs are historical payload, so filter by the
-            # indexed run state in SQL and parse only the projected event data.
-            # A normalized run-output mapping can make this containment lookup
-            # indexable in a later schema phase without changing semantics.
-            events = self.session.execute(
-                select(ResearchRunEvent.run_id, ResearchRunEvent.payload_json)
-                .join(ResearchRun, ResearchRun.id == ResearchRunEvent.run_id)
-                .where(ResearchRun.research_case_id == case_id)
-                .where(ResearchRun.status == "waiting_for_review")
-                .where(ResearchRun.stop_reason == "pending_atomic_claim_review")
-                .where(ResearchRunEvent.stage == "claim_review")
-            )
-            for run_id, payload in events:
-                if candidate_id in self._claim_candidate_ids(payload):
-                    run_ids.add(run_id)
-        for run_id in run_ids:
-            run = self._lock_run_for_transition(run_id)
-            if run is None or self._pending_atomic_claims_for_run(run):
+            if self._pending_atomic_claims(case_id):
                 continue
-            if not self.repo.resume_after_claim_review(run):
-                continue
-            ResearchRunEventRepository(self.session).append(
-                run.id,
-                stage="claim_review",
-                status="completed",
-                message="原子陈述审核已完成；原冻结范围已重新入队继续执行",
-                payload_json={
-                    "candidate_id": str(candidate_id),
-                    "reviewer": reviewer.strip(),
-                    "resume_from_round": run.round + 1,
-                },
+            runs = list(
+                self.session.scalars(
+                    select(ResearchRun)
+                    .where(ResearchRun.research_case_id == case_id)
+                    .where(ResearchRun.status == "waiting_for_review")
+                    .where(ResearchRun.stop_reason == "pending_atomic_claim_review")
+                )
             )
-            resumed.append(run.id)
+            for run in runs:
+                if not self.repo.resume_after_claim_review(run):
+                    continue
+                ResearchRunEventRepository(self.session).append(
+                    run.id,
+                    stage="claim_review",
+                    status="completed",
+                    message="原子陈述审核已完成；原冻结范围已重新入队继续执行",
+                    payload_json={
+                        "candidate_id": str(candidate_id),
+                        "reviewer": reviewer.strip(),
+                        "resume_from_round": run.round + 1,
+                    },
+                )
+                resumed.append(run.id)
         return resumed
 
     def continue_published_event(
@@ -412,35 +374,7 @@ class AutoResearchService:
         )
         return run
 
-    def _is_automatic_workflow(self, run: ResearchRun) -> bool:
-        scope = self.session.scalar(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run.id)
-            .where(ResearchRunEvent.stage == "scope")
-            .order_by(ResearchRunEvent.seq.desc())
-            .limit(1)
-        )
-        payload = scope.payload_json if scope is not None else None
-        scope_mode = (
-            payload.get("workflow_mode", "reviewed")
-            if isinstance(payload, dict)
-            else "reviewed"
-        )
-        return scope_mode == "automatic"
-
     def execute(self, run):
-        if self._is_automatic_workflow(run):
-            # Import locally so the automatic acquisition seam can depend on
-            # repository/model vocabulary without creating a service cycle.
-            from app.services.automatic_research_pipeline import (
-                AutomaticResearchPipeline,
-            )
-
-            return AutomaticResearchPipeline(
-                self.session,
-                client=self.client,
-                repository=self.repo,
-            ).advance(run)
         self.repo.update_run(run, status="running", stage="extract")
         ResearchRunEventRepository(self.session).append(
             run.id,
@@ -453,8 +387,6 @@ class AutoResearchService:
         used = run.budget_used or 0
         previous = self._run_evidence_count(run)
         failed = False
-        extraction_failed = False
-        extraction_cancelled = False
         allowed_source_types = self._run_allowed_source_types(run)
         for current_round in range(max(1, run.round + 1), run.max_rounds + 1):
             if self._is_cancelled(run):
@@ -463,14 +395,10 @@ class AutoResearchService:
             if used >= run.budget:
                 self.repo.update_run(
                     run,
-                    status=(
-                        "failed"
-                        if failed
-                        else self._successful_terminal_status(run)
-                    ),
-                    stage="failed" if failed else "stopped",
+                    status=self._successful_terminal_status(run),
+                    stage="stopped",
                     budget_used=used,
-                    stop_reason="task_failed" if failed else "budget_exhausted",
+                    stop_reason="budget_exhausted",
                 )
                 break
             for version in self._pending_versions_in_run_scope(
@@ -482,49 +410,12 @@ class AutoResearchService:
                 if used >= run.budget:
                     break
                 try:
-                    with research_audit_context(case_id=run.research_case_id, run_id=run.id):
-                        extracted = StatementExtractor(self.client).extract(
-                            version.id,
-                            self.session,
-                            before_persist=lambda: self._claim_extraction_output_slot(run),
-                        )
+                    StatementExtractor(self.client).extract(version.id, self.session)
                 except ComplianceRefusedError:
                     used += 1
-                    if not self._claim_extraction_output_slot(run):
-                        self.session.rollback()
-                        extraction_cancelled = True
-                        self._is_cancelled(run)
-                        break
-                    extraction_failed = True
-                    failed = True
                 except Exception:
                     used += 1
-                    if not self._claim_extraction_output_slot(run):
-                        self.session.rollback()
-                        extraction_cancelled = True
-                        self._is_cancelled(run)
-                        break
-                    extraction_failed = True
-                    failed = True
-                else:
-                    if extracted is None:
-                        self.session.rollback()
-                        extraction_cancelled = True
-                        self._is_cancelled(run)
-                        break
-                    used += 1
-                if extraction_failed:
-                    self.repo.update_run(
-                        run,
-                        status="failed",
-                        stage="failed",
-                        budget_used=used,
-                        stop_reason="task_failed",
-                    )
-                    break
                 self.session.commit()
-            if extraction_failed or extraction_cancelled or run.status == "cancelled":
-                break
             pending_claims = self._pending_atomic_claims(
                 run.research_case_id,
                 allowed_source_types=allowed_source_types,
@@ -546,21 +437,20 @@ class AutoResearchService:
                 self.session.commit()
                 cancelled_during_task = False
                 try:
-                    with research_audit_context(case_id=run.research_case_id, run_id=run.id, task_id=task.id):
-                        if task.task_type in {"support", "contradict", "alternative"}:
-                            proposed_ids = self._propose_for_task(
-                                proposer,
-                                task,
-                                run,
-                                allowed_source_types=allowed_source_types,
-                            )
-                        else:
-                            assessment = generator.generate(
-                                task.thesis_id,
-                                datetime.now(timezone.utc),
-                                self.session,
-                                before_persist=lambda: self._claim_task_output_slot(run, task),
-                            )
+                    if task.task_type in {"support", "contradict", "alternative"}:
+                        proposed_ids = self._propose_for_task(
+                            proposer,
+                            task,
+                            run,
+                            allowed_source_types=allowed_source_types,
+                        )
+                    else:
+                        assessment = generator.generate(
+                            task.thesis_id,
+                            datetime.now(timezone.utc),
+                            self.session,
+                            before_persist=lambda: self._claim_task_output_slot(run, task),
+                        )
                     # Providers may return after their run was superseded.
                     # Do not flush their proposals/assessments or overwrite a
                     # task that the scope update has already cancelled.
@@ -592,27 +482,19 @@ class AutoResearchService:
                             )
                     if not cancelled_during_task:
                         task.status, task.stage = "done", "completed"
-                except ComplianceRefusedError:
+                except ComplianceRefusedError as exc:
                     if self._is_cancelled(run, task):
                         cancelled_during_task = True
                     else:
                         task.status, task.stage = "failed", "failed"
-                        task.result = {
-                            "task_type": task.task_type,
-                            "error": AI_COMPLIANCE_ERROR_MESSAGE,
-                            "error_type": AI_COMPLIANCE_ERROR_TYPE,
-                        }
+                        task.result = {"task_type": task.task_type, "error": str(exc), "error_type": "compliance_refused"}
                         failed = True
-                except Exception:
+                except Exception as exc:
                     if self._is_cancelled(run, task):
                         cancelled_during_task = True
                     else:
                         task.status, task.stage = "failed", "failed"
-                        task.result = {
-                            "task_type": task.task_type,
-                            "error": AI_OPERATION_ERROR_MESSAGE,
-                            "error_type": AI_OPERATION_ERROR_TYPE,
-                        }
+                        task.result = {"task_type": task.task_type, "error": str(exc), "error_type": type(exc).__name__}
                         failed = True
                 finally:
                     # Re-read both the run and task at the final write
@@ -626,39 +508,16 @@ class AutoResearchService:
                         break
                     task.updated_at = datetime.now(timezone.utc)
                     used += 1
-                    if failed:
-                        # Keep the failed task and its failed AIRun in this
-                        # transaction.  The worker terminalizer commits them
-                        # atomically with the failed ResearchRun and Job.
-                        break
                     self.session.commit()
 
             if run.status == "cancelled":
-                break
-            if failed:
-                self.repo.update_run(
-                    run,
-                    status="failed",
-                    stage="failed",
-                    budget_used=used,
-                    stop_reason="task_failed",
-                )
                 break
 
             self._create_balance_gaps(run, current_round)
             now = self._run_evidence_count(run)
             self.repo.update_run(run, budget_used=used, round=current_round)
             if used >= run.budget:
-                self.repo.update_run(
-                    run,
-                    status=(
-                        "failed"
-                        if failed
-                        else self._successful_terminal_status(run)
-                    ),
-                    stage="failed" if failed else "stopped",
-                    stop_reason="task_failed" if failed else "budget_exhausted",
-                )
+                self.repo.update_run(run, status=self._successful_terminal_status(run), stage="stopped", stop_reason="budget_exhausted")
                 break
             if current_round >= run.max_rounds:
                 self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
@@ -670,12 +529,6 @@ class AutoResearchService:
             previous = now
         else:
             self.repo.update_run(run, status="failed" if failed else self._successful_terminal_status(run), stage="failed" if failed else "stopped", stop_reason="task_failed" if failed else "max_rounds_reached")
-        # Start the final transaction in the same Case -> ResearchRun -> Job
-        # order used by scope replacement and worker terminalization.  The
-        # provider calls and intermediate task commits have already finished;
-        # this lock is held only through the short terminal write.
-        with self.session.no_autoflush:
-            lock_event_scope_case(self.session, run.research_case_id)
         self.session.flush()
         if run.status == "waiting_for_review":
             self._handoff_for_review(run)
@@ -724,12 +577,7 @@ class AutoResearchService:
             run.research_case_id
         )
         review_count = lifecycle_repo.pending_key_review_count(run.research_case_id)
-        pending_claim_count = len(
-            self._pending_atomic_claims(
-                run.research_case_id,
-                allowed_source_types=self._run_allowed_source_types(run),
-            )
-        )
+        pending_claim_count = len(self._pending_atomic_claims(run.research_case_id))
         if pending_claim_count:
             lifecycle_repo.update(
                 lifecycle,
@@ -782,7 +630,6 @@ class AutoResearchService:
                     budget=run.budget,
                     commit=False,
                     thesis_ids=self._run_thesis_ids(run),
-                    scope_context={"predecessor_run_id": str(run.id)},
                 )
                 lifecycle_repo.update(
                     lifecycle,
@@ -852,7 +699,6 @@ class AutoResearchService:
             budget=active_run.budget if active_run else 100,
             commit=False,
             thesis_ids=self._run_thesis_ids(active_run) if active_run else None,
-            scope_context={"predecessor_run_id": str(active_run.id)} if active_run else None,
         )
         next_round = lifecycle.current_round + 1
         lifecycle_repo.update(
@@ -908,13 +754,11 @@ class AutoResearchService:
                 select(ResearchRun)
                 .where(ResearchRun.id == run.id)
                 .with_for_update()
-                .execution_options(populate_existing=True)
             )
             current_task = self.session.scalar(
                 select(ResearchTask)
                 .where(ResearchTask.id == task.id)
                 .with_for_update()
-                .execution_options(populate_existing=True)
             )
             job = self.session.scalar(
                 select(Job)
@@ -924,39 +768,12 @@ class AutoResearchService:
                 .order_by(Job.created_at.desc())
                 .limit(1)
                 .with_for_update()
-                .execution_options(populate_existing=True)
             )
         return bool(
             current_run is not None
             and current_run.status != "cancelled"
             and current_task is not None
             and current_task.status != "cancelled"
-            and (job is None or not job.cancel_requested)
-        )
-
-    def _claim_extraction_output_slot(self, run) -> bool:
-        """Serialize extraction persistence with run cancellation/replacement."""
-        lock_event_scope_case(self.session, run.research_case_id)
-        with self.session.no_autoflush:
-            current_run = self.session.scalar(
-                select(ResearchRun)
-                .where(ResearchRun.id == run.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            job = self.session.scalar(
-                select(Job)
-                .where(Job.kind == "research_run")
-                .where(Job.target_type == "research_run")
-                .where(Job.target_id == run.id)
-                .order_by(Job.created_at.desc())
-                .limit(1)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-        return bool(
-            current_run is not None
-            and current_run.status != "cancelled"
             and (job is None or not job.cancel_requested)
         )
 
@@ -968,14 +785,18 @@ class AutoResearchService:
         proposal_ids: set[uuid.UUID] = set()
         assessment_ids: set[uuid.UUID] = set()
         for research_task in research_tasks:
-            proposal_ids.update(
-                self._result_output_ids(
-                    research_task.result, "proposed_proposal_ids"
-                )
-            )
-            assessment_ids.update(
-                self._result_output_ids(research_task.result, "assessment_id")
-            )
+            result = research_task.result or {}
+            for raw_id in result.get("proposed_proposal_ids", []):
+                try:
+                    proposal_ids.add(uuid.UUID(str(raw_id)))
+                except (TypeError, ValueError):
+                    continue
+            raw_assessment = result.get("assessment_id")
+            if raw_assessment:
+                try:
+                    assessment_ids.add(uuid.UUID(str(raw_assessment)))
+                except (TypeError, ValueError):
+                    continue
         for proposal_id in proposal_ids:
             proposal = self.session.get(Proposal, proposal_id)
             if proposal is None or proposal.kind != "evidence_link" or proposal.status != "pending":
@@ -1002,10 +823,7 @@ class AutoResearchService:
                 ref_id=assessment_id,
                 research_case_id=run.research_case_id,
             )
-        for candidate in self._pending_atomic_claims(
-            run.research_case_id,
-            allowed_source_types=self._run_allowed_source_types(run),
-        ):
+        for candidate in self._pending_atomic_claims(run.research_case_id):
             if self.task_repo.find_by_ref(task_type="review_atomic_claim", ref_type="atomic_claim_candidate", ref_id=candidate.id):
                 continue
             self.task_repo.add_task(
@@ -1021,131 +839,64 @@ class AutoResearchService:
     def _successful_terminal_status(self, run) -> str:
         """Require a concrete reviewable output before pausing for a human."""
         for task in self.repo.tasks_for_run(run.id):
-            for proposal_id in self._result_output_ids(
-                task.result, "proposed_proposal_ids"
-            ):
+            result = task.result or {}
+            for raw_id in result.get("proposed_proposal_ids", []):
+                try:
+                    proposal_id = uuid.UUID(str(raw_id))
+                except (TypeError, ValueError):
+                    continue
                 proposal = self.session.get(Proposal, proposal_id)
                 if proposal is not None and proposal.kind == "evidence_link" and proposal.status == "pending":
                     return "waiting_for_review"
-            if self._result_output_ids(task.result, "assessment_id"):
-                return "waiting_for_review"
-        return (
-            "waiting_for_review"
-            if self._pending_atomic_claims_for_run(run)
-            else "succeeded"
-        )
-
-    def run_ids_for_output(self, *, key: str, value: uuid.UUID) -> set[uuid.UUID]:
-        """Find runs whose persisted task output references one review item.
-
-        Historical task results are JSON and can contain a scalar where newer
-        writers use a list.  Treat malformed result values as no match rather
-        than letting one bad task block unrelated review decisions.
-        """
-        run_ids: set[uuid.UUID] = set()
-        # JSON containment is deliberately parsed in Python for SQLite and
-        # PostgreSQL parity.  Project only the required columns; normalize
-        # outputs into an indexed table when this lookup becomes high-volume.
-        for run_id, result in self.session.execute(
-            select(ResearchTask.run_id, ResearchTask.result).where(
-                ResearchTask.result.is_not(None)
-            )
-        ):
-            if value in self._result_output_ids(result, key):
-                run_ids.add(run_id)
-        return run_ids
-
-    def reconcile_runs_for_output(
-        self, *, key: str, value: uuid.UUID, trigger_ref: str
-    ) -> list[uuid.UUID]:
-        """Complete every run for which this decision removed the final gate."""
-        return [
-            run_id
-            for run_id in self.run_ids_for_output(key=key, value=value)
-            if self.reconcile_run(run_id, trigger_ref=trigger_ref)
-        ]
-
-    def reconcile_run(self, run_id: uuid.UUID, *, trigger_ref: str) -> bool:
-        """Finish one waiting run iff it has no remaining run-local review gate."""
-        run = self._lock_run_for_transition(run_id)
-        if run is None or run.status != "waiting_for_review":
-            return False
-        if self._has_open_reviewable_output(run):
-            return False
-        self.repo.update_run(run, status="succeeded", stage="complete")
-        ResearchRunEventRepository(self.session).append(
-            run.id,
-            stage="review_complete",
-            status="completed",
-            message="人工审核已完成；本次运行没有剩余待审项。",
-            payload_json={
-                "trigger_ref": trigger_ref,
-                "status": "succeeded",
-            },
-        )
-        return True
+            try:
+                if result.get("assessment_id"):
+                    uuid.UUID(str(result["assessment_id"]))
+                    return "waiting_for_review"
+            except (TypeError, ValueError):
+                continue
+        return "waiting_for_review" if self._pending_atomic_claims(run.research_case_id) else "succeeded"
 
     def complete_runs_after_assessment_review(self, assessment_id: uuid.UUID) -> list[uuid.UUID]:
-        """Compatibility wrapper for the assessment command's existing seam."""
-        return self.reconcile_runs_for_output(
-            key="assessment_id",
-            value=assessment_id,
-            trigger_ref=f"assessment:{assessment_id}",
-        )
+        """Close only runs whose last outstanding human gate was this assessment."""
+        matching_runs: set[uuid.UUID] = set()
+        for task in self.session.scalars(
+            select(ResearchTask).where(ResearchTask.result.is_not(None))
+        ):
+            if str((task.result or {}).get("assessment_id") or "") == str(assessment_id):
+                matching_runs.add(task.run_id)
 
-    @staticmethod
-    def _result_output_ids(result: object, key: str) -> set[uuid.UUID]:
-        raw_value = AutoResearchService._result_dict(result).get(key)
-        if isinstance(raw_value, (list, tuple, set)):
-            raw_values = raw_value
-        else:
-            raw_values = [raw_value]
-        output_ids: set[uuid.UUID] = set()
-        for raw_value in raw_values:
-            try:
-                output_ids.add(uuid.UUID(str(raw_value)))
-            except (TypeError, ValueError, AttributeError):
+        completed: list[uuid.UUID] = []
+        for run_id in matching_runs:
+            run = self.session.scalar(
+                select(ResearchRun).where(ResearchRun.id == run_id).with_for_update()
+            )
+            if run is None or run.status != "waiting_for_review":
                 continue
-        return output_ids
-
-    @staticmethod
-    def _claim_candidate_ids(payload: object) -> set[uuid.UUID]:
-        if not isinstance(payload, dict):
-            return set()
-        raw_ids = payload.get("candidate_ids")
-        if not isinstance(raw_ids, (list, tuple, set)):
-            raw_ids = [raw_ids]
-        candidate_ids: set[uuid.UUID] = set()
-        for raw_id in raw_ids:
-            try:
-                candidate_ids.add(uuid.UUID(str(raw_id)))
-            except (TypeError, ValueError, AttributeError):
+            if self._has_open_reviewable_output(run):
                 continue
-        return candidate_ids
-
-    def _lock_run_for_transition(
-        self, run_id: uuid.UUID, *, case_locked: bool = False
-    ) -> ResearchRun | None:
-        """Lock a mutable run transition in stable Case then ResearchRun order."""
-        case_id = self.session.scalar(
-            select(ResearchRun.research_case_id).where(ResearchRun.id == run_id)
-        )
-        if case_id is None:
-            return None
-        if not case_locked:
-            lock_event_scope_case(self.session, case_id)
-        return self.session.scalar(
-            select(ResearchRun)
-            .where(ResearchRun.id == run_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
+            self.repo.update_run(run, status="succeeded", stage="complete")
+            ResearchRunEventRepository(self.session).append(
+                run.id,
+                stage="review_complete",
+                status="completed",
+                message="人工已完成临时 AI 评估审核；本次运行没有剩余待审项。",
+                payload_json={
+                    "assessment_id": str(assessment_id),
+                    "status": "succeeded",
+                },
+            )
+            completed.append(run.id)
+        return completed
 
     def _has_open_reviewable_output(self, run) -> bool:
         """Check run-local review gates after one human decision is persisted."""
         for task in self.repo.tasks_for_run(run.id):
-            result = task.result
-            for proposal_id in self._result_output_ids(result, "proposed_proposal_ids"):
+            result = task.result or {}
+            for raw_id in result.get("proposed_proposal_ids", []):
+                try:
+                    proposal_id = uuid.UUID(str(raw_id))
+                except (TypeError, ValueError):
+                    continue
                 proposal = self.session.get(Proposal, proposal_id)
                 if proposal is None or proposal.kind != "evidence_link" or proposal.status != "pending":
                     continue
@@ -1154,20 +905,25 @@ class AutoResearchService:
                 )
                 if review_task is None or review_task.status in {"open", "in_progress"}:
                     return True
-            assessment_ids = self._result_output_ids(result, "assessment_id")
-            for assessment_id in assessment_ids:
-                assessment = self.session.get(AIAssessment, assessment_id)
-                if assessment is None:
-                    continue
-                review_task = self.task_repo.find_by_ref(
-                    task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment.id
-                )
-                if review_task is None or review_task.status in {"open", "in_progress"}:
-                    return True
-        return bool(self._pending_atomic_claims_for_run(run))
+            raw_assessment = result.get("assessment_id")
+            if not raw_assessment:
+                continue
+            try:
+                assessment_id = uuid.UUID(str(raw_assessment))
+            except (TypeError, ValueError):
+                continue
+            assessment = self.session.get(AIAssessment, assessment_id)
+            if assessment is None:
+                continue
+            review_task = self.task_repo.find_by_ref(
+                task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment.id
+            )
+            if review_task is None or review_task.status in {"open", "in_progress"}:
+                return True
+        return bool(self._pending_atomic_claims(run.research_case_id))
 
     def _run_allowed_source_types(self, run) -> set[str]:
-        """Read the immutable research-source-category boundary from run scope."""
+        """Read the immutable source-type boundary from this run's scope event."""
         scope = self.session.scalar(
             select(ResearchRunEvent)
             .where(ResearchRunEvent.run_id == run.id)
@@ -1202,7 +958,7 @@ class AutoResearchService:
             contract = contracts.get(document.id)
             if contract is None:
                 reason = "missing_source_contract"
-            elif contract.research_source_type not in allowed_source_types:
+            elif contract.source_type not in allowed_source_types:
                 reason = "source_type_not_in_frozen_scope"
             elif not contract.allow_ai_processing or not source_contract_is_active(contract):
                 reason = "source_contract_not_usable"
@@ -1266,43 +1022,10 @@ class AutoResearchService:
             candidate
             for candidate in candidates
             if (contract := contracts.get(document_ids.get(candidate.source_span_id))) is not None
-            and contract.research_source_type in allowed_source_types
+            and contract.source_type in allowed_source_types
             and contract.allow_ai_processing
             and source_contract_is_active(contract)
         ]
-
-    def _pending_atomic_claims_for_run(self, run) -> list[AtomicClaimCandidate]:
-        """Return unreviewed candidates explicitly recorded in this run's pause events."""
-        candidate_ids: set[uuid.UUID] = set()
-        events = self.session.scalars(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run.id)
-            .where(ResearchRunEvent.stage == "claim_review")
-        )
-        for event in events:
-            candidate_ids.update(self._claim_candidate_ids(event.payload_json))
-        if not candidate_ids:
-            return []
-        reviewed = (
-            select(AtomicClaimReview.id)
-            .where(AtomicClaimReview.atomic_claim_candidate_id == AtomicClaimCandidate.id)
-            .exists()
-        )
-        return list(
-            self.session.scalars(
-                select(AtomicClaimCandidate)
-                .join(SourceSpan, SourceSpan.id == AtomicClaimCandidate.source_span_id)
-                .join(
-                    CaseDocumentVersion,
-                    CaseDocumentVersion.document_version_id
-                    == SourceSpan.document_version_id,
-                )
-                .where(CaseDocumentVersion.research_case_id == run.research_case_id)
-                .where(AtomicClaimCandidate.id.in_(candidate_ids))
-                .where(~reviewed)
-                .order_by(AtomicClaimCandidate.created_at, AtomicClaimCandidate.id)
-            )
-        )
 
     def _pause_for_atomic_claim_review(self, run, candidates: list[AtomicClaimCandidate], used: int) -> None:
         """Persist an explicit, replayable stop before any propose/assess work."""
@@ -1478,18 +1201,13 @@ class AutoResearchService:
         return [self._run_summary_dict(run) for run in runs]
 
     def cancel_run(self, run_id: uuid.UUID, *, actor: str, change_reason: str) -> dict:
-        run = self._lock_run_for_transition(run_id)
+        run = self.repo.get_run(run_id)
         if run is None:
             raise ValueError(f"research run {run_id} not found")
         # Already cancelled is idempotent success; other terminal states conflict.
         if run.status == "cancelled":
             return self._run_summary_dict(run)
-        if run.status not in {
-            "running",
-            "queued",
-            "waiting_for_sources",
-            "waiting_for_review",
-        }:
+        if run.status not in {"running", "queued", "waiting_for_review"}:
             raise RuntimeError(f"research run {run_id} is terminal ({run.status})")
         self.repo.cancel_run(run)
         ResearchRunEventRepository(self.session).append(
@@ -1526,11 +1244,11 @@ class AutoResearchService:
             next_action = "继续执行"
         proposal_ids: set[uuid.UUID] = set()
         for research_task in tasks:
-            proposal_ids.update(
-                self._result_output_ids(
-                    research_task.result, "proposed_proposal_ids"
-                )
-            )
+            for raw_id in (research_task.result or {}).get("proposed_proposal_ids", []):
+                try:
+                    proposal_ids.add(uuid.UUID(str(raw_id)))
+                except (TypeError, ValueError):
+                    pass
         pending_proposals = []
         review_tasks = []
         for proposal_id in proposal_ids:
@@ -1549,41 +1267,45 @@ class AutoResearchService:
             if review_task:
                 review_tasks.append(self._review_task_dict(review_task))
         for research_task in tasks:
-            for assessment_id in self._result_output_ids(
-                research_task.result, "assessment_id"
-            ):
-                review_task = self.task_repo.find_by_ref(
-                    task_type="review_assessment",
-                    ref_type="ai_assessment",
-                    ref_id=assessment_id,
-                )
-                if review_task:
-                    review_tasks.append(self._review_task_dict(review_task))
+            raw_id = (research_task.result or {}).get("assessment_id")
+            if not raw_id:
+                continue
+            try:
+                assessment_id = uuid.UUID(str(raw_id))
+            except (TypeError, ValueError):
+                continue
+            review_task = self.task_repo.find_by_ref(
+                task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment_id
+            )
+            if review_task:
+                review_tasks.append(self._review_task_dict(review_task))
         pending_assessments = []
         for research_task in tasks:
-            for assessment_id in self._result_output_ids(
-                research_task.result, "assessment_id"
+            raw_id = (research_task.result or {}).get("assessment_id")
+            if not raw_id:
+                continue
+            try:
+                assessment_id = uuid.UUID(str(raw_id))
+            except (TypeError, ValueError):
+                continue
+            review_task = self.task_repo.find_by_ref(
+                task_type="review_assessment", ref_type="ai_assessment", ref_id=assessment_id
+            )
+            assessment = self.session.get(AIAssessment, assessment_id)
+            if (
+                assessment is None
+                or review_task is None
+                or review_task.status not in {"open", "in_progress"}
             ):
-                review_task = self.task_repo.find_by_ref(
-                    task_type="review_assessment",
-                    ref_type="ai_assessment",
-                    ref_id=assessment_id,
-                )
-                assessment = self.session.get(AIAssessment, assessment_id)
-                if (
-                    assessment is None
-                    or review_task is None
-                    or review_task.status not in {"open", "in_progress"}
-                ):
-                    continue
-                pending_assessments.append({
-                    "assessment_id": str(assessment.id),
-                    "conclusion": assessment.conclusion,
-                    "rationale": assessment.rationale,
-                    "gaps": list(assessment.gaps or []),
-                    "task_id": str(review_task.id),
-                    "task_status": review_task.status,
-                })
+                continue
+            pending_assessments.append({
+                "assessment_id": str(assessment.id),
+                "conclusion": assessment.conclusion,
+                "rationale": assessment.rationale,
+                "gaps": list(assessment.gaps or []),
+                "task_id": str(review_task.id),
+                "task_status": review_task.status,
+            })
         return {
             "id": str(run.id),
             "case_id": str(run.research_case_id),
@@ -1604,11 +1326,7 @@ class AutoResearchService:
             "gaps": [t.query for t in gaps],
             "gap_tasks": [self._task_dict(t) for t in gaps],
             "failed_tasks": [self._task_dict(t) for t in failed_tasks],
-            "assessments": [
-                result
-                for task in tasks
-                if (result := self._result_dict(task.result)).get("assessment_id")
-            ],
+            "assessments": [t.result for t in tasks if t.result and t.result.get("assessment_id")],
             "pending_assessments": pending_assessments,
             "pending_proposals": pending_proposals,
             "review_tasks": review_tasks,
@@ -1634,10 +1352,6 @@ class AutoResearchService:
         }
 
     @staticmethod
-    def _result_dict(result: object) -> dict:
-        return result if isinstance(result, dict) else {}
-
-    @staticmethod
     def _review_task_dict(task: TaskItem) -> dict:
         return {
             "id": str(task.id),
@@ -1659,5 +1373,5 @@ class AutoResearchService:
             "query": task.query,
             "evidence_count": task.evidence_count,
             "gap_reason": task.gap_reason,
-            "result": AutoResearchService._result_dict(task.result) or None,
+            "result": task.result,
         }

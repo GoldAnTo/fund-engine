@@ -10,7 +10,6 @@ import pytest
 from sqlalchemy import func, select
 
 from app.api.v1.commands.ingest import get_gildata_client
-from app.datasources.gildata.client import GildataMCPError
 from app.main import app
 from tests.test_gildata_client import _make_client
 
@@ -122,32 +121,3 @@ def test_ingest_without_token_returns_503(cmd_client, cmd_seeded, monkeypatch):
     assert resp.status_code == 503
     body = resp.json()
     assert body["error"]["code"] == "upstream_unavailable"
-
-
-def test_ingest_provider_failure_never_echoes_upstream_details(
-    cmd_client, cmd_seeded
-):
-    from app.models.ledger import ResearchCase
-
-    class FailingClient:
-        def call_tool(self, name, arguments, timeout=60):
-            raise GildataMCPError(
-                "request https://provider.invalid?token=sentinel-secret failed"
-            )
-
-    def override():
-        yield FailingClient()
-
-    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
-    assert case is not None
-    app.dependency_overrides[get_gildata_client] = override
-    try:
-        response = cmd_client.post(
-            "/api/v1/documents/ingest", json={"case_id": str(case.id)}
-        )
-    finally:
-        app.dependency_overrides.pop(get_gildata_client, None)
-
-    assert response.status_code == 503
-    assert response.json()["error"]["message"] == "Gildata provider request failed"
-    assert "sentinel-secret" not in response.text

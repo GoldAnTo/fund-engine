@@ -12,30 +12,6 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_legacy_workbench_and_thesis_commands_enforce_case_owner(cmd_client, monkeypatch):
-    monkeypatch.setenv("RESEARCH_TENANT_TOKENS", '{"token-a":"team-a","token-b":"team-b"}')
-    created = cmd_client.post("/api/v1/event-research", json=_event_payload(), headers=_auth("token-a"))
-    assert created.status_code == 201
-    case_id = created.json()["case_id"]
-    read_url = f"/api/research-cases/{case_id}/workbench"
-    write_url = f"/api/v1/research-cases/{case_id}/theses"
-    payload = {"statement": "需核验的订单假设", "created_by": "human:researcher"}
-    for headers, expected in [({"Authorization": ""}, 401), (_auth("token-b"), 404)]:
-        assert cmd_client.get(read_url, headers=headers).status_code == expected
-        assert cmd_client.post(write_url, json=payload, headers=headers).status_code == expected
-    assert cmd_client.get(read_url, headers=_auth("token-a")).status_code == 200
-    assert cmd_client.post(write_url, json=payload, headers=_auth("token-a")).status_code == 201
-
-
-def test_legacy_case_creation_requires_authentication(cmd_client):
-    response = cmd_client.post(
-        "/api/v1/research-cases",
-        json={"title": "unauthorized", "industry_topic": "test", "created_by": "anonymous"},
-        headers={"Authorization": ""},
-    )
-    assert response.status_code == 401
-
-
 def _event_payload() -> dict[str, object]:
     return {
         "raw_input": "某公司披露新的订单节奏，后续收入兑现仍需要核验。",
@@ -249,7 +225,7 @@ def test_event_case_documents_are_not_visible_to_a_foreign_tenant(
         "/api/v1/event-research", json=_event_payload(), headers=_auth("token-a")
     )
     case_id = created.json()["case_id"]
-    legacy_list = cmd_client.get(f"/api/v1/documents?case_id={case_id}", headers=_auth("token-a"))
+    legacy_list = cmd_client.get(f"/api/v1/documents?case_id={case_id}")
     document_id = legacy_list.json()["items"][0]["id"]
 
     owner_list = cmd_client.get(

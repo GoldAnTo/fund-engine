@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Any, Literal
 from pydantic import Field, model_validator
 
-from app.domain.event_research import EventNextActionKind
 from app.schemas.v1.common import V1Model
 from app.services.event_research_factors import (
     EventResearchScopeFactorValue,
@@ -200,7 +199,6 @@ class EventResearchScopeHistoryResponse(V1Model):
 
 class EventResearchListItemDTO(V1Model):
     case_id: str
-    workflow_mode: Literal["reviewed", "automatic"]
     event_title: str
     company_name: str | None
     ticker: str | None
@@ -208,7 +206,6 @@ class EventResearchListItemDTO(V1Model):
     lifecycle_status: str
     status_summary: str
     next_human_action: str | None
-    next_action_kind: EventNextActionKind
     updated_at: datetime
 
 
@@ -295,7 +292,6 @@ class EventReviewQueueItemDTO(V1Model):
     source_status: SourceStatus
     source_status_reason: str
     can_accept: bool
-    display_withheld: bool = False
     proposal_reason: str
     position: int | None
 
@@ -410,7 +406,7 @@ class PublishedMaterialDecisionResponse(V1Model):
 
 
 class EventNextActionDTO(V1Model):
-    kind: EventNextActionKind
+    kind: str
     label: str
     count: int | None = None
 
@@ -420,22 +416,6 @@ class EventWorkbenchProgressDTO(V1Model):
     pending: int
     invalid_source: int
     current_gap: str | None
-
-
-class EventPreparationStepDTO(V1Model):
-    state: str
-
-
-class EventPreparationSummaryDTO(V1Model):
-    """Safe preparation progress shown alongside the existing event lifecycle."""
-
-    status: str
-    revision: int
-    research_run_id: str | None
-    next_attempt_at: datetime | None
-    last_error_message: str | None
-    system: dict[str, EventPreparationStepDTO]
-    review: dict[str, EventPreparationStepDTO]
 
 
 class EventResearchScopeDTO(V1Model):
@@ -453,4 +433,3 @@ class EventWorkbenchDTO(V1Model):
     progress: EventWorkbenchProgressDTO
     scope: EventResearchScopeDTO
     next_action: EventNextActionDTO
-    preparation: EventPreparationSummaryDTO | None = None

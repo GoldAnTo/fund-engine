@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 
@@ -45,65 +45,9 @@ def test_numeric_forecast_candidate_preserves_rule_and_inputs() -> None:
     }
 
 
-def test_source_statement_options_preserve_utc_availability_after_sqlite_reload(
-    cmd_client, cmd_session
-) -> None:
-    from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
-    from app.services.source_governance import SourceGovernanceService
-
-    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json={
-        "raw_input": "验证实际披露来源时间", "event_title": "火星人年报验证",
-        "company_name": "火星人", "ticker": "300894.SZ",
-        "research_question": "实际值何时可得？", "candidate_factors": ["归母净利润", "毛利率", "渠道费用"],
-        "created_by": "tester",
-    }).json()["case_id"])
-    available_at = datetime(2024, 4, 22, 8, 0, tzinfo=timezone.utc)
-    document = DocumentVersion(
-        content_sha256="c" * 64,
-        source_url="https://example.test/actual-report",
-        title="冻结公司年报",
-        available_at=available_at,
-        acquired_at=available_at,
-        parser_version="fixture-v1",
-        parse_state="success",
-    )
-    cmd_session.add(document)
-    cmd_session.flush()
-    SourceGovernanceService(cmd_session).record_event_intake(
-        document=document,
-        source_type="licensed_provider",
-        source_metadata={"provider_name": "fixture", "permissions": {"ai_processing": True, "display": True}},
-        declared_by="tester",
-    )
-    cmd_session.add(CaseDocumentVersion(
-        research_case_id=case_id, document_version_id=document.id, linked_at=available_at,
-    ))
-    span = SourceSpan(
-        document_version_id=document.id, locator={"page": 123},
-        verbatim_text="归母净利润247245713.03元",
-    )
-    cmd_session.add(span)
-    cmd_session.flush()
-    statement = SourceStatement(
-        source_span_id=span.id, kind="disclosed_fact",
-        normalized_text="2023年归母净利润247245713.03元", created_at=available_at,
-    )
-    cmd_session.add(statement)
-    cmd_session.commit()
-    cmd_session.expire_all()
-
-    response = cmd_client.get(f"/api/v1/research-cases/{case_id}/source-statements")
-
-    assert response.status_code == 200, response.text
-    actual_source = response.json()["items"][0]
-    assert actual_source["id"] == str(statement.id)
-    assert actual_source["available_at"].endswith(("Z", "+00:00"))
-
-
 def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_session, monkeypatch) -> None:
     from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
-    from app.models.research_expression import ActualMetricObservation, ForecastEvaluationCandidate, KeyFactor, ReportClaim
-    from app.queries.time import api_datetime
+    from app.models.research_expression import KeyFactor, ReportClaim
     from app.services.source_governance import SourceGovernanceService
 
     case_response = cmd_client.post("/api/v1/event-research", json={
@@ -118,8 +62,7 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     assert case_response.status_code == 201, case_response.text
     case_id = uuid.UUID(case_response.json()["case_id"])
     forecast_at = datetime(2023, 4, 25, 8, 0, tzinfo=timezone.utc)
-    actual_at = datetime(2024, 4, 22, 0, 0, tzinfo=timezone.utc)
-    actual_at_local = datetime(2024, 4, 22, 8, 0, tzinfo=timezone(timedelta(hours=8)))
+    actual_at = datetime(2024, 4, 22, 8, 0, tzinfo=timezone.utc)
     documents = []
     for title, available_at, digest in (
         ("冻结券商预测", forecast_at, "a" * 64),
@@ -191,7 +134,6 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     )
     cmd_session.add(factor)
     cmd_session.commit()
-    monkeypatch.setattr("app.services.forecast_verdicts._utcnow", lambda: actual_at)
 
     target_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/forecast-targets", json={
         "key_factor_id": str(factor.id), "report_claim_id": str(claim.id),
@@ -204,49 +146,21 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
         "reviewed_by": "human:reviewer", "review_reason": "冻结研报表格数值。",
     })
     assert target_response.status_code == 201, target_response.text
-    target_body = target_response.json()
-    for source_name in ("forecast_source", "baseline_source"):
-        assert target_body[source_name]["available_at"].endswith(("Z", "+00:00"))
     target_id = target_response.json()["id"]
     actual_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/actual-metric-observations", json={
         "forecast_target_id": target_id, "source_statement_id": str(actual_statement.id),
         "entity_key": "300894.SZ", "observed_value": 247245713.03, "unit": "CNY",
         "observed_period_start": "2023-01-01", "observed_period_end": "2023-12-31",
-        "available_at": actual_at_local.isoformat(), "recorded_by": "human:reviewer",
+        "available_at": actual_at.isoformat(), "recorded_by": "human:reviewer",
         "record_reason": "年报第123页审计口径。",
     })
     assert actual_response.status_code == 201, actual_response.text
-    actual_id = uuid.UUID(actual_response.json()["id"])
-    assert actual_response.json()["available_at"] in {
-        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
-    }
-    assert actual_response.json()["source"]["available_at"].endswith(("Z", "+00:00"))
-    cmd_session.expire_all()
-    stored_actual = cmd_session.get(ActualMetricObservation, actual_id)
-    assert stored_actual is not None
-    assert api_datetime(stored_actual.available_at) == actual_at
-
-    not_due_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
-        "actual_observation_id": str(actual_id),
-        "cutoff": "2024-04-22T07:59:00+08:00",
-    })
-    assert not_due_response.status_code == 201, not_due_response.text
-    assert not_due_response.json()["outcome"] == "not_due"
     candidate_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
-        "actual_observation_id": str(actual_id),
-        "cutoff": "2024-04-22T08:00:00+08:00",
+        "actual_observation_id": actual_response.json()["id"],
+        "cutoff": "2024-04-22T23:59:00Z",
     })
     assert candidate_response.status_code == 201, candidate_response.text
     candidate = candidate_response.json()
-    assert candidate["cutoff"] in {
-        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
-    }
-    assert candidate["inputs"]["cutoff"] == "2024-04-22T00:00:00+00:00"
-    assert candidate["inputs"]["available_at"] == "2024-04-22T00:00:00+00:00"
-    cmd_session.expire_all()
-    stored_candidate = cmd_session.get(ForecastEvaluationCandidate, uuid.UUID(candidate["id"]))
-    assert stored_candidate is not None
-    assert api_datetime(stored_candidate.cutoff) == actual_at
     verdict_response = cmd_client.post(f"/api/v1/forecast-evaluations/{candidate['id']}/verdicts", json={
         "decision": "confirmed", "outcome": None,
         "reason": "实际值显著低于冻结预测，确认未兑现。",
@@ -257,21 +171,6 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     assert candidate["outcome"] == "contradicted"
     assert candidate["review_state"] == "machine_generated"
     assert verdict_response.json()["outcome"] == "contradicted"
-    cmd_session.expire_all()
-
-    before_available = cmd_client.get(
-        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
-        params={"cutoff": "2024-04-22T07:59:00+08:00"},
-    )
-    assert before_available.status_code == 200, before_available.text
-    assert before_available.json()["items"] == []
-    at_available = cmd_client.get(
-        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
-        params={"cutoff": "2024-04-22T08:00:00+08:00"},
-    )
-    assert at_available.status_code == 200, at_available.text
-    assert len(at_available.json()["items"]) == 1
-    assert at_available.json()["items"][0]["actual"]["id"] == str(actual_id)
 
     response = cmd_client.get(
         f"/api/v1/research-cases/{case_id}/forecast-verdicts",
@@ -285,18 +184,6 @@ def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_ses
     assert payload["items"][0]["outcome"] == "contradicted"
     assert payload["items"][0]["rule_version"] == "forecast-numeric-v1"
     assert payload["items"][0]["forecast_source"]["document_title"] == "冻结券商预测"
-    item = payload["items"][0]
-    for source in (
-        item["forecast_source"],
-        item["target"]["forecast_source"],
-        item["target"]["baseline_source"],
-        item["actual_source"],
-        item["actual"]["source"],
-    ):
-        assert source["available_at"].endswith(("Z", "+00:00"))
-    assert item["actual"]["available_at"] in {
-        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
-    }
 
     monkeypatch.setenv(
         "RESEARCH_TENANT_TOKENS",

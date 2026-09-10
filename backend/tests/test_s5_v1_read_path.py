@@ -18,7 +18,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas as rl_canvas
 
-from app.datasources.docling import PARSER_VERSION_PYPDF, PypdfAdapter
+from app.datasources.docling import PypdfAdapter
 from app.documents.locators import compute_text_sha256
 from app.repositories.documents import DocumentRepository
 from app.services.ingest import DocumentService
@@ -61,7 +61,7 @@ def fresh_db(engine):
     yield
 
 
-def test_v1_span_round_trips_through_v1_read_api(fresh_db, session, doc_service, api_client, research_service):
+def test_v1_span_round_trips_through_v1_read_api(fresh_db, session, doc_service, api_client):
     raw = _make_text_pdf(["收入端", "成本端"])
     version = doc_service.freeze(
         raw=raw,
@@ -83,10 +83,6 @@ def test_v1_span_round_trips_through_v1_read_api(fresh_db, session, doc_service,
         )
     session.flush()
 
-    from tests.tenant_admission import admit_case
-
-    case = research_service.add_case(title="span round trip", industry_topic="test", created_by="u")
-    admit_case(session, case.id, document_version_id=version.id)
     response = api_client.get(f"/api/v1/documents/{version.id}")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -101,12 +97,12 @@ def test_v1_span_round_trips_through_v1_read_api(fresh_db, session, doc_service,
         assert dto["locator_v1"] is not None
         assert dto["locator_v1"]["schema"] == "source-locator/v1"
         assert dto["locator_v1"]["page"] == parsed.locator.page
-        assert dto["locator_v1"]["parser_version"] == PARSER_VERSION_PYPDF
+        assert dto["locator_v1"]["parser_version"] == "pypdf-v1"
         assert dto["text_sha256"] == parsed.text_sha256
         assert dto["text_sha256"] == compute_text_sha256(dto["verbatim_text"])
 
 
-def test_legacy_span_does_not_carry_v1_fields(fresh_db, session, doc_service, api_client, research_service):
+def test_legacy_span_does_not_carry_v1_fields(fresh_db, session, doc_service, api_client):
     """A span written through the legacy ``add_span(locator=...)`` path
     must keep returning ``locator_v1=None`` and ``text_sha256=None``
     so the workbench can fall back to the free-form ``locator`` dict.
@@ -122,10 +118,6 @@ def test_legacy_span_does_not_carry_v1_fields(fresh_db, session, doc_service, ap
     )
     session.flush()
 
-    from tests.tenant_admission import admit_case
-
-    case = research_service.add_case(title="span round trip", industry_topic="test", created_by="u")
-    admit_case(session, case.id, document_version_id=version.id)
     response = api_client.get(f"/api/v1/documents/{version.id}")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -138,7 +130,7 @@ def test_legacy_span_does_not_carry_v1_fields(fresh_db, session, doc_service, ap
     assert span_dto["locator"]["parser"] == "pypdf-v1"
 
 
-def test_legacy_then_v1_mix_in_one_document(fresh_db, session, doc_service, api_client, research_service):
+def test_legacy_then_v1_mix_in_one_document(fresh_db, session, doc_service, api_client):
     """A document that mixes legacy and v1 spans (the realistic S5 state
     before the S4 backfill completes) must return v1 fields for the
     upgraded spans and leave the legacy span's DTO fields at None.
@@ -165,10 +157,6 @@ def test_legacy_then_v1_mix_in_one_document(fresh_db, session, doc_service, api_
     )
     session.flush()
 
-    from tests.tenant_admission import admit_case
-
-    case = research_service.add_case(title="span round trip", industry_topic="test", created_by="u")
-    admit_case(session, case.id, document_version_id=version.id)
     response = api_client.get(f"/api/v1/documents/{version.id}")
     body = response.json()
     by_text = {s["verbatim_text"]: s for s in body["spans"]}

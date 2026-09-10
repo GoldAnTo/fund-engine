@@ -17,11 +17,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.commands.common import commit_or_rollback
-from app.datasources.gildata.client import (
-    GILDATA_REQUEST_ERROR_MESSAGE,
-    GildataMCPClient,
-    GildataMCPError,
-)
+from app.datasources.gildata.client import GildataMCPClient, GildataMCPError
 from app.db import get_db
 from app.errors import NotFoundError, UpstreamUnavailableError
 from app.models.ledger import ResearchCase
@@ -38,7 +34,7 @@ def get_gildata_client() -> Iterator[GildataMCPClient]:
     try:
         client = GildataMCPClient.from_env()
     except GildataMCPError as exc:
-        raise UpstreamUnavailableError(GILDATA_REQUEST_ERROR_MESSAGE) from exc
+        raise UpstreamUnavailableError(str(exc)) from exc
     try:
         yield client
     finally:
@@ -77,6 +73,6 @@ def ingest_documents(
         )
     except GildataMCPError as exc:
         db.rollback()
-        raise UpstreamUnavailableError(GILDATA_REQUEST_ERROR_MESSAGE) from exc
+        raise UpstreamUnavailableError(str(exc)) from exc
     commit_or_rollback(db)
     return IngestResponse(**summary)

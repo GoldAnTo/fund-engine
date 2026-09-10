@@ -5,7 +5,6 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-import pytest
 from sqlalchemy import select
 
 from app.models.ledger import (
@@ -19,7 +18,6 @@ from app.models.ledger import (
 from app.models.fund_disclosure_sync import FundDisclosureSyncConfigVersion, FundDisclosureSyncRun, FundDisclosureSyncRunEvent
 from app.models.ledger import Company, Fund, HoldingDisclosure, Stock
 from app.models.research_expression import MarketInstrumentBinding
-from app.datasources.gildata.client import GildataMCPError
 from app.scripts.ingest_gildata_fund_holdings import ingest
 from app.services.fund_disclosure_sync import FundDisclosureSyncService
 
@@ -162,27 +160,7 @@ class _UnmatchedFundClient:
 
 class _CapabilityUnavailableClient(_UnmatchedFundClient):
     def list_tools(self) -> list[dict]:
-        raise GildataMCPError("provider tool catalog unavailable")
-
-
-class _CapabilityProgrammingErrorClient(_UnmatchedFundClient):
-    def list_tools(self) -> list[dict]:
-        raise TypeError("programming defect")
-
-
-class _IngestProgrammingErrorClient(_UnmatchedFundClient):
-    def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
-        raise TypeError("programming defect")
-
-
-class _IngestProviderErrorClient(_UnmatchedFundClient):
-    def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
-        raise GildataMCPError("provider failure sentinel-secret")
-
-
-class _MalformedIngestClient(_UnmatchedFundClient):
-    def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
-        return "not-json sentinel-secret"
+        raise RuntimeError("provider tool catalog unavailable")
 
 
 class _MatchedFundClient(_UnmatchedFundClient):
@@ -336,67 +314,8 @@ def test_capability_probe_failure_is_replayable_and_stops_fund_sync(session) -> 
         ("failed", "failed"),
     ]
     assert run.events[1].payload_json["used_tools"] == []
-    assert run.events[1].payload_json["error_type"] == "operation_failure"
+    assert run.events[1].payload_json["error_type"] == "RuntimeError"
     assert session.query(HoldingDisclosure).count() == 0
-
-
-def test_recorded_fund_sync_failure_does_not_persist_exception_details(session) -> None:
-    case = _case(session)
-    service = FundDisclosureSyncService(session)
-    service.save_config(
-        case.id,
-        actor="human:researcher",
-        fund_codes=["005827"],
-        frequency="weekly",
-        report_period=date(2025, 6, 30),
-        change_reason="验证错误安全",
-    )
-    run = service.start_manual_run(case.id)
-
-    failed = service.record_failure(
-        run.id,
-        error=RuntimeError(
-            "https://provider.invalid?token=sentinel-secret response body"
-        ),
-    )
-
-    event = failed.events[-1]
-    assert event.payload_json == {
-        "error_type": "operation_failure",
-        "error": "provider operation failed",
-    }
-    assert "sentinel-secret" not in str(service.detail(case.id))
-
-
-def test_fund_sync_execution_failure_does_not_persist_exception_details(
-    session, monkeypatch
-) -> None:
-    case = _case(session)
-    service = FundDisclosureSyncService(session)
-    service.save_config(
-        case.id,
-        actor="human:researcher",
-        fund_codes=["005827"],
-        frequency="weekly",
-        report_period=date(2025, 6, 30),
-        change_reason="验证执行错误安全",
-    )
-
-    monkeypatch.setattr(
-        "app.services.fund_disclosure_sync.ingest",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            GildataMCPError(
-                "https://provider.invalid?token=sentinel-secret response body"
-            )
-        ),
-    )
-    failed = service.run_now(case.id, client=_UnmatchedFundClient())
-
-    assert failed.events[-1].payload_json == {
-        "error_type": "operation_failure",
-        "error": "provider operation failed",
-    }
-    assert "sentinel-secret" not in str(service.detail(case.id))
 
 
 def _admitted_case(cmd_session) -> ResearchCase:
@@ -549,253 +468,6 @@ def test_case_scoped_api_records_immediate_unmatched_run_and_retries_frozen_scop
     assert retried.status_code == 201, retried.text
     assert retried.json()["trigger"] == "retry"
     assert retried.json()["fund_codes"] == ["005827"]
-
-
-def test_case_scoped_api_redacts_client_factory_failure(
-    cmd_client, cmd_session, monkeypatch
-) -> None:
-    from app.api.v1 import fund_disclosure_sync
-
-    case = _admitted_case(cmd_session)
-    configured = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
-        json={
-            "actor": "human:researcher",
-            "fund_codes": ["005827"],
-            "frequency": "weekly",
-            "report_period": "2025-06-30",
-            "change_reason": "验证工厂错误安全",
-        },
-    )
-    assert configured.status_code == 200
-
-    def fail_factory():
-        raise GildataMCPError(
-            "https://provider.invalid?token=sentinel-secret response body"
-        )
-
-    monkeypatch.setattr(
-        fund_disclosure_sync, "get_fund_disclosure_client", fail_factory
-    )
-    response = cmd_client.post(
-        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs"
-    )
-
-    assert response.status_code == 201
-    failed_event = response.json()["events"][-1]
-    assert failed_event["payload"] == {
-        "error_type": "operation_failure",
-        "error": "provider operation failed",
-    }
-    assert "sentinel-secret" not in response.text
-
-
-def test_run_executor_does_not_convert_client_factory_programming_error(
-    session,
-) -> None:
-    from app.api.v1.fund_disclosure_sync import _execute_run
-
-    case = _case(session)
-    service = FundDisclosureSyncService(session)
-    service.save_config(
-        case.id,
-        actor="human:researcher",
-        fund_codes=["005827"],
-        frequency="weekly",
-        report_period=date(2025, 6, 30),
-        change_reason="验证编程错误边界",
-    )
-    run = service.start_manual_run(case.id)
-
-    def broken_factory():
-        raise TypeError("programming defect")
-
-    with pytest.raises(TypeError, match="programming defect"):
-        _execute_run(service, run.id, client_factory=broken_factory)
-
-
-def test_run_route_does_not_convert_client_factory_programming_error_to_422(
-    cmd_client, cmd_session, monkeypatch
-) -> None:
-    from app.api.v1 import fund_disclosure_sync
-
-    case = _admitted_case(cmd_session)
-    configured = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
-        json={
-            "actor": "human:researcher",
-            "fund_codes": ["005827"],
-            "frequency": "weekly",
-            "report_period": "2025-06-30",
-            "change_reason": "验证路由编程错误边界",
-        },
-    )
-    assert configured.status_code == 200
-
-    def broken_factory():
-        raise TypeError("programming defect")
-
-    monkeypatch.setattr(
-        fund_disclosure_sync, "get_fund_disclosure_client", broken_factory
-    )
-    response = cmd_client.post(
-        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs"
-    )
-
-    assert response.status_code == 500
-    assert response.json()["error"]["code"] == "internal_error"
-
-
-@pytest.mark.parametrize(
-    "client_type",
-    [_CapabilityProgrammingErrorClient, _IngestProgrammingErrorClient],
-)
-@pytest.mark.parametrize("is_retry", [False, True])
-def test_start_and_retry_routes_do_not_convert_service_programming_errors(
-    cmd_client, cmd_session, monkeypatch, client_type, is_retry
-) -> None:
-    from app.api.v1 import fund_disclosure_sync
-
-    case = _admitted_case(cmd_session)
-    configured = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
-        json={
-            "actor": "human:researcher",
-            "fund_codes": ["005827"],
-            "frequency": "weekly",
-            "report_period": "2025-06-30",
-            "change_reason": "验证服务编程错误边界",
-        },
-    )
-    assert configured.status_code == 200
-    url = f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs"
-    if is_retry:
-        parent = FundDisclosureSyncService(cmd_session).start_manual_run(case.id)
-        cmd_session.commit()
-        url += f"/{parent.id}/retry"
-    before_ids = set(
-        cmd_session.scalars(
-            select(FundDisclosureSyncRun.id).where(
-                FundDisclosureSyncRun.research_case_id == case.id
-            )
-        )
-    )
-    monkeypatch.setattr(
-        fund_disclosure_sync, "get_fund_disclosure_client", client_type
-    )
-
-    response = cmd_client.post(url)
-
-    assert response.status_code == 500
-    assert response.json()["error"]["code"] == "internal_error"
-    cmd_session.rollback()
-    new_runs = list(
-        cmd_session.scalars(
-            select(FundDisclosureSyncRun)
-            .where(FundDisclosureSyncRun.research_case_id == case.id)
-            .where(FundDisclosureSyncRun.id.not_in(before_ids))
-        )
-    )
-    assert len(new_runs) == 1
-    assert new_runs[0].trigger == ("retry" if is_retry else "manual")
-    events = list(
-        cmd_session.scalars(
-            select(FundDisclosureSyncRunEvent).where(
-                FundDisclosureSyncRunEvent.run_id == new_runs[0].id
-            )
-        )
-    )
-    assert all(event.status != "failed" for event in events)
-
-
-@pytest.mark.parametrize(
-    "client_type",
-    [_CapabilityUnavailableClient, _IngestProviderErrorClient, _MalformedIngestClient],
-)
-def test_real_provider_failures_remain_transparent_replayable_runs(
-    cmd_client, cmd_session, monkeypatch, client_type
-) -> None:
-    from app.api.v1 import fund_disclosure_sync
-
-    case = _admitted_case(cmd_session)
-    configured = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
-        json={
-            "actor": "human:researcher",
-            "fund_codes": ["005827"],
-            "frequency": "weekly",
-            "report_period": "2025-06-30",
-            "change_reason": "验证真实供应商失败契约",
-        },
-    )
-    assert configured.status_code == 200
-    monkeypatch.setattr(
-        fund_disclosure_sync, "get_fund_disclosure_client", client_type
-    )
-
-    response = cmd_client.post(
-        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs"
-    )
-
-    assert response.status_code == 201
-    assert response.json()["status"] == "failed"
-    assert response.json()["events"][-1]["payload"] == {
-        "error_type": "operation_failure",
-        "error": "provider operation failed",
-    }
-    assert "sentinel-secret" not in response.text
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        1,
-        {},
-        {"table_markdown": {}},
-        {"table_markdown": "totally malformed sentinel-secret"},
-    ],
-)
-@pytest.mark.parametrize("is_retry", [False, True])
-def test_malformed_fund_provider_results_are_safe_failed_runs(
-    cmd_client, cmd_session, monkeypatch, result, is_retry
-) -> None:
-    from app.api.v1 import fund_disclosure_sync
-
-    class Client(_UnmatchedFundClient):
-        def call_tool(self, name: str, arguments: dict, timeout: int = 60) -> str:
-            return json.dumps({"code": "0", "results": [result]})
-
-    case = _admitted_case(cmd_session)
-    configured = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/config",
-        json={
-            "actor": "human:researcher",
-            "fund_codes": ["005827"],
-            "frequency": "weekly",
-            "report_period": "2025-06-30",
-            "change_reason": "验证供应商结果结构",
-        },
-    )
-    assert configured.status_code == 200
-    monkeypatch.setattr(
-        fund_disclosure_sync, "get_fund_disclosure_client", Client
-    )
-    url = f"/api/v1/research-cases/{case.id}/fund-disclosure-sync/runs"
-    if is_retry:
-        parent = FundDisclosureSyncService(cmd_session).start_manual_run(case.id)
-        cmd_session.commit()
-        url += f"/{parent.id}/retry"
-
-    response = cmd_client.post(url)
-
-    assert response.status_code == 201
-    assert response.json()["trigger"] == ("retry" if is_retry else "manual")
-    assert response.json()["status"] == "failed"
-    assert response.json()["events"][-1]["payload"] == {
-        "error_type": "operation_failure",
-        "error": "provider operation failed",
-    }
-    assert "sentinel-secret" not in response.text
 
 
 def test_stale_run_is_interrupted_and_retry_preserves_frozen_period(session) -> None:

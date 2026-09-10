@@ -185,8 +185,7 @@ class ForecastVerdictService:
             raise ValidationError("actual observation period must equal the frozen forecast period")
         if value.available_at.tzinfo is None:
             raise ValidationError("available_at must include a timezone")
-        available_at = _as_utc(value.available_at)
-        if _as_utc(self._statement_available_at(value.source_statement_id)) != available_at:
+        if _as_utc(self._statement_available_at(value.source_statement_id)) != _as_utc(value.available_at):
             raise ValidationError("actual observation available_at must equal its frozen source availability")
         self._require_finite(value.observed_value, "observed_value")
         for name in ("entity_key", "recorded_by", "record_reason"):
@@ -195,7 +194,7 @@ class ForecastVerdictService:
             forecast_target_id=target.id, source_statement_id=value.source_statement_id,
             entity_key=value.entity_key.strip(), observed_value=value.observed_value,
             unit=value.unit.strip(), observed_period_start=value.observed_period_start,
-            observed_period_end=value.observed_period_end, available_at=available_at,
+            observed_period_end=value.observed_period_end, available_at=value.available_at,
             recorded_by=value.recorded_by.strip(), record_reason=value.record_reason.strip(),
             created_at=_utcnow(),
         )
@@ -210,12 +209,10 @@ class ForecastVerdictService:
             raise ValidationError("actual observation must belong to the selected forecast target")
         if cutoff.tzinfo is None:
             raise ValidationError("cutoff must include a timezone")
-        cutoff = _as_utc(cutoff)
-        available_at = _as_utc(actual.available_at)
-        if cutoff < available_at:
+        if _as_utc(cutoff) < _as_utc(actual.available_at):
             evaluation = NumericForecastEvaluation(
                 outcome="not_due", rule_version="forecast-numeric-v1",
-                inputs={"expected_value": str(target.expected_value), "actual_value": str(actual.observed_value), "cutoff": cutoff.isoformat(), "available_at": available_at.isoformat()},
+                inputs={"expected_value": str(target.expected_value), "actual_value": str(actual.observed_value), "cutoff": cutoff.isoformat(), "available_at": actual.available_at.isoformat()},
                 rationale="实际观测在该查询截点尚不可用。",
             )
         else:
@@ -223,7 +220,7 @@ class ForecastVerdictService:
                 expected_value=target.expected_value, actual_value=actual.observed_value,
                 comparator=target.comparator, relative_tolerance=target.relative_tolerance,
             )
-            evaluation.inputs.update({"unit": target.unit, "cutoff": cutoff.isoformat(), "available_at": available_at.isoformat()})
+            evaluation.inputs.update({"unit": target.unit, "cutoff": cutoff.isoformat(), "available_at": actual.available_at.isoformat()})
         record = ForecastEvaluationCandidate(
             forecast_target_id=target.id, actual_observation_id=actual.id, cutoff=cutoff,
             outcome=evaluation.outcome, rule_version=evaluation.rule_version, inputs=evaluation.inputs,

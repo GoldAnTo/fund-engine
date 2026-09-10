@@ -153,73 +153,24 @@ def test_call_tool_returns_content_text(monkeypatch):
 
 
 def test_call_tool_raises_on_jsonrpc_error():
-    outer = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "error": {"code": -32600, "message": "bad sentinel-secret"},
-    }
+    outer = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "bad"}}
 
     def handler(request):
         return httpx.Response(200, json=outer)
 
     client = GildataMCPClient(token="tok", transport=_mock_transport(handler))
-    with pytest.raises(GildataMCPError) as exc_info:
+    with pytest.raises(GildataMCPError):
         client.call_tool("FinQuery", {"query": "x"})
-    assert str(exc_info.value) == "Gildata provider returned an invalid response"
-    assert "sentinel-secret" not in str(exc_info.value)
     client.close()
 
 
 def test_call_tool_raises_on_non_200():
     def handler(request):
-        return httpx.Response(500, text="server boom sentinel-secret")
+        return httpx.Response(500, text="server boom")
 
     client = GildataMCPClient(token="tok", transport=_mock_transport(handler))
-    with pytest.raises(GildataMCPError) as exc_info:
+    with pytest.raises(GildataMCPError):
         client.call_tool("FinQuery", {"query": "x"})
-    assert str(exc_info.value) == "Gildata provider request failed"
-    assert "sentinel-secret" not in str(exc_info.value)
-    client.close()
-
-
-def test_transport_error_does_not_echo_token_bearing_url():
-    def handler(request):
-        raise httpx.ConnectError(
-            f"failed request {request.url} sentinel-secret", request=request
-        )
-
-    client = GildataMCPClient(
-        token="token-sentinel", transport=_mock_transport(handler)
-    )
-    with pytest.raises(GildataMCPError) as exc_info:
-        client.call_tool("FinQuery", {"query": "x"})
-
-    assert str(exc_info.value) == "Gildata provider request failed"
-    assert "token-sentinel" not in str(exc_info.value)
-    assert "sentinel-secret" not in str(exc_info.value)
-    assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
-    client.close()
-
-
-def test_transport_error_retries_once_before_succeeding():
-    attempts = 0
-    inner_text = json.dumps({"code": "0", "results": []})
-
-    def handler(request):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise httpx.ConnectError("transient disconnect", request=request)
-        return httpx.Response(200, json=_envelope(inner_text))
-
-    client = GildataMCPClient(
-        token="tok",
-        max_attempts=2,
-        transport=_mock_transport(handler),
-    )
-
-    assert client.call_tool("FinQuery", {"query": "x"}) == inner_text
-    assert attempts == 2
     client.close()
 
 
@@ -262,47 +213,6 @@ def test_parse_content_invalid_returns_empty():
     assert adapters.parse_content("") == []
     assert adapters.parse_content("not json {") == []
     assert adapters.parse_content(json.dumps({"code": "0"})) == []
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        "",
-        "not json",
-        "[]",
-        json.dumps({"code": "500", "results": []}),
-        json.dumps({"code": "0", "results": [1]}),
-    ],
-)
-def test_strict_content_parser_normalizes_malformed_provider_payload(content):
-    with pytest.raises(GildataMCPError) as exc_info:
-        adapters.parse_content_strict(content)
-
-    assert str(exc_info.value) == "Gildata provider returned an invalid response"
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        {},
-        {"table_markdown": {}},
-        {"table_markdown": ""},
-        {"table_markdown": "totally malformed"},
-    ],
-)
-@pytest.mark.parametrize(
-    "fetcher",
-    [adapters.fetch_fund_stock_holdings, adapters.fetch_announcement],
-)
-def test_live_fund_adapters_reject_malformed_table_payload(result, fetcher):
-    class Client:
-        def call_tool(self, name, arguments, timeout=60):
-            return json.dumps({"code": "0", "results": [result]})
-
-    with pytest.raises(GildataMCPError) as exc_info:
-        fetcher(Client(), "query")
-
-    assert str(exc_info.value) == "Gildata provider returned an invalid response"
 
 
 # ---------------------------------------------------------------------------

@@ -1,24 +1,22 @@
 import { defineConfig } from "@playwright/test";
 
+// Do not reuse the common development port: a different worktree may already
+// serve an older frontend there, producing false E2E results.
+const port = Number(process.env.PW_PORT ?? "5182");
+const baseURL = `http://127.0.0.1:${port}`;
+
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
-  forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
-  reporter: [["list"], ["html", { open: "never" }]],
-  use: {
-    baseURL: "http://127.0.0.1:5186",
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
-    ...(process.env.PW_BROWSER_CHANNEL ? { channel: process.env.PW_BROWSER_CHANNEL } : {}),
-  },
-  projects: [
-    { name: "desktop", use: { viewport: { width: 1440, height: 1000 } } },
-    { name: "mobile", use: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
-  ],
   webServer: {
-    command: "npm run dev -- --host 127.0.0.1 --port 5186 --strictPort",
-    url: "http://127.0.0.1:5186",
+    command: `npm run dev:mock -- --host 127.0.0.1 --port ${port}`,
+    url: baseURL,
     reuseExistingServer: false,
+    timeout: 30000,
+  },
+  use: {
+    baseURL,
+    // macOS 12 等旧系统无法运行 Playwright 捆绑的 Chromium，
+    // 可用 PW_BROWSER_CHANNEL=chrome 回退到系统 Chrome。
+    channel: (process.env.PW_BROWSER_CHANNEL as "chrome" | undefined) ?? undefined,
   },
 });

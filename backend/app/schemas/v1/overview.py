@@ -15,9 +15,7 @@ from app.schemas.v1.common import HistoricalBasisDTO, V1Model
 # Frontend uses this label to distinguish human-reviewed evidence from AI
 # proposals; unknown values must surface as a contract error, not a
 # rewritten fallback.
-ReviewState = Literal[
-    "machine_generated", "automatically_admitted", "reviewed", "rejected"
-]
+ReviewState = Literal["machine_generated", "reviewed", "rejected"]
 
 
 class OverviewTotalsDTO(V1Model):

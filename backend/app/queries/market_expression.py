@@ -34,7 +34,6 @@ from app.schemas.v1.market_expression import (
     SourceStatementOptionDTO,
     SourceStatementOptionsResponse,
 )
-from app.queries.time import api_datetime
 
 
 class MarketExpressionQueries:
@@ -79,7 +78,7 @@ class MarketExpressionQueries:
                 document_version_id=str(document.id),
                 document_title=document.title or document.source_url or "未命名冻结资料",
                 source_url=document.source_url, locator=span.locator,
-                available_at=api_datetime(document.available_at), permission_status="admitted",
+                available_at=document.available_at, permission_status="admitted",
             )
             for statement, span, document in rows
         ])
@@ -149,7 +148,7 @@ class MarketExpressionQueries:
         document = self._db.get(DocumentVersion, span.document_version_id) if span else None
         contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
         permission_status = "not_recorded" if contract is None else "admitted" if contract.allow_ai_processing and contract.allow_display else "restricted"
-        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=api_datetime(document.available_at) if document else None, permission_status=permission_status)
+        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=document.available_at if document else None, permission_status=permission_status)
 
     def _case_has_source(self, case_id: uuid.UUID, statement_id: uuid.UUID | None) -> bool:
         if statement_id is None:
@@ -224,7 +223,7 @@ class MarketExpressionQueries:
 
     def _observation(self, item: MarketObservation) -> MarketObservationDTO:
         stock = self._db.get(Stock, item.stock_id)
-        return MarketObservationDTO(id=str(item.id), key_factor_id=str(item.key_factor_id) if item.key_factor_id else None, stock_id=str(item.stock_id), stock_code=stock.code if stock else "已删除股票", stock_name=stock.name if stock else "已删除股票", event_at=item.event_at, available_at=api_datetime(item.available_at), window_label=item.window_label, benchmark=item.benchmark, price_source=item.price_source, after_hours_treatment=item.after_hours_treatment, relative_return=float(item.relative_return) if item.relative_return is not None else None, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at, source=self._source(item.source_statement_id) if item.source_statement_id else None)
+        return MarketObservationDTO(id=str(item.id), key_factor_id=str(item.key_factor_id) if item.key_factor_id else None, stock_id=str(item.stock_id), stock_code=stock.code if stock else "已删除股票", stock_name=stock.name if stock else "已删除股票", event_at=item.event_at, available_at=item.available_at, window_label=item.window_label, benchmark=item.benchmark, price_source=item.price_source, after_hours_treatment=item.after_hours_treatment, relative_return=float(item.relative_return) if item.relative_return is not None else None, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at, source=self._source(item.source_statement_id) if item.source_statement_id else None)
 
     def _fund_exposure(self, case_id: uuid.UUID, fundamentals: list[FundamentalImpact], as_of: date, cutoff: datetime) -> list[FundDisclosureExposureDTO]:
         stock_ids = [item.stock_id for item in fundamentals if item.stock_id is not None]
