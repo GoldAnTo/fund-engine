@@ -23,66 +23,8 @@ class RunListResponse(CursorPage):
     items: list[RunSummaryDTO]
 
 
-class FrozenRunScopeDTO(V1Model):
-    """Scope recorded when a run started; never reconstructed from current settings."""
-
-    trigger: str | None = None
-    monitor_version_id: str | None = None
-    factor_ids: list[str] = Field(default_factory=list)
-    factor_statements: list[str] = Field(default_factory=list)
-    allowed_source_types: list[str] = Field(default_factory=list)
-    budget: int | None = None
-    frequency: str | None = None
-    next_verification_event: str | None = None
-    configured_by: str | None = None
-    configuration_change_reason: str | None = None
-
-
-class ActiveResearchRunDTO(V1Model):
-    run_id: str
-    case_id: str
-    case_title: str
-    status: str
-    stage: str
-    updated_at: str
-    processed_count: int
-    next_action: str
-    scope: FrozenRunScopeDTO
-
-
-class ActiveResearchRunsResponse(CursorPage):
-    items: list[ActiveResearchRunDTO]
-
-
-class ResearchWorkerStatusDTO(V1Model):
-    """Current liveness of the process that advances queued research work."""
-
-    status: str
-    last_seen_at: str | None = None
-    mode: str | None = None
-    state: str | None = None
-
-
-class ResearchRunArchiveDTO(ActiveResearchRunDTO):
-    """A global, replayable run record, including terminal runs."""
-
-    created_at: str
-    stop_reason: str | None = None
-
-
-class ResearchRunArchiveResponse(CursorPage):
-    items: list[ResearchRunArchiveDTO]
-
-
 class CancelRunResponse(RunSummaryDTO):
     pass
-
-
-class CancelRunRequest(V1Model):
-    """Human decision recorded when an in-progress run is stopped."""
-
-    actor: str = Field(min_length=1, max_length=200)
-    change_reason: str = Field(min_length=1, max_length=2_000)
 
 
 class ResearchRunEventsItemDTO(V1Model):
@@ -92,7 +34,6 @@ class ResearchRunEventsItemDTO(V1Model):
     round: int | None = None
     stop_reason: str | None = None
     message: str | None = None
-    details: dict[str, Any] = Field(default_factory=dict)
     created_at: str
 
 
@@ -134,16 +75,6 @@ class ReviewTaskDTO(V1Model):
     ref_type: str | None
     ref_id: str | None
 
-
-class PendingAssessmentDTO(V1Model):
-    assessment_id: str
-    conclusion: str
-    rationale: str
-    gaps: list[str]
-    task_id: str
-    task_status: str
-
-
 class ResearchRunResponse(V1Model):
     id: str
     case_id: str
@@ -162,29 +93,7 @@ class ResearchRunResponse(V1Model):
     gap_tasks: list[ResearchTaskDTO]
     failed_tasks: list[ResearchTaskDTO]
     assessments: list[dict[str, Any] | None]
-    pending_assessments: list[PendingAssessmentDTO]
     pending_proposals: list[PendingProposalDTO]
     review_tasks: list[ReviewTaskDTO]
     next_action: str
     tasks: list[ResearchTaskDTO]
-
-
-class AIUsageSummaryDTO(V1Model):
-    """Only persisted, explicitly attributed operations; not the full provider bill."""
-    coverage: str = "recorded_attributed_operations_only"
-    operation_count: int
-    reported_attempt_count: int
-    unavailable_attempt_count: int
-    unavailable_operation_count: int
-    reported_prompt_tokens: int
-    reported_completion_tokens: int
-    reported_total_tokens: int
-    recorded_total_tokens: int | None
-
-
-class RunAIUsageDTO(AIUsageSummaryDTO):
-    run_id: str
-
-
-class CaseAIUsageDTO(AIUsageSummaryDTO):
-    case_id: str

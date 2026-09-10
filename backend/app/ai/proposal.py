@@ -17,8 +17,6 @@ Every proposal operation writes exactly one ``AIRun`` audit record
 """
 from __future__ import annotations
 
-from app.ai.usage import capture_usage
-
 import json
 import uuid
 from collections.abc import Callable
@@ -26,9 +24,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.ai.client import LLMClient, operation_budget
-from app.ai.output_schema import ProposalOutput, validate_output
-from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
+from app.ai.client import LLMClient
 from app.ai.prompts import PROPOSE_PROMPT_VERSION, PROPOSE_SYSTEM
 from app.ai.runs import record_run
 from app.models.ledger import ResearchCase, Thesis
@@ -45,14 +41,12 @@ class EvidenceProposer:
     def __init__(self, client: LLMClient) -> None:
         self._client = client
 
-    @capture_usage()
     def propose(
         self,
         thesis_id: uuid.UUID,
         session: Session,
         *,
         before_persist: Callable[[], bool] | None = None,
-        allowed_source_types: set[str] | None = None,
     ) -> list[uuid.UUID]:
         started_at = datetime.now(timezone.utc)
         research = ResearchService(ResearchRepository(session))
@@ -65,22 +59,15 @@ class EvidenceProposer:
         # Retrieval-scoped recall: only statements visible at the proposal
         # cutoff and relevant to this thesis reach the LLM.
         cutoff = started_at
-        statements = RecallService(session).for_thesis(
-            thesis,
-            cutoff=cutoff,
-            allowed_source_types=allowed_source_types,
-        )
+        statements = RecallService(session).for_thesis(thesis, cutoff=cutoff)
 
         input_ref = {
             "thesis_id": str(thesis_id),
             "cutoff": cutoff.isoformat(),
             "statement_ids": [str(s.id) for s in statements],
-            "allowed_source_types": sorted(allowed_source_types or []),
         }
 
         if not statements:
-            if before_persist is not None and not before_persist():
-                return []
             record_run(
                 session,
                 kind="propose",
@@ -114,9 +101,8 @@ class EvidenceProposer:
             # transaction before waiting on the external provider so this
             # connection cannot keep an idle transaction or row locks open.
             session.commit()
-            with operation_budget(self._client):
-                result = self._client.chat_json(messages, schema_hint="propose")
-                links_data = validate_output(result, ProposalOutput)["links"]
+            result = self._client.chat_json(messages, schema_hint="propose")
+            links_data = result.get("links", [])
 
             # The automatic run may have been superseded while the provider
             # call was in flight. Check before creating any Proposal, outbox
@@ -193,11 +179,7 @@ class EvidenceProposer:
             )
             return created_ids
 
-        except Exception:
-            # A malformed later link must not publish earlier proposals or
-            # outbox events.  Keep only one failed AIRun in a clean transaction
-            # for the API/CLI/worker boundary to commit.
-            session.rollback()
+        except Exception as exc:
             record_run(
                 session,
                 kind="propose",
@@ -206,7 +188,7 @@ class EvidenceProposer:
                 input_ref=input_ref,
                 output_summary="",
                 status="failed",
-                error=AI_OPERATION_ERROR_MESSAGE,
+                error=str(exc),
                 started_at=started_at,
             )
             raise

@@ -91,27 +91,24 @@ def upgrade() -> None:
     op.create_index("ix_audit_logs_entity", "audit_logs", ["entity_type", "entity_id"])
     op.create_index("ix_audit_logs_created_at", "audit_logs", ["created_at"])
 
-    # Defence-in-depth, same convention as migration 0001. SQLite does not
-    # provide the PostgreSQL trigger function used below.
-    if op.get_bind().dialect.name != "postgresql":
-        return
-
     # Defence-in-depth, same convention as migration 0001.
-    for table in IMMUTABLE_TABLES:
-        op.execute(
-            f"CREATE TRIGGER no_update_{table} BEFORE UPDATE ON {table} "
-            f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
-        )
-        op.execute(
-            f"CREATE TRIGGER no_delete_{table} BEFORE DELETE ON {table} "
-            f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
-        )
+    if op.get_bind().dialect.name == "postgresql":
+        for table in IMMUTABLE_TABLES:
+            op.execute(
+                f"CREATE TRIGGER no_update_{table} BEFORE UPDATE ON {table} "
+                f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+            )
+            op.execute(
+                f"CREATE TRIGGER no_delete_{table} BEFORE DELETE ON {table} "
+                f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+            )
 
 
 def downgrade() -> None:
-    for table in IMMUTABLE_TABLES:
-        op.execute(f"DROP TRIGGER IF EXISTS no_update_{table} ON {table};")
-        op.execute(f"DROP TRIGGER IF EXISTS no_delete_{table} ON {table};")
+    if op.get_bind().dialect.name == "postgresql":
+        for table in IMMUTABLE_TABLES:
+            op.execute(f"DROP TRIGGER IF EXISTS no_update_{table} ON {table};")
+            op.execute(f"DROP TRIGGER IF EXISTS no_delete_{table} ON {table};")
 
     op.drop_index("ix_audit_logs_created_at", table_name="audit_logs")
     op.drop_index("ix_audit_logs_entity", table_name="audit_logs")

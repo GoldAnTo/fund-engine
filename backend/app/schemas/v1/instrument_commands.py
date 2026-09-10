@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any
 
 from app.schemas.v1.common import V1Model
 
@@ -66,12 +66,6 @@ class CreateHoldingDisclosureRequest(V1Model):
     report_period: date
     published_at: datetime
     source: str
-    source_document_version_id: uuid.UUID | None = None
-    source_span_id: uuid.UUID | None = None
-    provider_record_id: uuid.UUID | None = None
-    coverage_status: Literal["complete", "partial", "not_recorded"] = "not_recorded"
-    filing_kind: Literal["quarterly", "annual", "correction", "other"] = "other"
-    supersedes_disclosure_id: uuid.UUID | None = None
 
 
 class HoldingDisclosureDTO(V1Model):
@@ -83,12 +77,6 @@ class HoldingDisclosureDTO(V1Model):
     published_at: datetime
     acquired_at: datetime
     source: str
-    source_document_version_id: uuid.UUID | None
-    source_span_id: uuid.UUID | None
-    provider_record_id: uuid.UUID | None
-    coverage_status: str
-    filing_kind: str
-    supersedes_disclosure_id: uuid.UUID | None
     created_at: datetime
 
 
@@ -98,6 +86,7 @@ class CreateValuationSnapshotRequest(V1Model):
     metric_value: Decimal
     source: str
     definition: str
+    available_at: datetime | None = None
 
 
 class ValuationSnapshotDTO(V1Model):
@@ -108,6 +97,7 @@ class ValuationSnapshotDTO(V1Model):
     metric_value: Decimal
     source: str
     definition: str
+    available_at: datetime | None = None
     created_at: datetime
 
 

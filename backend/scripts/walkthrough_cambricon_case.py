@@ -8,9 +8,7 @@ Drives the real v1 HTTP contract end-to-end through FastAPI's TestClient
   P1  case + thesis creation            POST /api/v1/research-cases
   P2  real Gildata ingest (2 rounds)    POST /api/v1/documents/ingest
   P3  live-LLM statement extraction     POST /api/v1/documents/{id}/extract
-  P3.5 atomic-claim confirmation        POST /api/v1/atomic-claims/{id}/reviews
   P4  evidence proposal (hybrid recall) POST /api/v1/theses/{id}/propose
-  P4.5 proposal confirmation             POST /api/v1/review-proposals/{id}/decisions
   P5  pre-review AI assessment (T1)     POST /api/v1/theses/{id}/rerun
   P6  human review simulation           GET review-queue + POST link reviews
   P7  post-review assessments (all)     POST /api/v1/theses/{id}/rerun
@@ -39,22 +37,9 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
 OUT_DIR = REPO_ROOT / "docs" / "evaluation" / "walkthrough"
-RUN_ID = os.getenv("WALKTHROUGH_RUN_ID") or datetime.now(timezone.utc).strftime(
-    "%Y%m%dT%H%M%SZ"
-)
+DB_PATH = BACKEND_ROOT / "evidence_walkthrough.db"
 
 sys.path.insert(0, str(BACKEND_ROOT))
-from app.scripts.walkthrough_support import (  # noqa: E402
-    assessment_review_payload,
-    atomic_claim_review_payload,
-    classify_historical_case_read,
-    configured_research_headers,
-    proposal_review_payload,
-    walkthrough_database_path,
-    walkthrough_paths,
-)
-
-DB_PATH = walkthrough_database_path(BACKEND_ROOT, RUN_ID)
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 
 from app.env import load_local_env  # noqa: E402
@@ -71,11 +56,18 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-PATHS = walkthrough_paths(OUT_DIR, RUN_ID)
-STATE_PATH = PATHS.state
-JSONL_PATH = PATHS.jsonl
-SUMMARY_PATH = PATHS.summary
-AUTH_HEADERS = configured_research_headers()
+_STATE_BOOT = OUT_DIR / "cambricon_walkthrough_state.json"
+_boot_run_id = None
+if _STATE_BOOT.exists():
+    try:
+        _boot_run_id = json.loads(
+            _STATE_BOOT.read_text(encoding="utf-8")
+        ).get("run_id")
+    except ValueError:
+        _boot_run_id = None
+RUN_ID = _boot_run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+JSONL_PATH = OUT_DIR / f"cambricon_walkthrough_{RUN_ID}.jsonl"
+SUMMARY_PATH = OUT_DIR / f"cambricon_walkthrough_{RUN_ID}_summary.json"
 
 client = TestClient(app)
 summary: dict = {"run_id": RUN_ID, "phases": {}, "issues": [], "facts": {}}
@@ -106,8 +98,7 @@ def issue(code: str, detail: str) -> None:
 
 def api(method: str, path: str, phase: str, step: str, **kwargs) -> tuple[int, dict]:
     """Call the v1 API, record request/response, return (status, body)."""
-    request_headers = {**AUTH_HEADERS, **kwargs.pop("headers", {})}
-    resp = client.request(method, path, headers=request_headers, **kwargs)
+    resp = client.request(method, path, **kwargs)
     try:
         body = resp.json()
     except ValueError:
@@ -203,37 +194,25 @@ THESES = [
 
 def phase1_create_case() -> dict:
     status, body = api(
-        "POST", "/api/v1/event-research", "P1", "create_case",
+        "POST", "/api/v1/research-cases", "P1", "create_case",
         json={
-            "raw_input": (
-                "寒武纪（688256.SH）2024 年以来收入放量并出现盈利拐点。"
-                "本走查以国产 AI 算力芯片需求、盈利兑现和估值风险为竞争命题，"
-                "后续通过受治理资料接入、AI 提取和人工审核验证。"
-            ),
-            "source_type": "pasted_snapshot",
-            "event_title": "寒武纪收入与盈利拐点研究",
-            "company_name": "寒武纪",
-            "ticker": "688256.SH",
-            "event_at": "2026-08-01T00:00:00Z",
-            "market_reaction": "收入和盈利改善背景下的估值变化待验证",
-            "research_question": "寒武纪的收入高增长与盈利拐点是否由公开证据支持，当前估值溢价能否被基本面兑现？",
-            "candidate_factors": [t["statement"] for t in THESES],
-            "research_protocol_required": False,
+            "title": "国产AI算力芯片（寒武纪）收入与盈利拐点研究",
+            "industry_topic": "国产AI算力芯片",
             "created_by": "walkthrough-reviewer",
+            "research_object": "寒武纪（688256.SH）及国产AI算力产业链",
+            "phenomenon": "2024年起国产AI算力芯片需求爆发，寒武纪收入放量、2024Q4首次单季盈利，股价大幅上涨",
+            "core_question": "寒武纪的收入高增长与盈利拐点是否已由公开证据支持，当前估值溢价能否被基本面兑现",
+            "period_start": "2024-01-01",
+            "period_end": "2026-08-01",
+            "initial_theses": [
+                {k: v for k, v in t.items() if k != "key"} | {"creator_type": "human"}
+                for t in THESES
+            ],
         },
     )
     assert status == 201, body
-    case_id = body["case_id"]
-    status, dossier = api(
-        "GET", f"/api/v1/research-cases/{case_id}/dossier", "P1", "created_dossier"
-    )
-    assert status == 200, dossier
-    thesis_by_statement = {item["statement"]: item for item in dossier["theses"]}
-    theses = {
-        thesis["key"]: thesis_by_statement[thesis["statement"]]
-        for thesis in THESES
-    }
-    out = {"case_id": case_id, "theses": theses}
+    theses = {THESES[i]["key"]: body["theses"][i] for i in range(len(THESES))}
+    out = {"case_id": body["case_id"], "theses": theses}
     summary["phases"]["P1_create_case"] = out
     return out
 
@@ -330,35 +309,6 @@ def phase3_extract(max_docs: int = 8) -> dict:
     return totals
 
 
-def phase3_review_atomic_claims(case_id: str) -> dict:
-    """Confirm extracted candidates before they become SourceStatements.
-
-    This is deliberately a separate recorded human gate: extraction creates
-    candidates only, and downstream proposal work must not treat them as
-    published source statements until a reviewer confirms them.
-    """
-    status, body = api(
-        "GET", f"/api/v1/research-cases/{case_id}/atomic-claims", "P3.5",
-        "list_atomic_claims", params={"review_state": "awaiting_review", "limit": 200},
-    )
-    assert status == 200, body
-    items = body.get("items", [])
-    stats = {"queued": len(items), "confirmed": 0, "failed": 0}
-    for item in items:
-        claim_id = item["id"]
-        status, response = api(
-            "POST", f"/api/v1/atomic-claims/{claim_id}/reviews", "P3.5",
-            "review_atomic_claim", json=atomic_claim_review_payload(claim_id),
-        )
-        if status != 201:
-            stats["failed"] += 1
-            issue("atomic_claim_review_failed", f"claim {claim_id}: HTTP {status} {response}")
-            continue
-        stats["confirmed"] += 1
-    summary["phases"]["P3_5_atomic_claim_review"] = stats
-    return stats
-
-
 # ---------------------------------------------------------------------------
 # P4 — evidence proposal per thesis
 # ---------------------------------------------------------------------------
@@ -380,40 +330,6 @@ def phase4_propose(theses: dict) -> dict:
                     "roles": roles}
     summary["phases"]["P4_propose"] = out
     return out
-
-
-def phase4_review_proposals(case_id: str) -> dict:
-    """Decide pending proposals using the event source-admission result."""
-    status, body = api(
-        "GET", f"/api/v1/event-research/{case_id}/review-queue", "P4.5",
-        "list_event_evidence_proposals",
-    )
-    assert status == 200, body
-    items = body.get("items", [])
-    stats = {"queued": len(items), "confirmed": 0, "rejected_for_source": 0, "failed": 0,
-             "published_evidence_links": 0}
-    for item in items:
-        proposal_id = item["proposal_id"]
-        can_accept = item["can_accept"]
-        status, response = api(
-            "POST", f"/api/v1/review-proposals/{proposal_id}/decisions", "P4.5",
-            "review_evidence_proposal",
-            json=proposal_review_payload(
-                item["proposal_version"], can_accept=can_accept
-            ),
-        )
-        if status != 201:
-            stats["failed"] += 1
-            issue("proposal_review_failed", f"proposal {proposal_id}: HTTP {status} {response}")
-            continue
-        if can_accept:
-            stats["confirmed"] += 1
-        else:
-            stats["rejected_for_source"] += 1
-        if response.get("published_entity_id"):
-            stats["published_evidence_links"] += 1
-    summary["phases"]["P4_5_proposal_review"] = stats
-    return stats
 
 
 # ---------------------------------------------------------------------------
@@ -485,11 +401,11 @@ def _review_decision(thesis_key: str, text: str) -> dict:
             "reason": "人工复核：与命题相关性不足，需要更直接证据"}
 
 
-def phase6_review(theses: dict, case_id: str) -> dict:
+def phase6_review(theses: dict) -> dict:
     thesis_by_id = {t["id"]: k for k, t in theses.items()}
     status, body = api(
         "GET", "/api/v1/review-queue", "P6", "review_queue",
-        params={"case_id": case_id, "limit": 200},
+        params={"limit": 200},
     )
     assert status == 200, body
     items = body.get("items", [])
@@ -562,18 +478,24 @@ def phase7_assessments(theses: dict) -> dict:
 # P8 — human reviews of the AI assessments
 # ---------------------------------------------------------------------------
 
+EXPECTED = {"T1": "supported", "T2": "supported", "T3": "supported"}
+
+
 def phase8_assessment_reviews(assessments: dict) -> dict:
-    proposal_review = summary["phases"].get("P4_5_proposal_review", {})
-    evidence_count = int(proposal_review.get("published_evidence_links", 0))
     out = {}
     for key, a in assessments.items():
         if "assessment_id" not in a:
             out[key] = {"skipped": "no assessment (refused or failed)"}
             continue
         ai_conclusion = a["conclusion"]
-        payload = assessment_review_payload(
-            ai_conclusion, evidence_count=evidence_count
-        )
+        if ai_conclusion == EXPECTED[key]:
+            payload = {"outcome": "confirmed", "conclusion": None,
+                       "reason": "人工复核：AI 结论与证据方向一致，且与后续披露事实吻合（见走查报告历史验证节）",
+                       "reviewer": "walkthrough-reviewer"}
+        else:
+            payload = {"outcome": "modified", "conclusion": EXPECTED[key],
+                       "reason": f"人工复核：AI 结论 {ai_conclusion} 与证据强度不符，修正为 {EXPECTED[key]}；原始 AI 结论保留不可变",
+                       "reviewer": "walkthrough-reviewer"}
         status, resp = api(
             "POST", f"/api/v1/assessments/{a['assessment_id']}/reviews",
             "P8", f"review_assessment_{key}", json=payload,
@@ -805,6 +727,7 @@ def phase10_reads(case_id: str) -> dict:
         ("snapshots", "GET", f"/api/v1/research-cases/{case_id}/snapshots", {}),
         ("fund_exposure", "GET", f"/api/v1/research-cases/{case_id}/fund-exposure", {}),
         ("metric_catalog", "GET", "/api/v1/metrics/catalog", {}),
+        ("provider_runs", "GET", "/api/v1/provider-runs", {}),
     ]
     for name, method, path, params in reads:
         status, body = api(method, path, "P10", name, params=params or None)
@@ -867,11 +790,7 @@ def phase11_time_travel(case_id: str) -> dict:
             entry["basis"] = body.get("basis")
         else:
             entry["error"] = body
-            observation = classify_historical_case_read(status, body)
-            if observation is not None:
-                entry["observation"] = observation
-            else:
-                issue("time_travel_failed", f"{label}: HTTP {status} {str(body)[:300]}")
+            issue("time_travel_failed", f"{label}: HTTP {status} {str(body)[:300]}")
         out[label] = entry
 
     # Document-level time travel: does document visibility follow the
@@ -973,6 +892,9 @@ def phase12_fact_check(probes: dict) -> dict:
 # main — staged runner (state persisted so each Bash call stays bounded)
 # ---------------------------------------------------------------------------
 
+STATE_PATH = OUT_DIR / "cambricon_walkthrough_state.json"
+
+
 def _load_state() -> dict:
     if STATE_PATH.exists():
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
@@ -986,15 +908,7 @@ def _save_state(state: dict) -> None:
     )
 
 
-def _checkpoint(state: dict) -> None:
-    """Persist both domain state and accumulated audit observations."""
-    state["_summary_phases"] = summary["phases"]
-    state["_summary_issues"] = summary["issues"]
-    _save_state(state)
-
-
 def _finalize(state: dict, started: datetime) -> None:
-    _checkpoint(state)
     summary["elapsed_seconds"] = (
         datetime.now(timezone.utc) - started
     ).total_seconds()
@@ -1031,23 +945,21 @@ def main() -> None:
         state["probes"] = phase0_preflight()
         state["case"] = phase1_create_case()
         phase2_ingest(state["case"]["case_id"])
-        _checkpoint(state)
+        _save_state(state)
     if "p3" in wanted:
         phase3_extract()
-        phase3_review_atomic_claims(state["case"]["case_id"])
     if "p4_p5" in wanted:
         phase4_propose(state["case"]["theses"])
-        phase4_review_proposals(state["case"]["case_id"])
         state["pre_review_assessment"] = phase5_pre_review_assessment(
             state["case"]["theses"]
         )
-        _checkpoint(state)
+        _save_state(state)
     if "p6" in wanted:
-        phase6_review(state["case"]["theses"], state["case"]["case_id"])
+        phase6_review(state["case"]["theses"])
     if "p7_p8" in wanted:
         state["assessments"] = phase7_assessments(state["case"]["theses"])
         phase8_assessment_reviews(state["assessments"])
-        _checkpoint(state)
+        _save_state(state)
     if "p9_plus" in wanted:
         phase9_enrichment(
             state["case"]["case_id"], state["case"]["theses"], state["probes"]
@@ -1059,7 +971,9 @@ def main() -> None:
         return
 
     # Non-terminal groups: report progress so far.
-    _checkpoint(state)
+    state["_summary_phases"] = summary["phases"]
+    state["_summary_issues"] = summary["issues"]
+    _save_state(state)
     print(f"stages done: {sorted(wanted)}; state at {STATE_PATH}")
     print(f"  jsonl: {JSONL_PATH}")
 

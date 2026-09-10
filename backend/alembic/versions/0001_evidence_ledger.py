@@ -53,35 +53,34 @@ def upgrade() -> None:
 
     # Defence-in-depth: reject UPDATE/DELETE at the database level too, so a
     # connection that bypasses the application still cannot mutate the ledger.
-    if op.get_bind().dialect.name != "postgresql":
-        return
-
-    op.execute(
-        """
-        CREATE OR REPLACE FUNCTION reject_mutable_ledger()
-        RETURNS trigger AS $$
-        BEGIN
-            RAISE EXCEPTION 'table % is append-only: UPDATE/DELETE is not allowed',
-                TG_TABLE_NAME;
-        END;
-        $$ LANGUAGE plpgsql;
-        """
-    )
-    for table in IMMUTABLE_TABLES:
+    if op.get_bind().dialect.name == "postgresql":
         op.execute(
-            f"CREATE TRIGGER no_update_{table} BEFORE UPDATE ON {table} "
-            f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+            """
+            CREATE OR REPLACE FUNCTION reject_mutable_ledger()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'table % is append-only: UPDATE/DELETE is not allowed',
+                    TG_TABLE_NAME;
+            END;
+            $$ LANGUAGE plpgsql;
+            """
         )
-        op.execute(
-            f"CREATE TRIGGER no_delete_{table} BEFORE DELETE ON {table} "
-            f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
-        )
+        for table in IMMUTABLE_TABLES:
+            op.execute(
+                f"CREATE TRIGGER no_update_{table} BEFORE UPDATE ON {table} "
+                f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+            )
+            op.execute(
+                f"CREATE TRIGGER no_delete_{table} BEFORE DELETE ON {table} "
+                f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+            )
 
 
 def downgrade() -> None:
-    for table in IMMUTABLE_TABLES:
-        op.execute(f"DROP TRIGGER IF EXISTS no_update_{table} ON {table};")
-        op.execute(f"DROP TRIGGER IF EXISTS no_delete_{table} ON {table};")
-    op.execute("DROP FUNCTION IF EXISTS reject_mutable_ledger();")
+    if op.get_bind().dialect.name == "postgresql":
+        for table in IMMUTABLE_TABLES:
+            op.execute(f"DROP TRIGGER IF EXISTS no_update_{table} ON {table};")
+            op.execute(f"DROP TRIGGER IF EXISTS no_delete_{table} ON {table};")
+        op.execute("DROP FUNCTION IF EXISTS reject_mutable_ledger();")
     op.drop_table("source_spans")
     op.drop_table("document_versions")

@@ -160,6 +160,7 @@
         directEvidence: selectedAnalysis.directEvidence,
         counterexample: selectedAnalysis.falsifier,
         alternatives: selectedAnalysis.alternatives,
+        impactObject: "订单积压、系统交付与同口径分部收入",
         scope: selectedAnalysis.scope,
         falsifier: selectedAnalysis.falsifier,
       },

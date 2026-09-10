@@ -6,7 +6,6 @@ from the first SourceSpan locator that carries them (ingest-time metadata),
 never invented; they stay ``None`` when no locator provides them.
 """
 
-from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import Field
@@ -14,60 +13,18 @@ from pydantic import Field
 from app.schemas.v1.common import CursorPage, HistoricalBasisDTO, V1Model
 
 
-class ProviderRecordDTO(V1Model):
-    provider_name: str
-    provider_record_id: str
-    request_scope: dict[str, Any]
-    retrieval_reference: str | None
-    content_sha256: str
-    retrieved_at: datetime
-    contract_version: str | None
-
-
-class OriginalFileDTO(V1Model):
-    """Inspectable provenance for a retained upload; never includes bytes."""
-
-    file_name: str
-    mime_type: str
-    byte_size: int
-    object_version: str
-    uploaded_by: str
-    retention_policy: str
-
-
-class SourceContractDTO(V1Model):
-    source_type: str
-    research_source_type: str
-    provider_or_tenant: str
-    permissions: dict[str, bool]
-    status: Literal["admitted", "restricted"]
-    region: str
-    effective_from: datetime | None
-    effective_until: datetime | None
-    retention_policy: str
-    deletion_policy: str
-    downstream_restrictions: list[str]
-    contract_version: str | None
-    provider_record: ProviderRecordDTO | None = None
-
-
 class DocumentSummaryDTO(V1Model):
     id: str
     content_sha256: str
-    # A Case may retain audit metadata for a source whose terms forbid display.
-    # Never expose its original location through a read response in that state.
-    source_url: str | None
+    source_url: str
     published_at: str | None
     available_at: str
     acquired_at: str
     parser_version: str
-    source_authority: str
     supersedes_id: str | None
     span_count: int
     statement_count: int
-    parse_state: Literal["parsed", "partial", "failed", "unparsed"]
-    supplements_document_version_id: str | None = None
-    claimed_page_reference: str | None = None
+    parse_state: Literal["parsed", "unparsed"]
     # Extraction watermark derived from AIRun audit records (defect-3 fix):
     # "extracted_empty" distinguishes a successful zero-output run from a
     # never-attempted version so batch extraction stops re-running it.
@@ -87,8 +44,6 @@ class DocumentSummaryDTO(V1Model):
     # Resolved from locator sec_code/stock_code; "寒武纪 (688256.SH)" when the
     # code matches a known Stock, the raw code otherwise, None when absent.
     entity: str | None = None
-    source_contract: SourceContractDTO | None = None
-    original_file: OriginalFileDTO | None = None
 
 
 class SourceSpanDTO(V1Model):

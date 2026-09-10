@@ -8,7 +8,6 @@ from app.models.ledger import (
     CausalStep,
     Company,
     DocumentVersion,
-    EvidenceReview,
     EvidenceLink,
     Fund,
     HoldingDisclosure,
@@ -20,9 +19,6 @@ from app.models.ledger import (
     Thesis,
     ValuationSnapshot,
 )
-from app.models.event_research import CaseRelation
-from app.models.source_governance import SourceContract
-from tests.tenant_admission import admit_case
 
 
 def edge_pairs(payload):
@@ -120,7 +116,6 @@ def test_graph_excludes_future_disclosure(api_client, session):
         )
     )
     session.flush()
-    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -206,7 +201,6 @@ def test_graph_loads_real_causal_edges_and_connects_to_thesis(
     )
     session.add(edge)
     session.flush()
-    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -255,7 +249,6 @@ def test_graph_does_not_fabricate_causal_edge_without_ledger_edge(
     )
     session.flush()
     # No CausalEdge rows in the ledger.
-    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -304,7 +297,6 @@ def test_graph_hides_machine_generated_causal_edge_by_default(
     session.flush()
 
     base = {"thesis_id": str(thesis.id), "cutoff": cutoff.isoformat()}
-    admit_case(session, case.id)
     default = api_client.get(f"/api/v1/research-cases/{case.id}/graph", params=base)
     assert default.status_code == 200
     assert not any(
@@ -347,7 +339,6 @@ def test_graph_excludes_theme_role_created_after_cutoff(api_client, session):
         )
     )
     session.flush()
-    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -402,7 +393,6 @@ def test_graph_excludes_valuation_created_after_cutoff(api_client, session):
         )
     )
     session.flush()
-    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -445,7 +435,6 @@ def test_graph_dedups_edges_by_id(api_client, session):
     )
     session.add(stock)
     session.flush()
-    admit_case(session, case.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",
@@ -516,110 +505,6 @@ def test_graph_includes_document_and_span_nodes_with_contains_derived_edges(
     document_nodes = [n for n in payload["nodes"] if n["kind"] == "document"]
     assert len(span_nodes) == 1
     assert len(document_nodes) == 1
-
-
-def test_graph_marks_only_case_admitted_sources_as_locatable(
-    api_client, session, workbench_case
-):
-    span = session.get(SourceSpan, workbench_case.statement.source_span_id)
-    assert span is not None
-    document = session.get(DocumentVersion, span.document_version_id)
-    assert document is not None
-    session.add(
-        SourceContract(
-            document_version_id=document.id,
-            source_type="uploaded_file",
-            provider_or_tenant="research-team",
-            allow_ai_processing=True,
-            allow_display=True,
-            allow_export=False,
-            allow_api=False,
-            region="cn",
-            effective_from=None,
-            effective_until=None,
-            retention_policy="case_retained",
-            deletion_policy="manual",
-            downstream_restrictions=[],
-            contract_version="fixture-v1",
-            intake_metadata={},
-            declared_by="human:researcher",
-            created_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
-    )
-    session.add(
-        EvidenceReview(
-            evidence_link_id=workbench_case.link.id,
-            outcome="confirmed",
-            relation="supports",
-            factor_role="核心验证",
-            scope_boundary="数据中心",
-            reason="已逐字核对冻结原文与定位。",
-            reviewer="human:researcher",
-            created_at=datetime(2026, 1, 2, tzinfo=UTC),
-        )
-    )
-    session.commit()
-
-    response = api_client.get(
-        f"/api/v1/research-cases/{workbench_case.case.id}/graph",
-        params={
-            "thesis_id": str(workbench_case.thesis.id),
-            "cutoff": "2026-12-31T00:00:00Z",
-            "research_mode": "true",
-        },
-    )
-    assert response.status_code == 200
-    document_node = next(
-        node for node in response.json()["nodes"] if node["kind"] == "document"
-    )
-    assert document_node["properties"]["source_visible_in_case"] is True
-    assert document_node["properties"]["permission_status"] == "admitted"
-    evidence_edge = next(
-        edge for edge in response.json()["edges"] if edge["semantic_kind"] == "evidence"
-    )
-    assert evidence_edge["properties"]["reviewer"] == "human:researcher"
-    assert evidence_edge["properties"]["review_reason"] == "已逐字核对冻结原文与定位。"
-
-
-def test_graph_includes_related_case_without_inheriting_its_review_state(
-    api_client, session, workbench_case
-):
-    related_case = ResearchCase(
-        title="关联事件的独立研究",
-        industry_topic="ai_compute",
-        created_by="human:researcher",
-        created_at=datetime(2026, 1, 1, tzinfo=UTC),
-    )
-    session.add(related_case)
-    session.flush()
-    session.add(
-        CaseRelation(
-            source_case_id=workbench_case.case.id,
-            target_case_id=related_case.id,
-            relation_type="shared_driver",
-            reason="两项研究共享同一个资本开支验证因素。",
-            created_by="human:researcher",
-            review_state="reviewed",
-            created_at=datetime(2026, 1, 2, tzinfo=UTC),
-        )
-    )
-    session.commit()
-
-    response = api_client.get(
-        f"/api/v1/research-cases/{workbench_case.case.id}/graph",
-        params={
-            "thesis_id": str(workbench_case.thesis.id),
-            "cutoff": "2026-12-31T00:00:00Z",
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    related_node = next(node for node in payload["nodes"] if node["id"] == str(related_case.id))
-    assert related_node["kind"] == "case"
-    assert related_node["properties"]["inherited"] is False
-    relation_edge = next(edge for edge in payload["edges"] if edge["semantic_kind"] == "case_relation")
-    assert relation_edge["review_state"] == "reviewed"
-    assert relation_edge["properties"]["reason"] == "两项研究共享同一个资本开支验证因素。"
 
 
 def test_graph_excludes_post_cutoff_document_layer(api_client, session):
@@ -717,7 +602,6 @@ def test_graph_excludes_post_cutoff_document_layer(api_client, session):
     )
     session.add(new_link)
     session.flush()
-    admit_case(session, case.id, document_version_id=old_version.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/graph",

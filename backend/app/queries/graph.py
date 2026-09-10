@@ -13,17 +13,14 @@ import uuid
 from collections import defaultdict, deque
 from datetime import UTC, date, datetime
 
-from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan
-from app.models.event_research import CaseRelation, CaseRelationReview
-from app.models.source_governance import SourceContract
+from app.models.ledger import DocumentVersion, SourceSpan
 from app.queries.basis import HistoricalBasis
 from app.queries.effective_state import (
     effective_review_state,
-    latest_reviews,
+    latest_review_outcomes,
 )
 from app.repositories.instruments import InstrumentRepository
 from app.repositories.research import ResearchRepository
@@ -127,102 +124,6 @@ class RelationshipGraphQueries:
                 thesis.id,
             )
 
-        # Related Cases remain separate research records.  A reviewed relation
-        # is navigable context, never inherited evidence or conclusion state.
-        relation_states = _RESEARCH_STATES if research_mode else _REVIEWED_STATES
-        relations = list(self._session.scalars(
-            select(CaseRelation)
-            .where(
-                or_(
-                    CaseRelation.source_case_id == case.id,
-                    CaseRelation.target_case_id == case.id,
-                )
-            )
-            .where(CaseRelation.created_at <= basis.cutoff)
-            .order_by(CaseRelation.created_at, CaseRelation.id)
-        ))
-        candidate_ids = [relation.id for relation in relations if relation.review_state == "machine_generated"]
-        terminal_candidates: set[uuid.UUID] = set()
-        if candidate_ids:
-            review_rows = self._session.execute(
-                select(CaseRelationReview.case_relation_id, CaseRelationReview.outcome)
-                .where(
-                    CaseRelationReview.case_relation_id.in_(candidate_ids),
-                    CaseRelationReview.created_at <= basis.cutoff,
-                )
-                .order_by(
-                    CaseRelationReview.case_relation_id,
-                    CaseRelationReview.created_at.desc(),
-                    CaseRelationReview.id.desc(),
-                )
-            )
-            seen_candidates: set[uuid.UUID] = set()
-            for candidate_id, outcome in review_rows:
-                if candidate_id in seen_candidates:
-                    continue
-                seen_candidates.add(candidate_id)
-                if outcome in {"confirmed", "modified", "rejected"}:
-                    terminal_candidates.add(candidate_id)
-        reviewed_relation_ids = [
-            relation.id for relation in relations if relation.review_state == "reviewed"
-        ]
-        review_by_reviewed_relation: dict[uuid.UUID, CaseRelationReview] = {}
-        if reviewed_relation_ids:
-            for review in self._session.scalars(
-                select(CaseRelationReview)
-                .where(
-                    CaseRelationReview.reviewed_relation_id.in_(reviewed_relation_ids),
-                    CaseRelationReview.created_at <= basis.cutoff,
-                )
-                .order_by(CaseRelationReview.created_at.desc(), CaseRelationReview.id.desc())
-            ):
-                review_by_reviewed_relation.setdefault(review.reviewed_relation_id, review)
-        for relation in relations:
-            if relation.id in terminal_candidates:
-                continue
-            if relation.review_state not in relation_states:
-                continue
-            related_case_id = (
-                relation.target_case_id
-                if relation.source_case_id == case.id
-                else relation.source_case_id
-            )
-            related_case = self._research.get_case(
-                related_case_id, cutoff=basis.cutoff
-            )
-            if related_case is None:
-                continue
-            add_node(
-                related_case.id,
-                "case",
-                related_case.title,
-                topic=related_case.industry_topic,
-                inherited=False,
-            )
-            review = review_by_reviewed_relation.get(relation.id)
-            properties = {
-                "relation_type": relation.relation_type,
-                "reason": relation.reason,
-                "created_by": relation.created_by,
-            }
-            if review is not None:
-                properties.update(
-                    {
-                        "reviewer": review.reviewer,
-                        "review_reason": review.reason,
-                        "reviewed_at": _iso(review.created_at),
-                    }
-                )
-            add_edge(
-                relation.id,
-                "case_relation",
-                case.id,
-                related_case.id,
-                review_state=relation.review_state,
-                available_at=_iso(relation.created_at),
-                properties=properties,
-            )
-
         # 2-3. evidence links (research_mode-gated) and causal steps
         if thesis is not None:
             allowed_states = (
@@ -233,17 +134,14 @@ class RelationshipGraphQueries:
             )
             # Append-only ledger: human review outcomes live in
             # evidence_reviews, so visibility/edge state use the effective state.
-            reviews = latest_reviews(
+            outcomes = latest_review_outcomes(
                 self._session, [link.id for link in visible], cutoff=basis.cutoff
             )
-            outcomes = {link_id: review.outcome for link_id, review in reviews.items()}
             # 原文层（P2 缺陷 9 修复）：把 statement 链向上游的 span 与
             # document。多个 statement 共享同一 span / document 时避免重复
             # 添加，缓存以 (span_id, document_id) 维度判重。
             span_cache: dict[uuid.UUID, SourceSpan] = {}
             doc_cache: dict[uuid.UUID, DocumentVersion] = {}
-            contract_cache: dict[uuid.UUID, SourceContract | None] = {}
-            visible_source_cache: dict[uuid.UUID, bool] = {}
 
             def _span(span_id: uuid.UUID) -> SourceSpan | None:
                 if span_id in span_cache:
@@ -258,32 +156,6 @@ class RelationshipGraphQueries:
                 doc = self._session.get(DocumentVersion, doc_id)
                 doc_cache[doc_id] = doc
                 return doc
-
-            def _contract(doc_id: uuid.UUID) -> SourceContract | None:
-                if doc_id not in contract_cache:
-                    contract_cache[doc_id] = self._session.scalar(
-                        select(SourceContract).where(
-                            SourceContract.document_version_id == doc_id
-                        )
-                    )
-                return contract_cache[doc_id]
-
-            def _is_visible_source(doc_id: uuid.UUID) -> bool:
-                if doc_id not in visible_source_cache:
-                    contract = _contract(doc_id)
-                    linked_to_case = self._session.scalar(
-                        select(CaseDocumentVersion.id)
-                        .where(CaseDocumentVersion.research_case_id == case.id)
-                        .where(CaseDocumentVersion.document_version_id == doc_id)
-                        .limit(1)
-                    )
-                    visible_source_cache[doc_id] = bool(
-                        linked_to_case is not None
-                        and contract is not None
-                        and contract.allow_display
-                        and _to_aware(contract.created_at) <= basis.cutoff
-                    )
-                return visible_source_cache[doc_id]
 
             def _span_label(span: SourceSpan) -> str:
                 locator = span.locator or {}
@@ -347,8 +219,6 @@ class RelationshipGraphQueries:
                 ):
                     continue
                 if document_version is not None:
-                    source_visible_in_case = _is_visible_source(document_version.id)
-                    contract = _contract(document_version.id)
                     add_node(
                         document_version.id,
                         "document",
@@ -357,35 +227,13 @@ class RelationshipGraphQueries:
                         parser_version=document_version.parser_version,
                         published_at=_iso(document_version.published_at),
                         available_at=_iso(document_version.available_at),
-                        document_id=str(document_version.id),
-                        permission_status=(
-                            "admitted"
-                            if contract is not None and contract.allow_display
-                            else "not_admitted"
-                        ),
-                        source_visible_in_case=source_visible_in_case,
                     )
-                else:
-                    source_visible_in_case = False
-                    contract = None
                 if span is not None:
                     add_node(
                         span.id,
                         "span",
                         _span_label(span),
                         locator=span.locator,
-                        verbatim_text=span.verbatim_text,
-                        document_id=(
-                            str(span.document_version_id)
-                            if document_version is not None
-                            else None
-                        ),
-                        permission_status=(
-                            "admitted"
-                            if contract is not None and contract.allow_display
-                            else "not_admitted"
-                        ),
-                        source_visible_in_case=source_visible_in_case,
                     )
                 add_node(
                     statement.id,
@@ -396,12 +244,6 @@ class RelationshipGraphQueries:
                         str(span.document_version_id) if span is not None else None
                     ),
                     span_id=str(span.id) if span is not None else None,
-                    permission_status=(
-                        "admitted"
-                        if contract is not None and contract.allow_display
-                        else "not_admitted"
-                    ),
-                    source_visible_in_case=source_visible_in_case,
                 )
                 # DocumentVersion -> SourceSpan（容器关系，事实是 span 由
                 # document 包含并以 locator 定位）
@@ -428,15 +270,6 @@ class RelationshipGraphQueries:
                     statement.id,
                     review_state=state,
                     available_at=_iso(link.available_at),
-                    properties=(
-                        {
-                            "reviewer": reviews[link.id].reviewer,
-                            "review_reason": reviews[link.id].reason,
-                            "reviewed_at": _iso(reviews[link.id].created_at),
-                        }
-                        if link.id in reviews
-                        else {}
-                    ),
                 )
 
             steps = self._research.causal_steps_for_thesis(

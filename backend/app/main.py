@@ -1,5 +1,7 @@
 import logging
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -7,23 +9,24 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from sqlalchemy.orm import Session
 
-from app.api.readiness import router as readiness_router
 from app.api.legacy import router as cases_router
 from app.api.v1.router import router as v1_router
-from app.underwriting.api import router as underwriting_router
-from app.underwriting.api.schemas import UnderwritingErrorEnvelope
+from app.db import SessionLocal, get_db
 from app.env import load_local_env
 from app.errors import (
     AuthenticationRequiredError,
     ConflictError,
     NotFoundError,
     PermissionDeniedError,
+    ReportIntakeNotReadyError,
     UpstreamUnavailableError,
     ValidationFailedError,
 )
 from app.schemas.v1.common import ErrorEnvelope
+from app.services.embed_access import EmbedAccessService
 
 load_local_env()  # backend/.env (gitignored) -> os.environ, env vars win
 
@@ -38,21 +41,104 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5174",
     ],
-    # Each isolated frontend worktree may choose a different Vite port.  Keep
-    # local live-read verification usable without granting access to nonlocal
-    # origins or widening the deployed same-origin surface.
-    allow_origin_regex=r"^https?://(?:localhost|127\.0\.0\.1):\d+$",
-    # Both authenticated browser adapters intentionally use credentials:
-    # include.  The local cross-origin Vite workflow therefore needs the
-    # explicit credential response header; origins remain restricted above.
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(readiness_router)
 app.include_router(cases_router)
 app.include_router(v1_router)
-app.include_router(underwriting_router)
+
+
+_EMBED_PREFLIGHT_PREFIX = "/api/v1/report-research/"
+_EMBED_PREFLIGHT_SUFFIX = "/embed/wiki"
+_EMBED_PREFLIGHT_ALLOWED_HEADERS = frozenset({"x-embed-token"})
+
+
+def _embed_case_id_for_preflight(request: Request) -> uuid.UUID | None:
+    """Return the case only for the exact external embed preflight route."""
+    if request.method != "OPTIONS":
+        return None
+    path = request.url.path
+    if not path.startswith(_EMBED_PREFLIGHT_PREFIX) or not path.endswith(
+        _EMBED_PREFLIGHT_SUFFIX
+    ):
+        return None
+    raw_case_id = path[
+        len(_EMBED_PREFLIGHT_PREFIX) : -len(_EMBED_PREFLIGHT_SUFFIX)
+    ]
+    if not raw_case_id or "/" in raw_case_id:
+        return None
+    try:
+        return uuid.UUID(raw_case_id)
+    except ValueError:
+        return None
+
+
+def _embed_preflight_headers_are_safe(request: Request) -> bool:
+    requested_method = request.headers.get("access-control-request-method", "").upper()
+    if requested_method not in {"GET", "HEAD"}:
+        return False
+    requested_headers = request.headers.get("access-control-request-headers", "")
+    headers = {
+        value.strip().lower()
+        for value in requested_headers.split(",")
+        if value.strip()
+    }
+    return headers == _EMBED_PREFLIGHT_ALLOWED_HEADERS
+
+
+@contextmanager
+def _embed_preflight_session() -> Iterator[Session]:
+    """Open one short read session, honoring test dependency overrides."""
+    override = app.dependency_overrides.get(get_db)
+    if override is None:
+        session = SessionLocal()
+        try:
+            yield session
+        finally:
+            session.close()
+        return
+    dependency = override()
+    session = next(dependency)
+    try:
+        yield session
+    finally:
+        try:
+            next(dependency)
+        except StopIteration:
+            pass
+
+
+@app.middleware("http")
+async def embed_preflight_middleware(request: Request, call_next):
+    """Handle grant-aware external embed preflight before global CORS.
+
+    This declaration is intentionally after the request-id middleware and is
+    therefore the outermost application middleware.  Returning directly
+    prevents the broad development ``CORSMiddleware`` from answering embed
+    preflights with its unrelated local-origin policy.
+    """
+    case_id = _embed_case_id_for_preflight(request)
+    if case_id is None:
+        return await call_next(request)
+    origin = request.headers.get("origin")
+    allowed = False
+    if origin is not None and _embed_preflight_headers_are_safe(request):
+        with _embed_preflight_session() as session:
+            allowed = EmbedAccessService(session).allows_preflight(case_id, origin)
+    if not allowed:
+        return Response(status_code=403)
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, HEAD",
+            "Access-Control-Allow-Headers": "X-Embed-Token",
+            "Vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _v1_error_response(
@@ -77,44 +163,6 @@ def _v1_error_response(
     )
 
 
-def _underwriting_error_response(
-    code: str,
-    message: str,
-    request_id: str,
-    details: dict[str, Any] | None = None,
-    status_code: int = 500,
-) -> JSONResponse:
-    """Build the independent underwriting-v1 error envelope."""
-    envelope = UnderwritingErrorEnvelope(
-        error={
-            "code": code,
-            "message": message,
-            "request_id": request_id,
-            "details": details or {},
-        }
-    ).model_dump(mode="json")
-    return JSONResponse(
-        status_code=status_code,
-        content=envelope,
-        headers={"x-request-id": request_id},
-    )
-
-
-def _error_response_for_request(
-    request: Request,
-    code: str,
-    message: str,
-    request_id: str,
-    details: dict[str, Any] | None = None,
-    status_code: int = 500,
-) -> JSONResponse:
-    if request.url.path.startswith("/api/underwriting/v1"):
-        return _underwriting_error_response(
-            code, message, request_id, details, status_code
-        )
-    return _v1_error_response(code, message, request_id, details, status_code)
-
-
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
@@ -127,13 +175,24 @@ async def request_id_middleware(request: Request, call_next):
         # carrying the request-id, so no 500 ever lacks the correlation header.
         # Internal text/stack must not leak to the client (design 7.3).
         logger.exception("Unhandled exception (request_id=%s)", request_id)
-        response = _error_response_for_request(
-            request,
+        response = _v1_error_response(
             "internal_error",
             "internal error",
             request_id,
             status_code=500,
         )
+    # The application-wide development CORS allow-list is intentionally not
+    # an embed permission system.  A rejected bearer grant must not inherit a
+    # permissive CORS header merely because its Origin happens to be one of
+    # the local frontend origins.  Successful embed reads set their own exact
+    # grant-origin header in the route.
+    if (
+        request.url.path.endswith("/embed/wiki")
+        and response.status_code in {401, 403}
+    ):
+        for header in tuple(response.headers):
+            if header.lower().startswith("access-control-"):
+                del response.headers[header]
     response.headers["x-request-id"] = request_id
     return response
 
@@ -141,8 +200,7 @@ async def request_id_middleware(request: Request, call_next):
 @app.exception_handler(NotFoundError)
 async def not_found_error_handler(request: Request, exc: NotFoundError):
     request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
+    return _v1_error_response(
         "not_found",
         str(exc) or "not found",
         request_id,
@@ -150,37 +208,10 @@ async def not_found_error_handler(request: Request, exc: NotFoundError):
     )
 
 
-@app.exception_handler(AuthenticationRequiredError)
-async def authentication_required_error_handler(
-    request: Request, exc: AuthenticationRequiredError
-):
-    request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
-        "authentication_required",
-        str(exc) or "authentication required",
-        request_id,
-        status_code=401,
-    )
-
-
-@app.exception_handler(PermissionDeniedError)
-async def permission_denied_error_handler(request: Request, exc: PermissionDeniedError):
-    request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
-        "permission_denied",
-        str(exc) or "permission denied",
-        request_id,
-        status_code=403,
-    )
-
-
 @app.exception_handler(ValidationFailedError)
 async def validation_failed_error_handler(request: Request, exc: ValidationFailedError):
     request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
+    return _v1_error_response(
         "validation_failed",
         str(exc) or "validation failed",
         request_id,
@@ -191,12 +222,48 @@ async def validation_failed_error_handler(request: Request, exc: ValidationFaile
 @app.exception_handler(ConflictError)
 async def conflict_error_handler(request: Request, exc: ConflictError):
     request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
+    return _v1_error_response(
         "conflict",
         str(exc) or "resource already exists",
         request_id,
         status_code=409,
+    )
+
+
+@app.exception_handler(ReportIntakeNotReadyError)
+async def report_intake_not_ready_error_handler(
+    request: Request, exc: ReportIntakeNotReadyError
+):
+    request_id = getattr(request.state, "request_id", "")
+    return _v1_error_response(
+        "report_intake_not_ready",
+        str(exc) or "report intake is not ready for Wiki",
+        request_id,
+        status_code=409,
+    )
+
+
+@app.exception_handler(AuthenticationRequiredError)
+async def authentication_required_error_handler(
+    request: Request, exc: AuthenticationRequiredError
+):
+    request_id = getattr(request.state, "request_id", "")
+    return _v1_error_response(
+        "authentication_required",
+        str(exc) or "authentication is required",
+        request_id,
+        status_code=401,
+    )
+
+
+@app.exception_handler(PermissionDeniedError)
+async def permission_denied_error_handler(request: Request, exc: PermissionDeniedError):
+    request_id = getattr(request.state, "request_id", "")
+    return _v1_error_response(
+        "permission_denied",
+        str(exc) or "permission denied",
+        request_id,
+        status_code=403,
     )
 
 
@@ -205,8 +272,7 @@ async def upstream_unavailable_error_handler(
     request: Request, exc: UpstreamUnavailableError
 ):
     request_id = getattr(request.state, "request_id", "")
-    return _error_response_for_request(
-        request,
+    return _v1_error_response(
         "upstream_unavailable",
         str(exc) or "upstream datasource unavailable",
         request_id,
@@ -219,18 +285,14 @@ async def request_validation_error_handler(
     request: Request, exc: RequestValidationError
 ):
     request_id = getattr(request.state, "request_id", "")
-    # The versioned API error envelopes apply only to their versioned paths;
-    # legacy routes keep FastAPI's default {"detail": [...]} format.
-    if not (
-        request.url.path.startswith("/api/v1")
-        or request.url.path.startswith("/api/underwriting/v1")
-    ):
+    # The v1 error envelope applies only to /api/v1; legacy routes keep
+    # FastAPI's default {"detail": [...]} 422 format for compatibility.
+    if not request.url.path.startswith("/api/v1"):
         return JSONResponse(
             status_code=422,
             content={"detail": jsonable_encoder(exc.errors())},
         )
-    return _error_response_for_request(
-        request,
+    return _v1_error_response(
         "validation_failed",
         "request validation failed",
         request_id,

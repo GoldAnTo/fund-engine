@@ -15,14 +15,18 @@ PARSER_VERSION = "docling-v1"
 
 _WS_RE = re.compile(r"\s+")
 _BRACKET_RE = re.compile(r"[\[\]【】\(\)（）：:]")
-_SOURCE_AUTHORITIES = frozenset({
-    "primary_disclosure", "licensed_research", "secondary_source",
-    "user_supplied", "unknown",
-})
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _before_document_source_lock() -> None:
+    """Test seam for concurrent source-version ordering."""
+
+
+def _before_document_version_insert() -> None:
+    """Test seam for the content/natural-key conflict recovery path."""
 
 
 def _source_prefix(source_url: str) -> str:
@@ -56,11 +60,6 @@ def compute_natural_key(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
-def normalize_source_authority(value: object) -> str:
-    """Fail closed for intake metadata that does not name a known authority."""
-    return value if isinstance(value, str) and value in _SOURCE_AUTHORITIES else "unknown"
-
-
 class DocumentService:
     """Freezes source material into immutable, content-addressed versions.
 
@@ -84,11 +83,6 @@ class DocumentService:
         byte_size: int | None = None,
         language: str | None = None,
         parse_state: str = "success",
-        source_authority: str = "unknown",
-        supplements_document_version_id: uuid.UUID | None = None,
-        claimed_page_reference: str | None = None,
-        available_at: datetime | None = None,
-        acquired_at: datetime | None = None,
     ) -> DocumentVersion:
         """Freeze bytes into a DocumentVersion, deduping on two levels:
 
@@ -118,58 +112,8 @@ class DocumentService:
             byte_size=byte_size,
             language=language,
             parse_state=parse_state,
-            source_authority=source_authority,
-            supplements_document_version_id=supplements_document_version_id,
-            claimed_page_reference=claimed_page_reference,
-            available_at=available_at,
-            acquired_at=acquired_at,
         )
         return version
-
-    def freeze_with_status(
-        self,
-        raw: bytes,
-        source_url: str,
-        published_at: datetime | None = None,
-        parser_version: str | None = None,
-        title: str | None = None,
-        natural_key: str | None = None,
-        byte_size: int | None = None,
-        language: str | None = None,
-        parse_state: str = "success",
-        source_authority: str = "unknown",
-        supplements_document_version_id: uuid.UUID | None = None,
-        claimed_page_reference: str | None = None,
-        supersedes_id: uuid.UUID | None = None,
-        infer_supersedes: bool = True,
-        available_at: datetime | None = None,
-        acquired_at: datetime | None = None,
-    ) -> tuple[DocumentVersion, bool]:
-        """Freeze bytes and expose whether this call created the version.
-
-        This is the narrow status-bearing counterpart to :meth:`freeze`.
-        Keeping ``freeze`` unchanged preserves its return type and all existing
-        callers while acquisition code can distinguish a new version from a
-        content/natural-key reuse.
-        """
-        return self._freeze(
-            raw=raw,
-            source_url=source_url,
-            published_at=published_at,
-            parser_version=parser_version,
-            title=title,
-            natural_key=natural_key,
-            byte_size=byte_size,
-            language=language,
-            parse_state=parse_state,
-            source_authority=source_authority,
-            supplements_document_version_id=supplements_document_version_id,
-            claimed_page_reference=claimed_page_reference,
-            supersedes_id=supersedes_id,
-            infer_supersedes=infer_supersedes,
-            available_at=available_at,
-            acquired_at=acquired_at,
-        )
 
     def _freeze(
         self,
@@ -183,14 +127,11 @@ class DocumentService:
         byte_size: int | None = None,
         language: str | None = None,
         parse_state: str = "success",
-        source_authority: str = "unknown",
-        supplements_document_version_id: uuid.UUID | None = None,
-        claimed_page_reference: str | None = None,
-        supersedes_id: uuid.UUID | None = None,
-        infer_supersedes: bool = True,
-        available_at: datetime | None = None,
-        acquired_at: datetime | None = None,
     ) -> tuple[DocumentVersion, bool]:
+        _before_document_source_lock()
+        # Choosing ``supersedes_id`` is source-order-sensitive. A transaction
+        # advisory lock makes concurrent revisions form one linear chain.
+        self._repo.lock_source_for_append(source_url)
         digest = hashlib.sha256(raw).hexdigest()
         existing = self._repo.by_hash(digest)
         if existing is not None:
@@ -199,40 +140,36 @@ class DocumentService:
         key = natural_key or (
             compute_natural_key(source_url, title, published_at)
             if title
-            else None
+            else ""
         )
         if key:
             prior_natural = self._repo.by_natural_key(key)
             if prior_natural is not None:
                 return prior_natural, False
 
-        if infer_supersedes:
-            prior = self._repo.latest_for_source(source_url)
-            supersedes_id = (
-                prior.id
-                if prior is not None and prior.content_sha256 != digest
-                else None
-            )
-        acquisition_time = acquired_at or _utcnow()
-        source_available_at = available_at or acquisition_time
-        version = self._repo.insert_version(
+        prior = self._repo.latest_for_source(source_url)
+        supersedes_id = (
+            prior.id
+            if prior is not None and prior.content_sha256 != digest
+            else None
+        )
+        now = _utcnow()
+        _before_document_version_insert()
+        version, created = self._repo.insert_version_or_existing(
             content_sha256=digest,
             source_url=source_url,
             natural_key=key,
             published_at=published_at,
-            available_at=source_available_at,
-            acquired_at=acquisition_time,
+            available_at=now,
+            acquired_at=now,
             parser_version=parser_version or PARSER_VERSION,
             supersedes_id=supersedes_id,
             title=title,
             byte_size=byte_size if byte_size is not None else len(raw),
             language=language,
             parse_state=parse_state,
-            source_authority=normalize_source_authority(source_authority),
-            supplements_document_version_id=supplements_document_version_id,
-            claimed_page_reference=claimed_page_reference,
         )
-        return version, True
+        return version, created
 
     def attach_to_case(
         self, *, research_case_id: uuid.UUID, document_version_id: uuid.UUID

@@ -7,10 +7,9 @@ numbers, noisy dimensions, cumulative figures).
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import patch
 
-import pytest
 from sqlalchemy import select
 
 from app.ai.client import LLMClient
@@ -145,37 +144,15 @@ def test_extractor_routes_table_spans_to_rules(
         verbatim_text="管理层表示订单能见度良好",
     )
     client = LLMClient(model_version="mock-test", mock=True)
-    candidates = StatementExtractor(client).extract(document.id, session)
+    statements = StatementExtractor(client).extract(document.id, session)
 
-    rule_based = [s for s in candidates if s.source_span_id == table_span.id]
+    rule_based = [s for s in statements if s.source_span_id == table_span.id]
     assert len(rule_based) >= 8  # 4 个指标 × 2 年
-    assert all(s.claim_type == "reported_claim" for s in rule_based)
-    assert any(s.structured_fields["observed_period"] == "2025-12-31" for s in rule_based)
-    assert all(table_span.verbatim_text[s.quote_start:s.quote_end] == s.quote for s in rule_based)
+    assert all(s.kind == "disclosed_fact" for s in rule_based)
+    assert any(s.observed_period == date(2025, 12, 31) for s in rule_based)
 
     run = session.scalars(select(AIRun).where(AIRun.kind == "extract")).one()
     assert "rule-based" in run.output_summary
-
-
-def test_extractor_keeps_primary_disclosure_table_candidates_as_disclosed_facts(
-    session, document_service
-):
-    document = document_service.freeze(
-        raw=TABLE_SNIPPET.encode(),
-        source_url="https://issuer.example/disclosure/q1",
-        source_authority="primary_disclosure",
-    )
-    document_service.add_span(
-        document_version_id=document.id,
-        locator={"page": 1},
-        verbatim_text=TABLE_SNIPPET,
-    )
-
-    candidates = StatementExtractor(LLMClient(model_version="mock-test", mock=True)).extract(document.id, session)
-
-    assert candidates
-    assert all(candidate.claim_type == "disclosed_fact" for candidate in candidates)
-    assert all(candidate.authority_level == "primary_disclosure" for candidate in candidates)
 
 
 def test_extractor_commits_rule_fallback_before_narrative_provider(
@@ -199,18 +176,15 @@ def test_extractor_commits_rule_fallback_before_narrative_provider(
             "statements": [
                 {
                     "span_id": str(narrative_span.id),
-                        "quote": narrative_span.verbatim_text,
-                        "quote_start": 0,
-                        "quote_end": len(narrative_span.verbatim_text),
-                        "normalized_text": "管理层表示订单能见度良好。",
+                    "normalized_text": "管理层表示订单能见度良好。",
                     "kind": "management_attribution",
                 }
             ]
         }
 
     with patch.object(client, "chat_json", side_effect=provider):
-        candidates = StatementExtractor(client).extract(document.id, session)
-    assert any(candidate.source_span_id == narrative_span.id for candidate in candidates)
+        statements = StatementExtractor(client).extract(document.id, session)
+    assert any(statement.source_span_id == narrative_span.id for statement in statements)
 
 
 def test_extractor_skips_llm_when_all_spans_are_tables(
@@ -227,8 +201,8 @@ def test_extractor_skips_llm_when_all_spans_are_tables(
             raise AssertionError("LLM must not be called for table-only spans")
 
     client = _FailIfCalled(model_version="mock-test", mock=True)
-    candidates = StatementExtractor(client).extract(document.id, session)
-    assert candidates
+    statements = StatementExtractor(client).extract(document.id, session)
+    assert statements
 
     run = session.scalars(select(AIRun).where(AIRun.kind == "extract")).one()
     assert run.status == "success"
@@ -243,36 +217,8 @@ def test_extractor_llm_still_handles_narrative_spans(
         verbatim_text="管理层表示订单能见度良好，预计明年交付量将增长",
     )
     client = LLMClient(model_version="mock-test", mock=True)
-    candidates = StatementExtractor(client).extract(document.id, session)
-    assert len(candidates) == 1
-    assert candidates[0].claim_type in {
+    statements = StatementExtractor(client).extract(document.id, session)
+    assert len(statements) == 1
+    assert statements[0].kind in {
         "management_attribution", "forecast",
     }
-
-
-def test_extractor_persists_fixed_safe_error_instead_of_provider_exception(
-    session, document_service, document
-):
-    document_service.add_span(
-        document_version_id=document.id,
-        locator={"page": 1},
-        verbatim_text="管理层表示订单能见度良好",
-    )
-
-    class CredentialBearingFailureClient:
-        model_version = "safe-error-test-v1"
-
-        def chat_json(self, messages, schema_hint=""):
-            raise RuntimeError(
-                "Bearer credential-value "
-                "https://provider.example/run?access_token=credential-value"
-            )
-
-    with pytest.raises(RuntimeError):
-        StatementExtractor(CredentialBearingFailureClient()).extract(
-            document.id, session
-        )
-
-    run = session.scalars(select(AIRun).where(AIRun.kind == "extract")).one()
-    assert run.error == "AI operation failed"
-    assert "credential-value" not in run.error

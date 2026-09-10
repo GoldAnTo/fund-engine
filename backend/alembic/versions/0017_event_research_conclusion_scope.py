@@ -20,9 +20,6 @@ def upgrade() -> None:
     # current when they were drafted. Preserve them with NULL for audit; the
     # publish service requires a non-NULL, current scope and forces a new draft.
     if op.get_bind().dialect.name == "sqlite":
-        # SQLite cannot add a foreign-key constraint to an existing table.
-        # Batch mode performs the safe copy-and-replace operation for a local
-        # demonstration database while PostgreSQL retains the native ALTER.
         with op.batch_alter_table("event_research_conclusions") as batch:
             batch.add_column(sa.Column("scope_version_id", sa.Uuid(), nullable=True))
             batch.create_foreign_key(
@@ -55,9 +52,16 @@ def downgrade() -> None:
         "ix_event_research_conclusions_scope_version",
         table_name="event_research_conclusions",
     )
-    op.drop_constraint(
-        "fk_event_research_conclusions_scope_version",
-        "event_research_conclusions",
-        type_="foreignkey",
-    )
-    op.drop_column("event_research_conclusions", "scope_version_id")
+    if op.get_bind().dialect.name == "sqlite":
+        with op.batch_alter_table("event_research_conclusions") as batch:
+            batch.drop_constraint(
+                "fk_event_research_conclusions_scope_version", type_="foreignkey"
+            )
+            batch.drop_column("scope_version_id")
+    else:
+        op.drop_constraint(
+            "fk_event_research_conclusions_scope_version",
+            "event_research_conclusions",
+            type_="foreignkey",
+        )
+        op.drop_column("event_research_conclusions", "scope_version_id")

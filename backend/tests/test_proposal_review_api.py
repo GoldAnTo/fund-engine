@@ -17,112 +17,36 @@ import pytest
 from sqlalchemy import select
 
 from app.models.ledger import (
-    AIAssessment,
     CaseDocumentVersion,
     DocumentVersion,
     EvidenceLink,
-    EvidenceSnapshot,
     ResearchCase,
     SourceSpan,
     SourceStatement,
     Thesis,
 )
 from app.models.proposals import Proposal, ProposalReviewDecision
-from app.models.operational import ResearchRun, ResearchTask
-from app.models.research_monitor import ResearchRunEvent
 from app.models.versions import EvidenceLinkVersion
 from app.repositories.operational import TaskRepository
-from app.services.auto_research import AutoResearchService
 
 
 def _seed_proposal(cmd_session, *, research_case_id=None) -> Proposal:
-    proposal = _seed_event_evidence_proposal(
-        cmd_session, source_url=f"https://www.cninfo.com.cn/new/disclosure/detail?announcementId={uuid.uuid4()}"
-    )
-    assert research_case_id is None, "use an explicitly scoped fixture for another Case"
-    cmd_session.add(proposal)
-    cmd_session.flush()
-    return proposal
+    from app.repositories.proposals import ProposalRepository
 
-
-def _seed_waiting_run_with_proposals(cmd_session, *, proposal_count: int):
-    """Create one run-local proposal gate per requested proposal."""
-    now = datetime.now(timezone.utc)
-    case = ResearchCase(
-        title="run review reconciliation",
-        industry_topic="testing",
-        created_by="tester",
-        created_at=now,
+    repo = ProposalRepository(cmd_session)
+    return repo.add_proposal(
+        kind="evidence_link",
+        payload={
+            "source_statement_id": str(uuid.uuid4()),
+            "role": "supports",
+            "reason": "orders rose",
+            "scope": {"segment": "DC"},
+        },
+        target_context={"thesis_id": str(uuid.uuid4()), "entity_type": "evidence_link"},
+        proposed_by_type="ai",
+        proposed_by_ref="mock",
+        research_case_id=research_case_id,
     )
-    cmd_session.add(case)
-    cmd_session.flush()
-    thesis = Thesis(
-        research_case_id=case.id,
-        statement="review all outputs before completing the run",
-        created_by="tester",
-        created_at=now,
-    )
-    cmd_session.add(thesis)
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_session, case.id)
-    run = ResearchRun(
-        research_case_id=case.id,
-        status="waiting_for_review",
-        stage="stopped",
-        round=1,
-        max_rounds=1,
-        budget=10,
-        budget_used=1,
-        stop_reason="max_rounds_reached",
-        created_at=now,
-        updated_at=now,
-    )
-    cmd_session.add(run)
-    cmd_session.flush()
-
-    proposals = []
-    for index in range(proposal_count):
-        proposal = Proposal(
-            kind="evidence_link",
-            payload={"statement": f"candidate {index}"},
-            target_context={
-                "thesis_id": str(thesis.id),
-                "entity_type": "evidence_link",
-            },
-            proposed_by_type="ai",
-            proposed_by_ref="test-run",
-            proposed_at=now,
-            research_case_id=case.id,
-        )
-        cmd_session.add(proposal)
-        cmd_session.flush()
-        proposals.append(proposal)
-        TaskRepository(cmd_session).add_task(
-            title="Review automatic-research proposal",
-            task_type="review_proposal",
-            ref_type="proposal",
-            ref_id=proposal.id,
-            research_case_id=case.id,
-        )
-
-    cmd_session.add(
-        ResearchTask(
-            run_id=run.id,
-            research_case_id=case.id,
-            thesis_id=thesis.id,
-            status="done",
-            stage="completed",
-            round=1,
-            task_type="result",
-            query="reviewable outputs",
-            result={
-                "proposed_proposal_ids": [str(proposal.id) for proposal in proposals]
-            },
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    return run, proposals
 
 
 def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
@@ -174,8 +98,6 @@ def _seed_event_evidence_proposal(cmd_session, *, source_url: str) -> Proposal:
     )
     cmd_session.add(statement)
     cmd_session.flush()
-    from tests.tenant_admission import admit_case
-    admit_case(cmd_session, case.id, document_version_id=document.id)
     return Proposal(
         kind="evidence_link",
         payload={
@@ -242,7 +164,6 @@ def test_invalid_event_source_decision_is_rejected_without_publication(
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -397,7 +318,6 @@ def test_modified_event_proposal_rejects_invalid_replacement_source(
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 
@@ -589,7 +509,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
         status="open",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     in_progress_other = task_repo.add_task(
         title="Review other proposal",
@@ -597,7 +516,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
         status="in_progress",
         ref_type="proposal",
         ref_id=other.id,
-        research_case_id=other.research_case_id,
     )
     cmd_session.commit()
 
@@ -632,159 +550,6 @@ def test_decision_closes_review_proposal_task(cmd_client, cmd_session):
     )
 
 
-def test_deciding_final_run_proposal_reconciles_run_once(cmd_client, cmd_session):
-    run, proposals = _seed_waiting_run_with_proposals(cmd_session, proposal_count=2)
-    proposal, already_decided = proposals
-    already_decided.status = "decided"
-    TaskRepository(cmd_session).close_review_task(
-        "review_proposal", "proposal", already_decided.id
-    )
-    cmd_session.commit()
-
-    response = cmd_client.post(
-        f"/api/v1/review-proposals/{proposal.id}/decisions",
-        json={
-            "outcome": "rejected",
-            "reason": "not supported",
-            "expected_version": 1,
-            "reviewer_id": "human:alice",
-        },
-    )
-
-    assert response.status_code == 201, response.text
-    cmd_session.refresh(run)
-    assert run.status == "succeeded"
-    assert run.stage == "complete"
-    events = list(
-        cmd_session.scalars(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run.id)
-            .where(ResearchRunEvent.stage == "review_complete")
-        )
-    )
-    assert len(events) == 1
-    assert events[0].payload_json["trigger_ref"] == f"proposal:{proposal.id}"
-
-    assert not AutoResearchService(cmd_session).reconcile_run(
-        run.id, trigger_ref=f"proposal:{proposal.id}"
-    )
-    assert (
-        len(
-            cmd_session.scalars(
-                select(ResearchRunEvent)
-                .where(ResearchRunEvent.run_id == run.id)
-                .where(ResearchRunEvent.stage == "review_complete")
-            ).all()
-        )
-        == 1
-    )
-
-
-def test_deciding_proposal_keeps_run_waiting_for_other_run_local_proposal(
-    cmd_client, cmd_session
-):
-    run, proposals = _seed_waiting_run_with_proposals(cmd_session, proposal_count=2)
-    proposal, _other_open_proposal = proposals
-    cmd_session.commit()
-
-    response = cmd_client.post(
-        f"/api/v1/review-proposals/{proposal.id}/decisions",
-        json={
-            "outcome": "rejected",
-            "reason": "not supported",
-            "expected_version": 1,
-            "reviewer_id": "human:alice",
-        },
-    )
-
-    assert response.status_code == 201, response.text
-    cmd_session.refresh(run)
-    assert run.status == "waiting_for_review"
-    assert (
-        cmd_session.scalars(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run.id)
-            .where(ResearchRunEvent.stage == "review_complete")
-        ).all()
-        == []
-    )
-
-
-def test_deciding_proposal_keeps_run_waiting_for_run_local_assessment(
-    cmd_client, cmd_session
-):
-    run, (proposal,) = _seed_waiting_run_with_proposals(
-        cmd_session, proposal_count=1
-    )
-    now = datetime.now(timezone.utc)
-    thesis = cmd_session.scalar(
-        select(Thesis).where(Thesis.research_case_id == run.research_case_id)
-    )
-    assert thesis is not None
-    snapshot = EvidenceSnapshot(
-        thesis_id=thesis.id,
-        cutoff=now,
-        evidence_link_ids=[],
-        created_at=now,
-    )
-    cmd_session.add(snapshot)
-    cmd_session.flush()
-    assessment = AIAssessment(
-        snapshot_id=snapshot.id,
-        conclusion="insufficient_evidence",
-        rationale="needs another source",
-        gaps=["another source"],
-        created_at=now,
-    )
-    cmd_session.add(assessment)
-    cmd_session.flush()
-    cmd_session.add(
-        ResearchTask(
-            run_id=run.id,
-            research_case_id=run.research_case_id,
-            thesis_id=thesis.id,
-            status="done",
-            stage="completed",
-            round=1,
-            task_type="result",
-            query="provisional assessment",
-            result={"assessment_id": str(assessment.id)},
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    TaskRepository(cmd_session).add_task(
-        title="Review provisional assessment",
-        task_type="review_assessment",
-        ref_type="ai_assessment",
-        ref_id=assessment.id,
-        research_case_id=run.research_case_id,
-    )
-    cmd_session.commit()
-
-    response = cmd_client.post(
-        f"/api/v1/review-proposals/{proposal.id}/decisions",
-        json={
-            "outcome": "rejected",
-            "reason": "not supported",
-            "expected_version": 1,
-            "reviewer_id": "human:alice",
-        },
-    )
-
-    assert response.status_code == 201, response.text
-    cmd_session.refresh(run)
-    assert run.status == "waiting_for_review"
-    assert (
-        cmd_session.scalars(
-            select(ResearchRunEvent)
-            .where(ResearchRunEvent.run_id == run.id)
-            .where(ResearchRunEvent.stage == "review_complete")
-        ).all()
-        == []
-    )
-
-
 def test_confirmed_decision_closes_in_progress_review_task(
     cmd_client, cmd_session
 ):
@@ -795,7 +560,6 @@ def test_confirmed_decision_closes_in_progress_review_task(
         status="in_progress",
         ref_type="proposal",
         ref_id=proposal.id,
-        research_case_id=proposal.research_case_id,
     )
     cmd_session.commit()
 

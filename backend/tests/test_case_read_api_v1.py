@@ -16,7 +16,6 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from tests.tenant_admission import admit_case
 
 
 def test_case_list_returns_navigation_rows(api_client, workbench_case):
@@ -28,13 +27,11 @@ def test_case_list_returns_navigation_rows(api_client, workbench_case):
     assert payload["items"][0]["title"] == workbench_case.case.title
 
 
-def test_case_list_paginates_with_cursor(api_client, research_service, session):
+def test_case_list_paginates_with_cursor(api_client, research_service):
     cases = [
         research_service.add_case(title=f"c{i}", industry_topic="t", created_by="u")
         for i in range(3)
     ]
-    for case in cases:
-        admit_case(session, case.id)
     page1 = api_client.get("/api/v1/research-cases", params={"limit": 2})
     assert page1.status_code == 200
     p1 = page1.json()
@@ -251,7 +248,6 @@ def test_dossier_excludes_data_created_after_cutoff(api_client, session):
         )
     )
     session.flush()
-    admit_case(session, case.id, document_version_id=version.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/dossier",
@@ -373,7 +369,6 @@ def test_dossier_excludes_link_created_after_cutoff_with_backfilled_available_at
         )
     )
     session.flush()
-    admit_case(session, case.id, document_version_id=version.id)
 
     response = api_client.get(
         f"/api/v1/research-cases/{case.id}/dossier",

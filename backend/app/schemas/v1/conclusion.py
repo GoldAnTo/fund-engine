@@ -62,6 +62,7 @@ class KeyFactorRowDTO(V1Model):
     difference_explanation: str
     scope_warning: str | None
     falsifier: str
+    impact_object: str
 
 
 class ComparisonCellDTO(V1Model):

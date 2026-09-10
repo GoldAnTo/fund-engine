@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import uuid
-import json
 from datetime import datetime, timezone
 import hashlib
 
-import httpx
-import pytest
 from sqlalchemy import event as sqlalchemy_event, select
 
 from app.models.event_research import (
-    CaseRelation,
     EventResearchBrief,
     EventResearchConclusion,
     EventResearchFactorDraft,
@@ -18,6 +14,7 @@ from app.models.event_research import (
     EventResearchScopeFactor,
     EventResearchScopeVersion,
 )
+from app.models.event_impact import EventImpactHypothesis, EventImpactHypothesisAssessment
 from app.models.ledger import (
     CaseDocumentVersion,
     DocumentVersion,
@@ -26,16 +23,11 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from app.models.operational import EventResearchLifecycle, Job, ResearchRun
+from app.models.operational import EventResearchLifecycle, ResearchRun
 from app.models.proposals import Proposal
-from app.models.research_preparation import ResearchPreparation
-from app.models.ledger import CaseTenantAdmission, ResearchCase
 from app.repositories.operational import TaskRepository
 from app.services.event_conclusion import EventConclusionService
 from app.services.event_review_queue import EventReviewQueueService
-from app.services.research_preparation import ResearchPreparationService
-from app.services.source_governance import SourceGovernanceService
-from app.domain.research_preparation import preparation_input_fingerprint
 
 
 def _confirmed_event() -> dict:
@@ -52,9 +44,6 @@ def _confirmed_event() -> dict:
             "盈利前景与市场预期可能存在分歧",
             "估值重定价可能放大盘后波动",
         ],
-        # Existing workflow tests deliberately exercise the legacy Case path.
-        # New intake must use the API default and is covered separately below.
-        "research_protocol_required": False,
         "created_by": "xiongjiali",
     }
 
@@ -144,39 +133,7 @@ def _evidence_proposal(
     return proposal
 
 
-def _mark_preparation_authorized(cmd_session, case_id: uuid.UUID) -> None:
-    """Fixture helper for assertions about the post-authorization lifecycle."""
-    now = datetime.now(timezone.utc)
-    run = ResearchRun(research_case_id=case_id, created_at=now, updated_at=now)
-    cmd_session.add(run)
-    cmd_session.flush()
-    preparation = cmd_session.scalar(
-        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
-    )
-    assert preparation is not None
-    preparation.status = "authorized"
-    preparation.research_run_id = run.id
-    preparation.authorized_evidence_plan = {"items": []}
-
-
-def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(
-    cmd_client, monkeypatch
-) -> None:
-    from app.api.v1 import event_research as event_research_api
-    from app.services.event_extraction import EventExtractionService
-
-    class ValidExtractionClient:
-        def chat_json(self, messages, schema_hint):
-            return {
-                "research_question": "新指引是否改变了市场预期？",
-                "candidate_factors": ["新指引", "盘后交易", "市场预期"],
-            }
-
-    monkeypatch.setattr(
-        event_research_api,
-        "EventExtractionService",
-        lambda: EventExtractionService(client=ValidExtractionClient()),
-    )
+def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(cmd_client) -> None:
     response = cmd_client.post(
         "/api/v1/event-research/extract",
         json={
@@ -194,227 +151,22 @@ def test_extract_event_keeps_unknown_fields_null_and_marks_confirmation(
     assert len(body["candidate_factors"]) in {3, 4, 5}
 
 
-def test_extract_event_maps_provider_setup_failure_to_safe_503(
-    cmd_client, monkeypatch
-) -> None:
-    monkeypatch.setattr(
-        "app.services.event_extraction.LLMClient.from_env",
-        lambda: (_ for _ in ()).throw(
-            RuntimeError("provider setup failed with secret sk-private")
-        ),
-    )
+def test_create_event_case_enqueues_research_without_manual_run_button(cmd_client, cmd_session) -> None:
+    response = cmd_client.post("/api/v1/event-research", json=_confirmed_event())
 
-    response = cmd_client.post(
-        "/api/v1/event-research/extract",
-        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
-    )
-
-    assert response.status_code == 503
-    error = response.json()["error"]
-    assert error["code"] == "upstream_unavailable"
-    assert (
-        error["message"]
-        == "event extraction LLM is unavailable or returned an invalid response"
-    )
-    assert "sk-private" not in response.text
-
-
-def test_extract_event_redacts_provider_http_transport_exception(
-    cmd_client, monkeypatch
-) -> None:
-    class HttpFailureClient:
-        def chat_json(self, messages, schema_hint):
-            raise httpx.ConnectError(
-                "provider HTTP failure exposed secret sk-private"
-            )
-
-    monkeypatch.setattr(
-        "app.services.event_extraction.LLMClient.from_env", HttpFailureClient
-    )
-
-    response = cmd_client.post(
-        "/api/v1/event-research/extract",
-        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
-    )
-
-    assert response.status_code == 503
-    error = response.json()["error"]
-    assert error["code"] == "upstream_unavailable"
-    assert (
-        error["message"]
-        == "event extraction LLM is unavailable or returned an invalid response"
-    )
-    assert "sk-private" not in response.text
-    assert "provider HTTP failure" not in response.text
-
-
-@pytest.mark.parametrize("boundary", ["setup", "call"])
-@pytest.mark.parametrize(
-    "programming_error",
-    [TypeError, KeyError, NameError, AssertionError, AttributeError],
-)
-def test_extract_event_does_not_map_programming_errors_to_upstream_503(
-    cmd_client, monkeypatch, programming_error, boundary
-) -> None:
-    if boundary == "setup":
-        def broken_client_factory():
-            raise programming_error("programming defect")
-
-        monkeypatch.setattr(
-            "app.services.event_extraction.LLMClient.from_env",
-            broken_client_factory,
-        )
-    else:
-        class BrokenClient:
-            def chat_json(self, messages, schema_hint):
-                raise programming_error("programming defect")
-
-        monkeypatch.setattr(
-            "app.services.event_extraction.LLMClient.from_env", BrokenClient
-        )
-
-    response = cmd_client.post(
-        "/api/v1/event-research/extract",
-        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
-    )
-
-    assert response.status_code == 500
-    assert "upstream_unavailable" not in response.text
-
-
-def test_extract_event_does_not_map_client_value_error_to_upstream_503(
-    cmd_client, monkeypatch
-) -> None:
-    class BrokenClient:
-        def chat_json(self, messages, schema_hint):
-            raise ValueError("programming defect")
-
-    monkeypatch.setattr(
-        "app.services.event_extraction.LLMClient.from_env", BrokenClient
-    )
-    response = cmd_client.post(
-        "/api/v1/event-research/extract",
-        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
-    )
-
-    assert response.status_code == 500
-    assert "upstream_unavailable" not in response.text
-
-
-def test_extract_event_maps_provider_call_failure_to_safe_503(
-    cmd_client, monkeypatch
-) -> None:
-    from app.api.v1 import event_research as event_research_api
-    from app.services.event_extraction import EventExtractionService
-
-    class FailingExtractionClient:
-        def chat_json(self, messages, schema_hint):
-            raise httpx.ConnectError("provider call exposed secret sk-private")
-
-    monkeypatch.setattr(
-        event_research_api,
-        "EventExtractionService",
-        lambda: EventExtractionService(client=FailingExtractionClient()),
-    )
-
-    response = cmd_client.post(
-        "/api/v1/event-research/extract",
-        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
-    )
-
-    assert response.status_code == 503
-    error = response.json()["error"]
-    assert error["code"] == "upstream_unavailable"
-    assert (
-        error["message"]
-        == "event extraction LLM is unavailable or returned an invalid response"
-    )
-    assert "sk-private" not in response.text
-
-
-def test_extract_event_maps_invalid_provider_result_to_safe_503(
-    cmd_client, monkeypatch
-) -> None:
-    from app.api.v1 import event_research as event_research_api
-    from app.services.event_extraction import EventExtractionService
-
-    class InvalidExtractionClient:
-        def chat_json(self, messages, schema_hint):
-            return {
-                "research_question": "哪些因素需要验证？",
-                "candidate_factors": ["重复因素", "重复因素"],
-            }
-
-    monkeypatch.setattr(
-        event_research_api,
-        "EventExtractionService",
-        lambda: EventExtractionService(client=InvalidExtractionClient()),
-    )
-
-    response = cmd_client.post(
-        "/api/v1/event-research/extract",
-        json={"raw_input": "公司宣布新指引，盘后下跌。", "source_url": None},
-    )
-
-    assert response.status_code == 503
-    error = response.json()["error"]
-    assert error["code"] == "upstream_unavailable"
-    assert (
-        error["message"]
-        == "event extraction LLM is unavailable or returned an invalid response"
-    )
-
-
-def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_run(cmd_client, cmd_session) -> None:
-    payload = _confirmed_event()
-    payload.update({"source_type": "uploaded_file", "source_metadata": {"file_name": "event-note.txt", "mime_type": "text/plain", "byte_size": 42}})
-    response = cmd_client.post("/api/v1/event-research", json=payload)
-
-    assert response.status_code == 201, response.json()
+    assert response.status_code == 201
     body = response.json()
     case_id = body["case_id"]
-    assert body["lifecycle"]["status"] == "awaiting_key_review"
-    assert body["lifecycle"]["active_run_id"] is None
-    assert body["lifecycle"]["status_summary"] == "资料已冻结；系统正在准备候选陈述、研究协议草案和补证计划"
-    assert body["lifecycle"]["current_gap"] == "研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动"
+    assert body["lifecycle"]["status"] == "researching"
+    assert body["lifecycle"]["active_run_id"]
     assert body["lifecycle"]["next_human_action"] is None
 
     parsed_case_id = uuid.UUID(case_id)
     assert cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"])).research_case_id == parsed_case_id
-    brief = cmd_session.get(EventResearchBrief, uuid.UUID(body["brief_id"]))
-    assert brief.source_type == "uploaded_file"
-    assert brief.source_metadata["file_name"] == "event-note.txt"
-    assert cmd_session.get(EventResearchLifecycle, parsed_case_id).active_run_id is None
-    admission = cmd_session.scalar(
-        select(CaseTenantAdmission).where(
-            CaseTenantAdmission.research_case_id == parsed_case_id
-        )
-    )
-    assert admission is not None
-    preparation = cmd_session.scalar(
-        select(ResearchPreparation).where(
-            ResearchPreparation.research_case_id == parsed_case_id
-        )
-    )
-    assert preparation is not None
-    assert preparation.status == "preparing"
-    assert preparation.research_run_id is None
-    assert preparation.parse_claims_state == "queued"
-    jobs = list(
-        cmd_session.scalars(
-            select(Job).where(
-                Job.kind == "prepare_research",
-                Job.target_type == "research_preparation",
-                Job.target_id == preparation.id,
-                Job.status == "queued",
-            )
-        )
-    )
-    assert len(jobs) == 1
-    assert jobs[0].correlation_id == f"{preparation.id}:1:parse_claims"
+    assert cmd_session.get(EventResearchLifecycle, parsed_case_id).active_run_id
     assert len(cmd_session.query(EventResearchFactorDraft).filter_by(research_case_id=parsed_case_id).all()) == 3
     assert len(cmd_session.query(Thesis).filter_by(research_case_id=parsed_case_id).all()) == 3
-    assert cmd_session.query(ResearchRun).filter_by(research_case_id=parsed_case_id).count() == 0
+    assert cmd_session.get(ResearchRun, uuid.UUID(body["lifecycle"]["active_run_id"]))
     scope = cmd_session.scalar(
         select(EventResearchScopeVersion).where(
             EventResearchScopeVersion.research_case_id == parsed_case_id,
@@ -429,360 +181,6 @@ def test_create_event_case_freezes_intake_and_waits_for_human_review_before_any_
             .order_by(EventResearchScopeFactor.position)
         )
     ) == _confirmed_event()["candidate_factors"]
-
-
-def test_uploaded_case_creation_uses_the_uploaded_original_as_its_initial_admission_and_preparation_input(cmd_client, cmd_session) -> None:
-    payload = _confirmed_event()
-    payload["raw_input"] = "这是仅供识别事件的摘要，绝不能成为准备任务的原文输入。"
-    payload["source_type"] = "uploaded_file"
-    payload["source_metadata"] = {"authority_level": "user_supplied"}
-    uploaded_original = "这是上传原件的完整正文，必须成为冻结原文。".encode("utf-8")
-
-    response = cmd_client.post(
-        "/api/v1/event-research/uploaded",
-        data={"payload": json.dumps(payload)},
-        files={"file": ("original.txt", uploaded_original, "text/plain")},
-    )
-
-    assert response.status_code == 201, response.json()
-    case_id = uuid.UUID(response.json()["case_id"])
-    admission = cmd_session.scalar(select(CaseTenantAdmission).where(CaseTenantAdmission.research_case_id == case_id))
-    preparation = cmd_session.scalar(select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id))
-    scope = cmd_session.scalar(select(EventResearchScopeVersion).where(EventResearchScopeVersion.research_case_id == case_id))
-    assert admission is not None
-    assert preparation is not None
-    assert scope is not None
-    document = cmd_session.get(DocumentVersion, admission.initial_document_version_id)
-    assert document is not None
-    assert document.title == "original.txt"
-    assert document.source_url.startswith("upload://")
-    spans = list(cmd_session.scalars(select(SourceSpan.verbatim_text).where(SourceSpan.document_version_id == document.id)))
-    assert spans == [uploaded_original.decode("utf-8")]
-    assert preparation.input_fingerprint == preparation_input_fingerprint(document.id, scope.id)
-
-
-def test_create_event_case_rolls_back_every_staged_row_when_preparation_creation_fails(
-    cmd_client, cmd_session, monkeypatch
-) -> None:
-    def fail_after_staging(self, case_id, *, input_fingerprint, actor):
-        raise ValueError("preparation staging failed")
-
-    monkeypatch.setattr(
-        ResearchPreparationService, "create_for_case", fail_after_staging
-    )
-
-    response = cmd_client.post("/api/v1/event-research", json=_confirmed_event())
-
-    assert response.status_code == 422
-    assert "preparation staging failed" in response.json()["error"]["message"]
-    assert cmd_session.scalars(select(ResearchCase)).all() == []
-    assert cmd_session.scalars(select(DocumentVersion)).all() == []
-    assert cmd_session.scalars(select(EventResearchBrief)).all() == []
-    assert cmd_session.scalars(select(ResearchPreparation)).all() == []
-    assert cmd_session.scalars(select(Job)).all() == []
-
-
-def test_public_url_intake_keeps_the_url_type_and_unverified_snapshot_boundary(
-    cmd_client, cmd_session
-) -> None:
-    payload = _confirmed_event()
-    payload.update(
-        {
-            "source_type": "public_url",
-            "source_url": "https://www.szse.cn/disclosure/listed/notice/index.html",
-            "source_metadata": {"permissions": {"ai_processing": False, "display": True}},
-        }
-    )
-
-    response = cmd_client.post("/api/v1/event-research", json=payload)
-
-    assert response.status_code == 201
-    case_id = uuid.UUID(response.json()["case_id"])
-    brief = cmd_session.get(EventResearchBrief, uuid.UUID(response.json()["brief_id"]))
-    assert brief is not None
-    assert brief.source_type == "public_url"
-    document = cmd_session.scalar(
-        select(DocumentVersion)
-        .join(CaseDocumentVersion, CaseDocumentVersion.document_version_id == DocumentVersion.id)
-        .where(CaseDocumentVersion.research_case_id == case_id)
-    )
-    assert document is not None
-    assert document.source_url == payload["source_url"]
-    assert document.parser_version == "user-pasted-public-url-v1"
-    documents = cmd_client.get("/api/v1/documents", params={"case_id": str(case_id)})
-    item = documents.json()["items"][0]
-    assert item["source_contract"]["source_type"] == "public_url"
-    assert item["source_contract"]["permissions"]["ai_processing"] is False
-    assert "不得作为正式证据" in item["source_contract"]["downstream_restrictions"][0]
-
-
-def test_public_url_intake_requires_a_public_url(cmd_client) -> None:
-    payload = _confirmed_event()
-    payload.update({"source_type": "public_url", "source_url": None})
-
-    response = cmd_client.post("/api/v1/event-research", json=payload)
-
-    assert response.status_code == 422
-
-
-def test_protocol_required_event_cannot_start_a_research_run_before_its_gate_is_ready(cmd_client) -> None:
-    payload = _confirmed_event()
-    payload["research_protocol_required"] = True
-    created = cmd_client.post("/api/v1/event-research", json=payload).json()
-
-    response = cmd_client.post(
-        f"/api/v1/research-cases/{created['case_id']}/runs",
-        json={"max_rounds": 1, "budget": 10},
-    )
-
-    assert response.status_code == 422
-    assert "missing_outcome_binding" in response.json()["error"]["message"]
-
-
-def test_new_event_requires_the_research_protocol_by_default(cmd_client, cmd_session) -> None:
-    payload = _confirmed_event()
-    payload.pop("research_protocol_required")
-    created = cmd_client.post("/api/v1/event-research", json=payload)
-
-    assert created.status_code == 201
-    theses = list(cmd_session.scalars(
-        select(Thesis).where(Thesis.research_case_id == uuid.UUID(created.json()["case_id"]))
-    ))
-    assert theses and all(thesis.research_protocol_required for thesis in theses)
-
-    response = cmd_client.post(
-        f"/api/v1/research-cases/{created.json()['case_id']}/runs",
-        json={"max_rounds": 1, "budget": 10},
-    )
-    assert response.status_code == 422
-    assert "missing_outcome_binding" in response.json()["error"]["message"]
-
-
-def test_research_network_keeps_reviewed_relations_separate_from_ai_candidates(
-    cmd_client, cmd_session
-) -> None:
-    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    other_payload = _confirmed_event()
-    other_payload["event_title"] = "Alphabet 后续验证事件"
-    other = cmd_client.post("/api/v1/event-research", json=other_payload).json()
-    now = datetime.now(timezone.utc)
-    cmd_session.add_all([
-        CaseRelation(
-            source_case_id=uuid.UUID(first["case_id"]),
-            target_case_id=uuid.UUID(other["case_id"]),
-            relation_type="shared_driver",
-            reason="两项研究都需要验证资本开支的预期差。",
-            created_by="human:researcher",
-            review_state="reviewed",
-            created_at=now,
-        ),
-        CaseRelation(
-            source_case_id=uuid.UUID(other["case_id"]),
-            target_case_id=uuid.UUID(first["case_id"]),
-            relation_type="potential_conflict",
-            reason="AI 发现了可能冲突的解释，等待人工复核。",
-            created_by="ai:relation-proposal",
-            review_state="machine_generated",
-            created_at=now,
-        ),
-    ])
-    cmd_session.commit()
-
-    response = cmd_client.get("/api/v1/event-research/network")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["reviewed_relations"][0]["relation_type"] == "shared_driver"
-    assert payload["reviewed_relations"][0]["reason"] == "两项研究都需要验证资本开支的预期差。"
-    assert payload["candidate_relations"][0]["review_state"] == "machine_generated"
-    assert payload["candidate_relations"][0]["target_case"]["title"] == "Alphabet 财报后股价下跌"
-
-
-def test_case_relations_only_returns_associations_for_the_current_case(
-    cmd_client, cmd_session
-) -> None:
-    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    second_payload = _confirmed_event()
-    second_payload["event_title"] = "Alphabet 后续验证事件"
-    second = cmd_client.post("/api/v1/event-research", json=second_payload).json()
-    third_payload = _confirmed_event()
-    third_payload["event_title"] = "无关的第三个事件"
-    third = cmd_client.post("/api/v1/event-research", json=third_payload).json()
-    now = datetime.now(timezone.utc)
-    cmd_session.add_all([
-        CaseRelation(source_case_id=uuid.UUID(first["case_id"]), target_case_id=uuid.UUID(second["case_id"]), relation_type="shared_driver", reason="共同验证资本开支。", created_by="human:researcher", review_state="reviewed", created_at=now),
-        CaseRelation(source_case_id=uuid.UUID(second["case_id"]), target_case_id=uuid.UUID(third["case_id"]), relation_type="potential_conflict", reason="与当前 Case 无关。", created_by="ai:relation-proposal", review_state="machine_generated", created_at=now),
-    ])
-    cmd_session.commit()
-
-    response = cmd_client.get(f"/api/v1/event-research/{first['case_id']}/relations")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert [relation["target_case"]["case_id"] for relation in payload["reviewed_relations"]] == [second["case_id"]]
-    assert payload["candidate_relations"] == []
-
-
-def test_existing_case_material_is_frozen_and_attached_without_starting_a_new_case_or_run(
-    cmd_client, cmd_session
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = uuid.UUID(created["case_id"])
-    lifecycle_before = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle_before is not None
-
-    response = cmd_client.post(
-        f"/api/v1/event-research/{case_id}/materials",
-        json={
-            "raw_input": "公司补充说明订单交付节奏，需进入现有 Case 由研究员核验。",
-            "source_type": "uploaded_file",
-            "source_metadata": {
-                "file_name": "delivery-note.txt",
-                "mime_type": "text/plain",
-                "authority_level": "primary_disclosure",
-            },
-            "actor": "human:researcher",
-        },
-    )
-
-    assert response.status_code == 201
-    payload = response.json()
-    document = cmd_session.get(DocumentVersion, uuid.UUID(payload["document_version_id"]))
-    assert document is not None
-    assert document.parser_version == "uploaded-text-v1"
-    assert cmd_session.scalar(
-        select(CaseDocumentVersion).where(
-            CaseDocumentVersion.research_case_id == case_id,
-            CaseDocumentVersion.document_version_id == document.id,
-        )
-    ) is not None
-    lifecycle_after = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle_after is not None
-    assert lifecycle_after.status == lifecycle_before.status
-    assert lifecycle_after.active_run_id is None
-
-
-def test_document_read_exposes_the_frozen_provider_record_for_reproducibility(
-    cmd_client,
-    cmd_session,
-) -> None:
-    from app.models.source_governance import ProviderRecord
-
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = created["case_id"]
-    attached = cmd_client.post(
-        f"/api/v1/event-research/{case_id}/materials",
-        json={
-            "raw_input": "供应商研报的原始记录必须可回到具体资料。",
-            "source_type": "licensed_provider",
-            "source_metadata": {
-                "provider_name": "聚源",
-                "provider_record_id": "report-2026-003",
-                "request_scope": {"report_type": "industry"},
-                "retrieval_reference": "provider://report-2026-003",
-                "permissions": {"ai_processing": True, "display": True},
-            },
-            "actor": "human:researcher",
-        },
-    )
-    assert attached.status_code == 201
-
-    documents = cmd_client.get("/api/v1/documents", params={"case_id": case_id})
-
-    assert documents.status_code == 200
-    provider_document = next(
-        item
-        for item in documents.json()["items"]
-        if item["id"] == attached.json()["document_version_id"]
-    )
-    provider_record = cmd_session.scalar(select(ProviderRecord))
-    assert provider_record is not None
-    assert provider_document["source_contract"]["provider_record"] == {
-        "provider_name": "聚源",
-        "provider_record_id": "report-2026-003",
-        "request_scope": {"report_type": "industry"},
-        "retrieval_reference": "provider://report-2026-003",
-        "content_sha256": provider_record.content_sha256,
-        "retrieved_at": provider_record.retrieved_at.isoformat(),
-        "contract_version": None,
-    }
-
-
-def test_existing_case_material_cannot_bypass_a_published_case_change_decision(
-    cmd_client, cmd_session
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = uuid.UUID(created["case_id"])
-    lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
-    assert lifecycle is not None
-    lifecycle.status = "published"
-    cmd_session.commit()
-
-    response = cmd_client.post(
-        f"/api/v1/event-research/{case_id}/materials",
-        json={
-            "raw_input": "这份新材料不能绕过已发布结论的变化比较。",
-            "source_type": "pasted_snapshot",
-            "actor": "human:researcher",
-        },
-    )
-
-    assert response.status_code == 422
-    assert "published case" in response.json()["error"]["message"]
-    assert cmd_session.query(DocumentVersion).count() == 1
-
-
-def test_reviewing_a_case_relation_candidate_appends_a_reviewed_relation_without_rewriting_the_candidate(
-    cmd_client, cmd_session
-) -> None:
-    first = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    second_payload = _confirmed_event()
-    second_payload["event_title"] = "关联验证事件"
-    second = cmd_client.post("/api/v1/event-research", json=second_payload).json()
-    candidate = CaseRelation(
-        source_case_id=uuid.UUID(first["case_id"]),
-        target_case_id=uuid.UUID(second["case_id"]),
-        relation_type="potential_conflict",
-        reason="AI 发现两项解释存在冲突。",
-        created_by="ai:relation-proposal",
-        review_state="machine_generated",
-        created_at=datetime.now(timezone.utc),
-    )
-    cmd_session.add(candidate)
-    cmd_session.commit()
-
-    reviewed = cmd_client.post(
-        f"/api/v1/event-research/case-relations/{candidate.id}/reviews",
-        json={
-            "outcome": "modified",
-            "relation_type": "follow_up_validation",
-            "reviewer": "human:reviewer",
-            "reason": "改为后续验证关系，需在两个 Case 中分别核对。",
-            "idempotency_key": "review-candidate-1",
-        },
-    )
-
-    assert reviewed.status_code == 201
-    payload = reviewed.json()
-    assert payload["outcome"] == "modified"
-    assert payload["reviewed_relation_id"]
-    assert cmd_session.get(CaseRelation, candidate.id).review_state == "machine_generated"
-    network = cmd_client.get("/api/v1/event-research/network").json()
-    assert network["candidate_relations"] == []
-    assert network["reviewed_relations"][0]["relation_type"] == "follow_up_validation"
-    assert network["reviewed_relations"][0]["created_by"] == "human:reviewer"
-    assert network["reviewed_relations"][0]["reason"] == "改为后续验证关系，需在两个 Case 中分别核对。"
-    graph = cmd_client.get(
-        f"/api/v1/research-cases/{first['case_id']}/graph?research_mode=true"
-    )
-    assert graph.status_code == 200
-    relation_edges = [
-        edge for edge in graph.json()["edges"] if edge["semantic_kind"] == "case_relation"
-    ]
-    assert [edge["id"] for edge in relation_edges] == [payload["reviewed_relation_id"]]
-    assert relation_edges[0]["properties"]["reviewer"] == "human:reviewer"
-    assert relation_edges[0]["properties"]["review_reason"] == "改为后续验证关系，需在两个 Case 中分别核对。"
-    assert relation_edges[0]["properties"]["reviewed_at"]
 
 
 def test_create_event_case_rejects_candidate_factors_duplicate_after_trimming(cmd_client) -> None:
@@ -836,52 +234,6 @@ def test_confirmed_event_proposal_is_mapped_into_current_scope_conclusion(
     assert assignment.factor_statement == active_thesis.statement
 
 
-def test_event_review_queue_exposes_the_proposal_version_required_for_human_decision(
-    cmd_client, cmd_session
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = uuid.UUID(created["case_id"])
-    proposal = _evidence_proposal(
-        cmd_session,
-        case_id,
-        source_url="https://investor.tsmc.com/english/quarterly-results",
-        title="Versioned review source",
-    )
-
-    response = cmd_client.get(f"/api/v1/event-research/{case_id}/review-queue")
-
-    assert response.status_code == 200
-    assert response.json()["items"][0]["proposal_version"] == proposal.version
-
-
-def test_event_reviewer_can_request_more_evidence_without_publishing_candidate(
-    cmd_client, cmd_session
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = uuid.UUID(created["case_id"])
-    proposal = _evidence_proposal(
-        cmd_session,
-        case_id,
-        source_url="https://investor.tsmc.com/english/quarterly-results",
-        title="Primary source still needs a counterexample",
-    )
-
-    response = cmd_client.post(
-        f"/api/v1/review-proposals/{proposal.id}/decisions",
-        json={
-            "outcome": "needs_more_evidence",
-            "reason": "需要补充反证与下一期实际数据，不能先采纳该关系。",
-            "reviewer_id": "reviewer",
-            "expected_version": proposal.version,
-        },
-    )
-
-    assert response.status_code == 201
-    assert response.json()["outcome"] == "needs_more_evidence"
-    assert response.json()["published_entity_id"] is None
-    assert cmd_session.get(Proposal, proposal.id).status == "decided"
-
-
 def test_confirmed_event_proposal_is_assigned_to_latest_scope_version(
     cmd_client, cmd_session
 ) -> None:
@@ -899,8 +251,8 @@ def test_confirmed_event_proposal_is_assigned_to_latest_scope_version(
         json={
             "factors": [
                 active_thesis.statement,
-                _confirmed_event()["candidate_factors"][1],
-                _confirmed_event()["candidate_factors"][2],
+                "广告业务增长弱于市场预期",
+                "AI 投入回报周期可能拉长",
             ],
             "changed_by": "reviewer",
         },
@@ -964,14 +316,13 @@ def test_create_event_case_freezes_and_attaches_pasted_news(cmd_client, cmd_sess
     assert len(documents) == 1
     document = documents[0]
     assert document.source_url == payload["source_url"]
-    assert document.title == payload["event_title"]
     assert document.parser_version == "user-pasted-v1"
     assert document.parse_state == "partial"
     spans = cmd_session.scalars(
         select(SourceSpan).where(SourceSpan.document_version_id == document.id)
     ).all()
     assert len(spans) == 1
-    assert spans[0].locator == {"kind": "pasted_snapshot", "source_metadata": {}}
+    assert spans[0].locator == {"kind": "user_pasted_news"}
     assert spans[0].verbatim_text == payload["raw_input"]
 
 
@@ -1099,9 +450,7 @@ def test_event_evidence_cannot_target_thesis_from_another_case(
         },
     )
 
-    # The persisted target disagrees with proposal ownership: fail closed
-    # before admitting the proposal to the review mutation boundary.
-    assert response.status_code == 404
+    assert response.status_code == 422
     assert cmd_session.get(Proposal, proposal.id).status == "pending"
     assert cmd_session.scalar(
         select(EvidenceLink.id).where(
@@ -1217,14 +566,13 @@ def test_event_list_orders_independent_events_by_last_update(cmd_client, cmd_ses
     second_lifecycle.updated_at = first_lifecycle.updated_at.replace(year=first_lifecycle.updated_at.year + 1)
     cmd_session.commit()
 
-    response = cmd_client.get("/api/v1/event-research", params={"status": "awaiting_key_review"})
+    response = cmd_client.get("/api/v1/event-research", params={"status": "researching"})
     assert response.status_code == 200
     body = response.json()
     assert [item["case_id"] for item in body["items"]] == [second["case_id"], first["case_id"]]
     assert body["items"][0]["event_title"] == "台积电上调 CoWoS 指引后下跌"
     assert body["items"][0]["ticker"] == "TSM"
-    assert body["items"][0]["lifecycle_status"] == "awaiting_key_review"
-    assert body["items"][0]["workflow_mode"] == "reviewed"
+    assert body["items"][0]["lifecycle_status"] == "researching"
     assert body["items"][0]["next_human_action"] is None
 
 
@@ -1283,7 +631,7 @@ def test_event_workbench_uses_summary_without_loading_review_queue_items(
         "verified": 0,
         "pending": 0,
         "invalid_source": 0,
-        "current_gap": "研究准备尚未完成；ResearchRun 未创建，正式补证尚未启动",
+        "current_gap": None,
     }
 
 
@@ -1316,7 +664,6 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     )
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
-    _mark_preparation_authorized(cmd_session, case_id)
     lifecycle.status = "awaiting_key_review"
     lifecycle.current_gap = "缺少对资本开支解释的反证"
     lifecycle.next_human_action = "审核 1 条关键证据"
@@ -1370,7 +717,6 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     ).json()
     assert exhausted["progress"]["verified"] == 1
     assert exhausted["factors"][0] == {
-        "thesis_id": str(thesis.id),
         "statement": first_factor,
         "description": None,
         "position": 1,
@@ -1410,101 +756,11 @@ def test_event_workbench_exposes_current_scope_progress_and_action_priority(
     }
 
 
-def test_event_workbench_evidence_links_only_to_the_case_frozen_document(
-    cmd_client, cmd_session
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = uuid.UUID(created["case_id"])
-    proposal = _evidence_proposal(
-        cmd_session,
-        case_id,
-        source_url="https://investor.tsmc.com/english/quarterly-results",
-        title="Verified investor relations release",
-    )
-    document = cmd_session.scalar(
-        select(DocumentVersion).where(
-            DocumentVersion.source_url
-            == "https://investor.tsmc.com/english/quarterly-results"
-        )
-    )
-    assert document is not None
-    SourceGovernanceService(cmd_session).record_event_intake(
-        document=document,
-        source_type="uploaded_file",
-        source_metadata={},
-        declared_by="tester",
-    )
-    accepted = cmd_client.post(
-        f"/api/v1/review-proposals/{proposal.id}/decisions",
-        json={
-            "outcome": "confirmed",
-            "reason": "verified primary source supports the factor",
-            "reviewer_id": "reviewer",
-            "expected_version": proposal.version,
-        },
-    )
-    assert accepted.status_code == 201
-
-    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
-
-    assert workbench.status_code == 200
-    evidence = workbench.json()["evidence"]
-    assert evidence[0]["document_version_id"] == str(document.id)
-    assert evidence[0]["source_visible_in_case"] is True
-
-
-def test_event_workbench_redacts_evidence_from_a_source_not_allowed_for_display(
-    cmd_client, cmd_session
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = uuid.UUID(created["case_id"])
-    proposal = _evidence_proposal(
-        cmd_session,
-        case_id,
-        source_url="https://investor.tsmc.com/restricted-quarterly-results",
-        title="Restricted investor relations release",
-    )
-    document = cmd_session.scalar(
-        select(DocumentVersion).where(
-            DocumentVersion.source_url
-            == "https://investor.tsmc.com/restricted-quarterly-results"
-        )
-    )
-    assert document is not None
-    accepted = cmd_client.post(
-        f"/api/v1/review-proposals/{proposal.id}/decisions",
-        json={
-            "outcome": "confirmed",
-            "reason": "reviewed under the permitted workflow",
-            "reviewer_id": "reviewer",
-            "expected_version": proposal.version,
-        },
-    )
-    assert accepted.status_code == 201
-    SourceGovernanceService(cmd_session).record_event_intake(
-        document=document,
-        source_type="uploaded_file",
-        source_metadata={"permissions": {"display": False}},
-        declared_by="tester",
-    )
-
-    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
-
-    assert workbench.status_code == 200
-    evidence = workbench.json()["evidence"][0]
-    assert evidence["source_visible_in_case"] is False
-    assert evidence["source_title"] is None
-    assert evidence["source_url"] is None
-    assert evidence["excerpt"] == ""
-    assert evidence["locator"] == {}
-
-
 def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client, cmd_session) -> None:
     created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
     case_id = uuid.UUID(created["case_id"])
     lifecycle = cmd_session.get(EventResearchLifecycle, case_id)
     assert lifecycle is not None
-    _mark_preparation_authorized(cmd_session, case_id)
 
     for status, expected_kind in [
         ("awaiting_scope", "edit_factors"),
@@ -1520,79 +776,6 @@ def test_event_workbench_action_priority_covers_conclusion_lifecycle(cmd_client,
         response = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench")
         assert response.status_code == 200
         assert response.json()["next_action"]["kind"] == expected_kind
-
-
-@pytest.mark.parametrize(
-    ("preparation_status", "expected_kind", "expected_action"),
-    [
-        ("awaiting_claim_review", "review_preparation_claims", "核验原文与候选陈述"),
-        ("awaiting_protocol_confirmation", "review_preparation_protocol", "确认研究协议草案"),
-        ("awaiting_plan_authorization", "authorize_preparation_plan", "审核补证计划并授权启动"),
-        ("recoverable_failure", "recover_preparation", "恢复研究准备"),
-    ],
-)
-def test_event_desk_projects_the_current_preparation_human_action(
-    cmd_client, cmd_session, preparation_status, expected_kind, expected_action
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = uuid.UUID(created["case_id"])
-    preparation = cmd_session.scalar(
-        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
-    )
-    assert preparation is not None
-    preparation.status = preparation_status
-    cmd_session.commit()
-
-    listed = cmd_client.get("/api/v1/event-research").json()["items"]
-    item = next(row for row in listed if row["case_id"] == str(case_id))
-    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
-
-    assert item["next_action_kind"] == expected_kind
-    assert item["next_human_action"] == expected_action
-    assert workbench["next_action"] == {
-        "kind": expected_kind,
-        "label": expected_action,
-        "count": None,
-    }
-
-
-def test_event_desk_projects_preparing_as_system_work_and_exposes_summary(
-    cmd_client, cmd_session
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-    case_id = uuid.UUID(created["case_id"])
-    preparation = cmd_session.scalar(
-        select(ResearchPreparation).where(ResearchPreparation.research_case_id == case_id)
-    )
-    assert preparation is not None
-    preparation.parse_claims_state = "running"
-    preparation.last_error_code = "preparation_provider_unavailable"
-    cmd_session.commit()
-
-    listed = cmd_client.get("/api/v1/event-research").json()["items"]
-    item = next(row for row in listed if row["case_id"] == str(case_id))
-    workbench = cmd_client.get(f"/api/v1/event-research/{case_id}/workbench").json()
-
-    assert item["next_action_kind"] == "wait"
-    assert item["next_human_action"] is None
-    assert "系统正在准备" in item["status_summary"]
-    assert workbench["preparation"] == {
-        "status": "preparing",
-        "revision": 1,
-        "research_run_id": None,
-        "next_attempt_at": None,
-        "last_error_message": "准备服务暂时不可用",
-        "system": {
-            "claims": {"state": "running"},
-            "protocol": {"state": "queued"},
-            "plan": {"state": "queued"},
-        },
-        "review": {
-            "claims": {"state": "locked"},
-            "protocol": {"state": "locked"},
-            "plan": {"state": "locked"},
-        },
-    }
 
 
 def test_draft_workbench_exposes_only_current_reviewed_evidence_and_factor_pending_counts(
@@ -1729,36 +912,6 @@ def test_event_workbench_factor_statistics_use_a_fixed_query_count(
     assert four_factor_count == three_factor_count
 
 
-def test_event_workbench_exposes_the_thesis_id_for_each_factor_protocol(
-    cmd_client, cmd_session
-) -> None:
-    created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
-
-    response = cmd_client.get(
-        f"/api/v1/event-research/{created['case_id']}/workbench"
-    )
-
-    assert response.status_code == 200
-    factors = response.json()["factors"]
-    assert all(uuid.UUID(factor["thesis_id"]) for factor in factors)
-    assert [factor["statement"] for factor in factors] == _confirmed_event()[
-        "candidate_factors"
-    ]
-
-
-def test_event_case_can_explicitly_require_the_research_protocol(cmd_client, cmd_session) -> None:
-    payload = _confirmed_event()
-    payload["research_protocol_required"] = True
-
-    created = cmd_client.post("/api/v1/event-research", json=payload)
-
-    assert created.status_code == 201
-    theses = list(cmd_session.scalars(
-        select(Thesis).where(Thesis.research_case_id == uuid.UUID(created.json()["case_id"]))
-    ))
-    assert theses and all(thesis.research_protocol_required for thesis in theses)
-
-
 def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, cmd_session) -> None:
     created = cmd_client.post("/api/v1/event-research", json=_confirmed_event()).json()
     case_id = uuid.UUID(created["case_id"])
@@ -1789,6 +942,24 @@ def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, c
             },
         )
         assert confirmed.status_code == 201
+    scope = cmd_session.scalar(
+        select(EventResearchScopeVersion)
+        .where(EventResearchScopeVersion.research_case_id == case_id)
+        .order_by(EventResearchScopeVersion.version.desc())
+    )
+    assert scope is not None
+    hypothesis = EventImpactHypothesis(
+        research_case_id=case_id, scope_version_id=scope.id,
+        statement=_confirmed_event()["candidate_factors"][0], classification="candidate",
+        rank=1, score_components={}, explanation="fixture", created_at=datetime.now(timezone.utc),
+    )
+    cmd_session.add(hypothesis)
+    cmd_session.flush()
+    cmd_session.add(EventImpactHypothesisAssessment(
+        hypothesis_id=hypothesis.id, research_case_id=case_id, scope_version_id=scope.id,
+        classification="key", rank=1, score_components={"event": 1}, explanation="fixture key",
+        created_at=datetime.now(timezone.utc),
+    ))
     EventConclusionService(cmd_session).create_draft(case_id)
     cmd_session.commit()
 
@@ -1803,27 +974,3 @@ def test_event_conclusion_publish_appends_a_human_confirmed_result(cmd_client, c
     assert view["lifecycle"]["status"] == "published"
     assert view["conclusion"]["state"] == "published"
     assert view["conclusion"]["text"] == "人工确认：当前材料不足以断定唯一原因。"
-
-
-@pytest.mark.parametrize('valid', [True, False])
-def test_event_extraction_usage_is_saved_without_creating_a_case(cmd_client, cmd_session, monkeypatch, valid):
-    from types import SimpleNamespace
-    from unittest.mock import MagicMock
-    from app.ai.client import LLMClient
-    from app.models.ledger import AIRun
-    output = {'research_question':'Does demand change?', 'candidate_factors':['Orders','Capacity','Inventory']} if valid else {}
-    sdk = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=MagicMock(return_value=SimpleNamespace(
-        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=3, total_tokens=10),
-        choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(content=json.dumps(output), refusal=None))])))))
-    monkeypatch.setattr('app.services.event_extraction.LLMClient.from_env', lambda: LLMClient(model_version='test-model', client=sdk))
-    before = list(cmd_session.scalars(select(ResearchCase.id)))
-    response = cmd_client.post('/api/v1/event-research/extract', json={'raw_input':'private source material', 'source_url':None})
-    assert response.status_code == (200 if valid else 503)
-    audit = cmd_session.scalar(select(AIRun).where(AIRun.kind == 'event_extract'))
-    assert audit is not None
-    assert audit.status == ('success' if valid else 'failed')
-    assert audit.usage['attempts'][0]['total_tokens'] == 10
-    assert audit.input_ref['tenant_id'] == 'test-team'
-    assert uuid.UUID(audit.input_ref['extraction_id'])
-    assert 'private source material' not in str(audit.input_ref)
-    assert list(cmd_session.scalars(select(ResearchCase.id))) == before

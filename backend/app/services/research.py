@@ -89,7 +89,6 @@ class ResearchService:
         next_verification_event: str | None = None,
         creator_type: str = "human",
         review_state: str = "confirmed",
-        research_protocol_required: bool = False,
     ) -> Thesis:
         if not statement.strip():
             raise ValidationError("thesis statement must not be empty")
@@ -115,7 +114,6 @@ class ResearchService:
             next_verification_event=next_verification_event,
             creator_type=creator_type,
             review_state=review_state,
-            research_protocol_required=research_protocol_required,
         )
 
     def add_causal_step(

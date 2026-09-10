@@ -12,10 +12,8 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.errors import ConflictError
 from app.models.operational import (
     IdempotencyKey,
     Job,
@@ -120,14 +118,13 @@ class JobRepository:
         self._session.flush()
         return event
 
-    def events_after(self, job_id: uuid.UUID, after_seq: int, *, limit: int = 51) -> list[JobEvent]:
+    def events_after(self, job_id: uuid.UUID, after_seq: int) -> list[JobEvent]:
         return list(
             self._session.scalars(
                 select(JobEvent)
                 .where(JobEvent.job_id == job_id)
                 .where(JobEvent.seq > after_seq)
                 .order_by(JobEvent.seq)
-                .limit(limit)
             )
         )
 
@@ -142,16 +139,6 @@ class JobRepository:
                 tuple_(Job.created_at, Job.id) < tuple_(after_created_at, after_id)
             )
         return list(self._session.scalars(query.limit(limit + 1)))
-
-
-def task_tenant_predicate(tenant_id: str):
-    from app.models.ledger import CaseTenantAdmission, ResearchCase
-
-    return TaskItem.research_case_id.in_(
-        select(ResearchCase.id).join(
-            CaseTenantAdmission, CaseTenantAdmission.research_case_id == ResearchCase.id
-        ).where(CaseTenantAdmission.tenant_id == tenant_id)
-    )
 
 
 class TaskRepository:
@@ -169,6 +156,7 @@ class TaskRepository:
         ref_type: str | None = None,
         ref_id: uuid.UUID | None = None,
         research_case_id: uuid.UUID | None = None,
+        scope_version_id: uuid.UUID | None = None,
         assignee: str | None = None,
     ) -> TaskItem:
         task = TaskItem(
@@ -180,6 +168,7 @@ class TaskRepository:
             ref_type=ref_type,
             ref_id=ref_id,
             research_case_id=research_case_id,
+            scope_version_id=scope_version_id,
             assignee=assignee,
             created_at=_utcnow(),
         )
@@ -204,20 +193,9 @@ class TaskRepository:
             task.assignee = assignee
 
     def close_review_task(
-        self, task_type: str, ref_type: str, ref_id: uuid.UUID,
-        *, research_case_id: uuid.UUID | None = None,
+        self, task_type: str, ref_type: str, ref_id: uuid.UUID
     ) -> TaskItem | None:
-        if research_case_id is None:
-            task = self.find_by_ref(task_type=task_type, ref_type=ref_type, ref_id=ref_id)
-        else:
-            # HTTP review callers supply the Case resolved from the reviewed
-            # resource. A matching ref alone must not close another Case's task.
-            task = self._session.scalar(select(TaskItem).where(
-                TaskItem.task_type == task_type,
-                TaskItem.ref_type == ref_type,
-                TaskItem.ref_id == ref_id,
-                TaskItem.research_case_id == research_case_id,
-            ))
+        task = self.find_by_ref(task_type=task_type, ref_type=ref_type, ref_id=ref_id)
         if task is None or task.status == "done":
             return task
         if task.status in {"open", "in_progress"}:
@@ -227,7 +205,6 @@ class TaskRepository:
     def tasks_page(
         self,
         *,
-        tenant_id: str | None = None,
         case_id: uuid.UUID | None = None,
         status: str | None = None,
         assignee: str | None = None,
@@ -240,8 +217,6 @@ class TaskRepository:
         query = select(TaskItem).order_by(
             TaskItem.created_at.desc(), TaskItem.id.desc()
         )
-        if tenant_id is not None:
-            query = query.where(task_tenant_predicate(tenant_id))
         if case_id is not None:
             query = query.where(TaskItem.research_case_id == case_id)
         if status is not None:
@@ -301,42 +276,6 @@ class IdempotencyRepository:
 
     def get(self, key: str) -> IdempotencyKey | None:
         return self._session.get(IdempotencyKey, key)
-
-    def acquire(
-        self, *, key: str, request_fingerprint: str, ttl_seconds: int = 3600
-    ) -> tuple[IdempotencyKey, bool]:
-        """Atomically acquire an idempotency command slot.
-
-        A savepoint contains a duplicate-key failure so callers retain their
-        outer transaction (and any Case/preparation locks) rather than
-        discarding unrelated pending work with ``Session.rollback()``.
-        """
-        from datetime import timedelta
-
-        row = IdempotencyKey(
-            key=key,
-            status="in_progress",
-            request_fingerprint=request_fingerprint,
-            created_at=_utcnow(),
-            expires_at=_utcnow() + timedelta(seconds=ttl_seconds),
-        )
-        try:
-            with self._session.begin_nested():
-                self._session.add(row)
-                self._session.flush()
-        except IntegrityError:
-            existing = self._session.scalar(
-                select(IdempotencyKey)
-                .where(IdempotencyKey.key == key)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
-            if existing is None:
-                # The winning transaction rolled back after this insert had
-                # waited on it. The client can safely retry this command.
-                raise ConflictError("idempotency_conflict")
-            return existing, False
-        return row, True
 
     def insert_in_progress(
         self, *, key: str, request_fingerprint: str, ttl_seconds: int = 3600

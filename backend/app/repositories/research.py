@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
 from datetime import date, datetime, timezone
 
 from sqlalchemy import select, tuple_
@@ -9,8 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import (
     AIAssessment,
-    CaseTenantAdmission,
-    CaseDocumentVersion,
     CaseThemeTagEvent,
     CausalEdge,
     CausalStep,
@@ -229,7 +226,6 @@ class ResearchRepository:
         next_verification_event: str | None = None,
         creator_type: str = "human",
         review_state: str = "confirmed",
-        research_protocol_required: bool = False,
     ) -> Thesis:
         thesis = Thesis(
             research_case_id=research_case_id,
@@ -244,7 +240,6 @@ class ResearchRepository:
             next_verification_event=next_verification_event,
             creator_type=creator_type,
             review_state=review_state,
-            research_protocol_required=research_protocol_required,
         )
         self._session.add(thesis)
         self._session.flush()
@@ -319,8 +314,6 @@ class ResearchRepository:
         creator_type: str = "ai",
         review_state: str = "machine_generated",
         model_version: str | None = None,
-        automatic_admission_decision_id: uuid.UUID | None = None,
-        before_flush: Callable[[], None] | None = None,
     ) -> EvidenceLink:
         link = EvidenceLink(
             thesis_id=thesis_id,
@@ -332,29 +325,11 @@ class ResearchRepository:
             creator_type=creator_type,
             review_state=review_state,
             model_version=model_version,
-            automatic_admission_decision_id=automatic_admission_decision_id,
             created_at=_utcnow(),
         )
         self._session.add(link)
-        if before_flush is not None:
-            with self._session.no_autoflush:
-                before_flush()
         self._session.flush()
         return link
-
-    def get_automatic_evidence_link(
-        self, automatic_admission_decision_id: uuid.UUID
-    ) -> EvidenceLink | None:
-        """Return the link already published for one immutable machine decision."""
-        return self._session.scalar(
-            select(EvidenceLink)
-            .where(
-                EvidenceLink.automatic_admission_decision_id
-                == automatic_admission_decision_id
-            )
-            .order_by(EvidenceLink.created_at, EvidenceLink.id)
-            .limit(1)
-        )
 
     def get_statement(self, statement_id: uuid.UUID) -> SourceStatement | None:
         return self._session.scalar(
@@ -383,21 +358,6 @@ class ResearchRepository:
             )
         )
 
-    def document_attached_to_case(self, document_id: uuid.UUID, case_id: uuid.UUID) -> bool:
-        return self._session.scalar(select(CaseDocumentVersion.id).where(
-            CaseDocumentVersion.document_version_id == document_id,
-            CaseDocumentVersion.research_case_id == case_id,
-        ).limit(1)) is not None
-
-    def get_thesis(self, thesis_id: uuid.UUID) -> Thesis | None:
-        return self._session.get(Thesis, thesis_id)
-
-    def source_contract_for_document(self, document_id: uuid.UUID):
-        from app.models.source_governance import SourceContract
-        return self._session.scalar(select(SourceContract).where(
-            SourceContract.document_version_id == document_id,
-        ))
-
     def visible_links(
         self,
         *,
@@ -416,38 +376,6 @@ class ResearchRepository:
                 .order_by(EvidenceLink.available_at)
             )
         )
-
-    def visible_links_by_ids(
-        self,
-        *,
-        thesis_id: uuid.UUID,
-        cutoff: datetime,
-        evidence_link_ids: list[uuid.UUID],
-    ) -> list[EvidenceLink]:
-        """Return the captured prompt links in caller order or fail closed."""
-        if len(evidence_link_ids) != len(set(evidence_link_ids)):
-            raise ValueError("captured evidence link IDs must be unique")
-        if not evidence_link_ids:
-            return []
-        links = {
-            link.id: link
-            for link in self._session.scalars(
-                select(EvidenceLink)
-                .where(EvidenceLink.id.in_(evidence_link_ids))
-                .where(EvidenceLink.thesis_id == thesis_id)
-                .where(EvidenceLink.available_at <= cutoff)
-                .where(EvidenceLink.created_at <= cutoff)
-            )
-        }
-        ordered: list[EvidenceLink] = []
-        for link_id in evidence_link_ids:
-            link = links.get(link_id)
-            if link is None:
-                raise ValueError(
-                    "captured evidence link is not visible for the snapshot thesis and cutoff"
-                )
-            ordered.append(link)
-        return ordered
 
     def insert_snapshot(
         self,
@@ -473,10 +401,6 @@ class ResearchRepository:
         conclusion: str,
         rationale: str,
         gaps: list[str],
-        research_protocol_status: str | None = None,
-        effective_binding_id: uuid.UUID | None = None,
-        mechanism_template_version_id: uuid.UUID | None = None,
-        verification_rule_ids: list[str] | None = None,
         displayed_as_provisional: bool = True,
         creator_type: str = "ai",
         model_version: str | None = None,
@@ -486,10 +410,6 @@ class ResearchRepository:
             conclusion=conclusion,
             rationale=rationale,
             gaps=gaps,
-            research_protocol_status=research_protocol_status,
-            effective_binding_id=effective_binding_id,
-            mechanism_template_version_id=mechanism_template_version_id,
-            verification_rule_ids=verification_rule_ids,
             displayed_as_provisional=displayed_as_provisional,
             creator_type=creator_type,
             model_version=model_version,
@@ -563,14 +483,6 @@ class ResearchRepository:
             select(AIAssessment).where(AIAssessment.id == assessment_id)
         )
 
-    def assessment_thesis(self, assessment_id: uuid.UUID) -> Thesis | None:
-        return self._session.scalar(
-            select(Thesis)
-            .join(EvidenceSnapshot, EvidenceSnapshot.thesis_id == Thesis.id)
-            .join(AIAssessment, AIAssessment.snapshot_id == EvidenceSnapshot.id)
-            .where(AIAssessment.id == assessment_id)
-        )
-
     # ------------------------------------------------------------------ readers (workbench / projection)
 
     def get_case(
@@ -624,17 +536,11 @@ class ResearchRepository:
         limit: int,
         after_created_at: datetime | None = None,
         after_id: uuid.UUID | None = None,
-        tenant_id: str | None = None,
     ) -> list[ResearchCase]:
         """Return up to ``limit + 1`` cases newest-first for cursor pagination."""
         query = select(ResearchCase).order_by(
             ResearchCase.created_at.desc(), ResearchCase.id.desc()
         )
-        if tenant_id is not None:
-            query = query.join(
-                CaseTenantAdmission,
-                CaseTenantAdmission.research_case_id == ResearchCase.id,
-            ).where(CaseTenantAdmission.tenant_id == tenant_id)
         if after_created_at is not None and after_id is not None:
             query = query.where(
                 tuple_(ResearchCase.created_at, ResearchCase.id)

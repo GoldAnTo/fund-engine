@@ -6,7 +6,6 @@ fixtures: command endpoints COMMIT, so they never share the session engine.
 """
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, date, datetime
 
 import pytest
@@ -259,129 +258,6 @@ def test_create_holding_disclosure_persists_ledger_row(cmd_client, cmd_session):
     assert row.report_period == date(2026, 6, 30)
     assert row.source == "基金2026年二季报"
     assert row.published_at.tzinfo is not None or row.published_at is not None
-
-
-def test_holding_disclosure_keeps_an_annual_successor_of_quarterly_disclosure(
-    cmd_client, cmd_session
-):
-    from app.models.ledger import HoldingDisclosure
-
-    company = _seed_company(cmd_session)
-    stock = _seed_stock(cmd_session, company)
-    fund_id = _create_fund(cmd_client)["id"]
-    quarterly = _disclosure_payload(stock.id)
-    quarterly.update(
-        {
-            "filing_kind": "quarterly",
-            "published_at": "2026-07-22T08:00:00+08:00",
-            "source": "基金2026年二季度报告",
-        }
-    )
-    quarterly_response = cmd_client.post(
-        f"/api/v1/funds/{fund_id}/holding-disclosures", json=quarterly
-    )
-    assert quarterly_response.status_code == 201, quarterly_response.text
-
-    annual = _disclosure_payload(stock.id)
-    annual.update(
-        {
-            "filing_kind": "annual",
-            "published_at": "2027-03-31T08:00:00+08:00",
-            "source": "基金2026年年度报告",
-            "supersedes_disclosure_id": quarterly_response.json()["id"],
-        }
-    )
-    annual_response = cmd_client.post(
-        f"/api/v1/funds/{fund_id}/holding-disclosures", json=annual
-    )
-
-    assert annual_response.status_code == 201, annual_response.text
-    assert annual_response.json()["filing_kind"] == "annual"
-    assert annual_response.json()["supersedes_disclosure_id"] == quarterly_response.json()["id"]
-    quarterly_row = cmd_session.get(
-        HoldingDisclosure, uuid.UUID(quarterly_response.json()["id"])
-    )
-    assert quarterly_row is not None
-    assert quarterly_row.supersedes_disclosure_id is None
-
-
-def test_holding_disclosure_keeps_a_later_same_kind_filing_as_a_successor(
-    cmd_client, cmd_session
-):
-    company = _seed_company(cmd_session)
-    stock = _seed_stock(cmd_session, company)
-    fund_id = _create_fund(cmd_client)["id"]
-    first = _disclosure_payload(stock.id)
-    first.update(
-        {
-            "filing_kind": "quarterly",
-            "published_at": "2026-07-22T08:00:00+08:00",
-            "source": "基金2026年二季度报告",
-        }
-    )
-    first_response = cmd_client.post(
-        f"/api/v1/funds/{fund_id}/holding-disclosures", json=first
-    )
-    assert first_response.status_code == 201, first_response.text
-
-    corrected_snapshot = _disclosure_payload(stock.id)
-    corrected_snapshot.update(
-        {
-            "filing_kind": "quarterly",
-            "published_at": "2026-07-25T08:00:00+08:00",
-            "source": "基金2026年二季度报告补充持仓快照",
-            "supersedes_disclosure_id": first_response.json()["id"],
-        }
-    )
-    response = cmd_client.post(
-        f"/api/v1/funds/{fund_id}/holding-disclosures", json=corrected_snapshot
-    )
-
-    assert response.status_code == 201, response.text
-    assert response.json()["supersedes_disclosure_id"] == first_response.json()["id"]
-
-
-def test_holding_disclosure_keeps_source_version_provider_and_coverage(cmd_client, cmd_session):
-    from hashlib import sha256
-
-    from app.models.ledger import DocumentVersion
-    from app.models.source_governance import ProviderRecord
-    from app.services.source_governance import SourceGovernanceService
-
-    company = _seed_company(cmd_session)
-    stock = _seed_stock(cmd_session, company)
-    fund_id = _create_fund(cmd_client)["id"]
-    now = datetime(2026, 7, 21, tzinfo=UTC)
-    document = DocumentVersion(
-        content_sha256=sha256(b"fund-2026q2-holdings").hexdigest(),
-        source_url="https://licensed.example/fund/005827/2026q2",
-        title="易方达蓝筹精选 2026 年二季报",
-        available_at=now,
-        acquired_at=now,
-        parser_version="fund-provider-v1",
-        parse_state="success",
-    )
-    cmd_session.add(document)
-    cmd_session.flush()
-    SourceGovernanceService(cmd_session).record_event_intake(
-        document=document,
-        source_type="licensed_provider",
-        source_metadata={"provider_name": "licensed.example", "provider_record_id": "fund-005827-2026q2", "permissions": {"display": True, "ai_processing": True}},
-        declared_by="tester",
-    )
-    provider = cmd_session.scalar(select(ProviderRecord).where(ProviderRecord.document_version_id == document.id))
-    assert provider is not None
-    cmd_session.commit()
-
-    payload = _disclosure_payload(stock.id)
-    payload.update({"coverage_status": "complete", "source_document_version_id": str(document.id), "provider_record_id": str(provider.id)})
-    response = cmd_client.post(f"/api/v1/funds/{fund_id}/holding-disclosures", json=payload)
-
-    assert response.status_code == 201, response.text
-    body = response.json()
-    assert body["coverage_status"] == "complete"
-    assert body["source_document_version_id"] == str(document.id)
-    assert body["provider_record_id"] == str(provider.id)
 
 
 def test_holding_disclosure_missing_fund_is_404(cmd_client, cmd_session):

@@ -9,18 +9,20 @@ and will later hand execution to a worker without changing these routes.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.models.operational import Job
 
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.case_tenant_access import CaseTenantAccess
 from app.db import get_db
 from app.errors import NotFoundError
 from app.repositories.operational import JobRepository
 from app.repositories.outbox import emit_event
+from app.models.operational import ResearchRun, ResearchTask
+from app.models.event_research import EventResearchScopeVersion
+from app.services.auto_research import IMPACT_STAGE_TASK_TYPES
+from app.services.event_research_scope_evidence import lock_event_research_lifecycle
 from app.schemas.v1.common import CursorPage
 from app.schemas.v1.operational import (
     ActivityItemDTO,
@@ -28,20 +30,9 @@ from app.schemas.v1.operational import (
     JobEventDTO,
     JobEventsResponse,
 )
-from app.services.jobs import JobService
 
 # NOTE: no prefix here — the parent v1 router already mounts under /api/v1.
-router = APIRouter(tags=["jobs-v1"], dependencies=[Depends(require_research_tenant)])
-
-
-def _owned_job(db: Session, job_id: uuid.UUID, tenant_id: str):
-    job = db.scalar(select(Job).where(
-        Job.id == job_id,
-        Job.research_case_id.in_(CaseTenantAccess(db).case_ids(tenant_id)),
-    ))
-    if job is None:
-        raise NotFoundError("job not found")
-    return job
+router = APIRouter(tags=["jobs-v1"])
 
 
 def _job_dto(job) -> JobDTO:
@@ -64,8 +55,10 @@ def _job_dto(job) -> JobDTO:
 
 
 @router.get("/jobs/{job_id}", response_model=JobDTO)
-def get_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
-    job = _owned_job(db, job_id, tenant_id)
+def get_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
+    job = JobRepository(db).get_job(job_id)
+    if job is None:
+        raise NotFoundError(f"job {job_id} not found")
     return _job_dto(job)
 
 
@@ -75,11 +68,11 @@ def get_job_events(
     after_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
     repo = JobRepository(db)
-    _owned_job(db, job_id, tenant_id)
-    events = repo.events_after(job_id, after_seq, limit=limit + 1)
+    if repo.get_job(job_id) is None:
+        raise NotFoundError(f"job {job_id} not found")
+    events = repo.events_after(job_id, after_seq)
     page = events[:limit]
     events_dto = [
         JobEventDTO(
@@ -103,20 +96,182 @@ def get_job_events(
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobDTO, status_code=status.HTTP_200_OK)
-def cancel_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
+def cancel_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
     repo = JobRepository(db)
-    job = _owned_job(db, job_id, tenant_id)
-    JobService(db).request_cancel(job)
+    job = repo.get_job(job_id)
+    if job is None:
+        raise NotFoundError(f"job {job_id} not found")
+    if job.status in {"succeeded", "failed", "cancelled"}:
+        raise NotFoundError(f"job {job_id} already terminal ({job.status})")
+    repo.mark_cancellation_requested(job)
+    repo.append_event(
+        job_id=job.id,
+        seq=repo.next_event_seq(job.id),
+        status=job.status,
+        message="cancel requested",
+    )
+    emit_event(
+        db,
+        type="job_progressed",
+        aggregate_type="job",
+        aggregate_id=job.id,
+        payload={"status": job.status, "cancel": True},
+        origin="operational",
+    )
     db.commit()
     return _job_dto(job)
 
 
 @router.post("/jobs/{job_id}/retries", response_model=JobDTO, status_code=status.HTTP_200_OK)
-def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db), tenant_id: str = Depends(require_research_tenant)):
+def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
     repo = JobRepository(db)
-    job = _owned_job(db, job_id, tenant_id)
+    job = repo.get_job(job_id)
+    if job is None:
+        raise NotFoundError(f"job {job_id} not found")
     if job.status not in {"failed", "cancelled"}:
         raise NotFoundError(f"job {job_id} is not retryable (status={job.status})")
+    if job.kind == "research_run" and job.target_id is not None:
+        run = db.get(ResearchRun, job.target_id)
+        stale_run = False
+        if run is not None:
+            lifecycle = lock_event_research_lifecycle(db, run.research_case_id)
+            latest_scope = db.scalar(
+                select(EventResearchScopeVersion.id)
+                .where(EventResearchScopeVersion.research_case_id == run.research_case_id)
+                .order_by(EventResearchScopeVersion.version.desc())
+                .limit(1)
+            )
+            impact_scope_ids = {
+                parts[2]
+                for query in db.scalars(
+                    select(ResearchTask.query).where(ResearchTask.run_id == run.id)
+                )
+                if (parts := query.split(":", 3))[0] == "impact_refresh"
+                and len(parts) == 4
+            }
+            impact_scope_ids.update(
+                parts[1]
+                for query in db.scalars(
+                    select(ResearchTask.query).where(ResearchTask.run_id == run.id)
+                )
+                if (parts := query.split(":", 2))[0] == "impact_stage"
+                and len(parts) == 3
+            )
+            stale_run = (
+                run.status == "cancelled"
+                or (lifecycle is not None and lifecycle.active_run_id != run.id)
+                or (bool(impact_scope_ids) and str(latest_scope) not in impact_scope_ids)
+            )
+        if stale_run and run is not None:
+            run.status = "cancelled"
+            run.stage = "stopped"
+            run.stop_reason = "superseded_scope"
+            for task in db.scalars(
+                select(ResearchTask)
+                .where(ResearchTask.run_id == run.id)
+                .where(ResearchTask.status.not_in(("done", "cancelled")))
+            ):
+                task.status = "cancelled"
+                task.stage = "stopped"
+            job.status = "cancelled"
+            job.cancel_requested = True
+            job.finished_at = datetime.now(timezone.utc)
+            seq = repo.next_event_seq(job.id)
+            repo.append_event(
+                job_id=job.id,
+                seq=seq,
+                status="cancelled",
+                message="retry rejected: superseded event scope",
+            )
+            emit_event(
+                db,
+                type="job_progressed",
+                aggregate_type="job",
+                aggregate_id=job.id,
+                payload={"status": "cancelled", "retry": False, "reason": "superseded_scope"},
+                origin="operational",
+            )
+            db.commit()
+            return _job_dto(job)
+        if run is not None:
+            recovered_impact = False
+            recovered_round: int | None = None
+            recovered_scope_id: str | None = None
+            recovered_task_count = 0
+            for task in db.scalars(
+                select(ResearchTask)
+                .where(ResearchTask.run_id == run.id)
+                .where(ResearchTask.task_type == "impact_refresh")
+                .where(ResearchTask.status == "failed")
+            ):
+                parts = task.query.split(":", 3)
+                if len(parts) == 4 and str(latest_scope) == parts[2]:
+                    task.status = "queued"
+                    task.stage = "planned"
+                    task.result = None
+                    recovered_impact = True
+                    recovered_round = task.round
+                    recovered_scope_id = parts[2]
+                    recovered_task_count += 1
+            # ``execute`` advances a run's round before doing its queued
+            # tasks.  A retry of a failed first-round impact task therefore
+            # must reopen that round; otherwise the task remains queued but
+            # can never be selected by the worker.  Its failed attempt also
+            # consumed one unit in ``execute``; refund that unit only for the
+            # requeued impact task so a budget-bound retry can run it.
+            if recovered_impact:
+                # Reopen only dependent work for the same durable scope
+                # handoff.  Stages never become successful stand-ins for a
+                # failed refresh, and a retry must not revive a superseded or
+                # already-completed scope task.
+                for dependent in db.scalars(
+                    select(ResearchTask)
+                    .where(ResearchTask.run_id == run.id)
+                    .where(ResearchTask.task_type.in_(IMPACT_STAGE_TASK_TYPES))
+                    .where(ResearchTask.query.like(f"impact_stage:{recovered_scope_id}:%"))
+                    .where(ResearchTask.status.in_(("queued", "failed", "blocked")))
+                ):
+                    if dependent.status == "failed":
+                        recovered_task_count += 1
+                        recovered_round = min(
+                            recovered_round or dependent.round, dependent.round
+                        )
+                    dependent.status = "queued"
+                    dependent.stage = "planned"
+                    dependent.result = None
+            # A refresh can be complete while a later ledger loader or
+            # classifier stage fails.  Reopen those failed tasks only for the
+            # latest scope; completed siblings remain immutable audit output.
+            if latest_scope is not None:
+                failed_stages = list(
+                    db.scalars(
+                        select(ResearchTask)
+                        .where(ResearchTask.run_id == run.id)
+                        .where(ResearchTask.task_type.in_(IMPACT_STAGE_TASK_TYPES))
+                        .where(ResearchTask.query.like(f"impact_stage:{latest_scope}:%"))
+                        .where(ResearchTask.status == "failed")
+                    )
+                )
+                for dependent in failed_stages:
+                    dependent.status = "queued"
+                    dependent.stage = "planned"
+                    dependent.result = None
+                    recovered_impact = True
+                    recovered_round = min(
+                        recovered_round or dependent.round, dependent.round
+                    )
+                    recovered_task_count += 1
+            if recovered_impact:
+                # A late retry may happen after later rounds have already
+                # advanced the run.  Reopen the failed task's own round,
+                # never the current run round.
+                run.round = max(0, (recovered_round or 1) - 1)
+                run.budget_used = max(
+                    0, (run.budget_used or 0) - recovered_task_count
+                )
+            run.status = "queued"
+            run.stage = "planning"
+            run.stop_reason = None
     job.status = "queued"
     job.attempt += 1
     job.error = None

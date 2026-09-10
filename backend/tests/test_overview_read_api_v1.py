@@ -10,7 +10,6 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from tests.tenant_admission import admit_case
 
 
 def test_overview_uses_ledger_counts_and_visible_assessment(
@@ -118,7 +117,6 @@ def test_overview_excludes_rejected_evidence(api_client, session):
         )
     )
     session.flush()
-    admit_case(session, case.id, document_version_id=version.id)
 
     response = api_client.get(
         "/api/v1/overview", params={"case_id": str(case.id)}
@@ -183,7 +181,6 @@ def test_overview_excludes_future_statement_text(api_client, session):
         )
     )
     session.flush()
-    admit_case(session, case.id, document_version_id=version.id)
 
     response = api_client.get(
         "/api/v1/overview",
@@ -196,7 +193,7 @@ def test_overview_excludes_future_statement_text(api_client, session):
 
 
 def test_overview_pending_review_counts_all_unreviewed_assessments(
-    api_client, research_service, assessment_service, session
+    api_client, research_service, assessment_service
 ):
     case = research_service.add_case(
         title="c", industry_topic="t", created_by="u"
@@ -216,7 +213,6 @@ def test_overview_pending_review_counts_all_unreviewed_assessments(
     assessment_service.review(
         new.id, outcome="confirmed", conclusion="supported", reason="ok"
     )
-    admit_case(session, case.id)
 
     response = api_client.get(
         "/api/v1/overview", params={"case_id": str(case.id)}

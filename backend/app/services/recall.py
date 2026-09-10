@@ -46,8 +46,6 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from app.models.source_governance import SourceContract
-from app.services.source_admission import source_contract_is_active
 
 DEFAULT_SHORTLIST = 40
 DEFAULT_TOP_K = 20
@@ -246,7 +244,6 @@ class RecallService:
         shortlist: int = DEFAULT_SHORTLIST,
         mode: str = DEFAULT_MODE,
         exclude_linked: bool = True,
-        allowed_source_types: set[str] | None = None,
     ) -> list[SourceStatement]:
         """Return ranked candidate statements for proposing evidence links.
 
@@ -262,10 +259,7 @@ class RecallService:
             raise ValueError(f"unknown recall mode: {mode!r}")
         cutoff = _ensure_aware(cutoff)
         candidates = self._visible_candidates(
-            thesis,
-            cutoff,
-            exclude_linked=exclude_linked,
-            allowed_source_types=allowed_source_types,
+            thesis, cutoff, exclude_linked=exclude_linked
         )
         if not candidates:
             return []
@@ -306,7 +300,6 @@ class RecallService:
         cutoff: datetime,
         *,
         exclude_linked: bool,
-        allowed_source_types: set[str] | None,
     ) -> list[SourceStatement]:
         """Statements visible at ``cutoff`` (no hindsight leakage)."""
         rows = self._session.execute(
@@ -338,14 +331,6 @@ class RecallService:
             # table would let every re-run re-propose the same statements.
             linked_statement_ids |= self._proposed_statement_ids(thesis)
 
-        contracts = {
-            contract.document_version_id: contract
-            for contract in self._session.scalars(
-                select(SourceContract).where(
-                    SourceContract.document_version_id.in_([version.id for _, version in rows])
-                )
-            )
-        }
         candidates: list[SourceStatement] = []
         for statement, version in rows:
             if statement.id in linked_statement_ids:
@@ -353,15 +338,6 @@ class RecallService:
             if _ensure_aware(statement.created_at) > cutoff:
                 continue
             if _ensure_aware(version.available_at) > cutoff:
-                continue
-            contract = contracts.get(version.id)
-            if contract is not None and (
-                not contract.allow_ai_processing or not source_contract_is_active(contract)
-            ):
-                continue
-            if allowed_source_types and (
-                contract is None or contract.research_source_type not in allowed_source_types
-            ):
                 continue
             candidates.append(statement)
         return candidates

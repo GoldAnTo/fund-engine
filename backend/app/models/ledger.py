@@ -6,9 +6,8 @@ Corrections append a successor record carrying ``supersedes_id``.
 Immutability is enforced at two layers:
 1. Application layer: a SQLAlchemy ``before_execute`` guard rejects any
    UPDATE/DELETE targeting an immutable table, raising ImmutableLedgerError.
-2. Database layer: PostgreSQL triggers raise on UPDATE/DELETE. Migration 0065
-   also installs SQLite triggers for the product tables; older SQLite ledger
-   tables continue to rely on the application guard.
+2. Database layer: PostgreSQL triggers (see Alembic migration 0001) raise on
+   UPDATE/DELETE as defence-in-depth against connections bypassing the app.
 """
 from __future__ import annotations
 
@@ -18,22 +17,20 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
-    DDL,
     Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     JSON,
-    LargeBinary,
     Numeric,
     String,
     Text,
-    UniqueConstraint,
     Uuid,
+    UniqueConstraint,
     event,
-    text,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -45,9 +42,7 @@ SourceStatementKind = Literal[
     "disclosed_fact", "management_attribution", "forecast", "research_opinion"
 ]
 ReviewOutcome = Literal["confirmed", "modified", "rejected"]
-ReviewState = Literal[
-    "machine_generated", "automatically_admitted", "reviewed", "rejected"
-]
+ReviewState = Literal["machine_generated", "reviewed", "rejected"]
 # Link-level review (prototype 审核工作区): the human decision on one
 # AI-proposed EvidenceLink.  ``relation`` is the 关系选择 dimension; the
 # action itself is ``outcome``.
@@ -61,46 +56,38 @@ AIRunStatus = Literal["success", "failed"]
 IMMUTABLE_TABLES = frozenset(
     {
         "document_versions",
-        "document_upload_artifacts",
-        "case_tenant_admissions",
+        "source_contract_versions",
+        "document_source_records",
+        "document_supplement_links",
+        "report_case_initial_admissions",
+        "recovery_supplement_snapshots",
+        "document_blobs",
         "case_document_versions",
         "event_research_briefs",
         "event_research_factor_drafts",
-        "case_relations",
-        "case_relation_reviews",
         "event_research_scope_versions",
         "event_research_scope_factors",
         "event_research_scope_evidence_assignments",
         "event_research_conclusions",
-        "case_monitor_versions",
-        "research_run_events",
-        "research_preparation_events",
-        "fund_disclosure_sync_config_versions",
-        "fund_disclosure_sync_runs",
-        "fund_disclosure_sync_run_events",
+        "event_impact_hypotheses",
+        "event_impact_hypothesis_assessments",
+        "company_impact_relations",
+        "company_impact_relation_reviews",
+        "company_impact_observations",
+        "event_impact_refresh_claims",
+        "report_case_source_spans",
+        "report_extraction_claims",
+        "report_research_scope_versions",
+        "report_research_scope_claims",
+        "report_research_scope_relations",
+        "embed_grants",
+        "embed_grant_revocations",
         "report_claims",
-        "key_factors",
-        "key_factor_candidate_runs",
-        "key_factor_candidates",
-        "claim_verifications",
-        "market_instrument_bindings",
-        "fundamental_impacts",
-        "market_observations",
-        "forecast_target_versions",
-        "actual_metric_observations",
-        "forecast_evaluation_candidates",
-        "forecast_verdicts",
-        "source_contracts",
-        "provider_records",
-        "metric_definition_versions",
-        "outcome_binding_versions",
-        "mechanism_template_versions",
-        "mechanism_node_versions",
-        "mechanism_edge_versions",
-        "case_mechanism_selection_versions",
-        "verification_rule_versions",
-        "atomic_claim_candidates",
-        "atomic_claim_reviews",
+        "report_relations",
+        "report_market_observations",
+        "report_market_confounders",
+        "report_confounder_assessments",
+        "report_fund_exposures",
         "source_spans",
         "research_cases",
         "theses",
@@ -108,66 +95,26 @@ IMMUTABLE_TABLES = frozenset(
         "causal_edges",
         "source_statements",
         "evidence_links",
-        "acquisition_job_events",
-        "acquisition_attempts",
-        "source_references",
-        "retrieval_artifacts",
-        "retrieval_artifact_documents",
-        "automatic_admission_decisions",
-        "acquisition_exceptions",
         "evidence_snapshots",
         "ai_assessments",
         "review_decisions",
         "evidence_reviews",
         "companies",
+        "company_identity_aliases",
         "stocks",
         "fund_companies",
         "funds",
         "valuation_snapshots",
+        "china_industry_indexes",
+        "china_industry_index_memberships",
+        "china_industry_index_snapshots",
         "holding_disclosures",
         "theme_roles",
         "case_theme_tag_events",
         "ai_runs",
         "audit_logs",
-        "uw_research_objects",
-        "uw_object_relations",
-        "uw_mandate_versions",
-        "uw_historical_bases",
-        "uw_ledger_entries",
-        "uw_research_versions",
-        "uw_answerability_evaluations",
-        "uw_source_manifest_versions",
-        "uw_metric_definition_versions",
-        "uw_metric_observations",
-        "uw_mechanism_pack_versions",
-        "uw_industry_state_versions",
-        "uw_industry_scenario_versions",
-        "uw_company_exposure_versions",
-        "uw_earnings_engine_versions",
-        "uw_forecast_input_versions",
-        "uw_falsifier_versions",
-        "uw_evidence_candidate_dossier_versions",
-        "uw_evidence_candidate_review_versions",
-        "uw_object_identity_versions",
-        "uw_research_object_aliases",
-        "uw_research_object_search_terms",
-        "uw_research_projects",
-        "uw_research_project_securities",
-        "uw_research_scope_versions",
-        "uw_research_agenda_versions",
-        "uw_price_snapshots",
-        "uw_fx_snapshots",
-        "uw_capital_structure_snapshots",
-        "uw_security_rights_versions",
-        "uw_research_assessment_versions",
-        "uw_revision_boundaries",
-        "uw_revision_manifests",
-        "uw_company_research_artifact_versions",
-        "uw_company_research_events",
     }
 )
-
-DELETE_PROTECTED_TABLES = frozenset({"uw_workspace_drafts"})
 
 
 class ImmutableLedgerError(Exception):
@@ -219,10 +166,6 @@ def _guard_immutable_tables(*args: Any, **kwargs: Any) -> None:
             raise ImmutableLedgerError(
                 f"table '{name}' is append-only: UPDATE/DELETE is not allowed"
             )
-        if isinstance(statement, Delete) and name in DELETE_PROTECTED_TABLES:
-            raise ImmutableLedgerError(
-                f"table '{name}' is delete-protected: DELETE is not allowed"
-            )
 
 
 def _uuid() -> uuid.UUID:
@@ -264,59 +207,211 @@ class DocumentVersion(Base):
     parse_state: Mapped[str] = mapped_column(
         String(16), nullable=False, default="success"
     )
-    # The authority of the frozen source is a declared, immutable intake
-    # attribute. It controls what kind of *candidate* extraction may retain;
-    # it never replaces the later human review gate.
-    source_authority: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="unknown"
+
+
+class SourceContractVersion(Base):
+    """Immutable terms authorizing one external report-source capability set."""
+
+    __tablename__ = "source_contract_versions"
+    __table_args__ = (Index("ix_source_contract_versions_tenant", "tenant_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    provider_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    may_display: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    may_search: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    may_ai_process: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    may_export: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    may_api_use: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    region: Mapped[str] = mapped_column(String(64), nullable=False)
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
-    # A recovery text is a separate frozen version. It may point to the
-    # unreadable original, but never mutates it or pretends its claimed page
-    # reference is a parser-generated locator.
-    supplements_document_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("document_versions.id"), nullable=True
+    effective_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
-    claimed_page_reference: Mapped[str | None] = mapped_column(
+    retention_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deletion_policy: Mapped[str] = mapped_column(Text, nullable=False)
+    downstream_restrictions: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class DocumentSourceRecord(Base):
+    """Immutable admission provenance for a frozen document version."""
+
+    __tablename__ = "document_source_records"
+    __table_args__ = (
+        CheckConstraint(
+            "admission_type IN ('licensed_provider', 'uploaded_file', "
+            "'pasted_snapshot', 'public_url')",
+            name="ck_document_source_records_admission_type",
+        ),
+        UniqueConstraint(
+            "document_version_id",
+            "tenant_id",
+            "source_contract_version_id",
+            name="uq_document_source_records_document_tenant_contract",
+        ),
+        Index("ix_document_source_records_tenant", "tenant_id"),
+        Index("ix_document_source_records_document_version", "document_version_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    source_contract_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("source_contract_versions.id"), nullable=False
+    )
+    admission_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_record_id: Mapped[str | None] = mapped_column(
         String(256), nullable=True
     )
+    verification_state: Mapped[str] = mapped_column(String(64), nullable=False)
+    acquisition_request: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
-class DocumentUploadArtifact(Base):
-    """The immutable original bytes supplied through the upload intake path.
+class DocumentSupplementLink(Base):
+    """Immutable relationship from an original document to one supplement."""
 
-    ``DocumentVersion`` is the research ledger's content record.  This table
-    preserves the user-supplied object independently of parsing so a failed
-    PDF can still be re-read, audited and recovered without rewriting it.
-    The initial storage backend is PostgreSQL/SQLite bytes; ``object_version``
-    deliberately gives callers a stable value that can later map to object
-    storage without changing the document identity.
-    """
-
-    __tablename__ = "document_upload_artifacts"
+    __tablename__ = "document_supplement_links"
     __table_args__ = (
         UniqueConstraint(
-            "document_version_id", name="uq_document_upload_artifacts_document"
+            "supplement_document_version_id",
+            name="uq_document_supplement_links_supplement_document",
         ),
+        Index(
+            "ix_document_supplement_links_original_document_version",
+            "original_document_version_id",
+        ),
+        Index(
+            "ix_document_supplement_links_supplement_document_version",
+            "supplement_document_version_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    original_document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    supplement_document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    claimed_page_reference: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ReportCaseInitialAdmission(Base):
+    """Immutable Case ownership of the exact source admission that opened it.
+
+    ``DocumentVersion`` is content-addressed and may therefore be shared by
+    tenants that independently acquire identical bytes.  A report Case belongs
+    to the tenant that admitted *this Case's* initial source record, never to a
+    tenant that later admits the same document version.
+    """
+
+    __tablename__ = "report_case_initial_admissions"
+    __table_args__ = (
+        UniqueConstraint(
+            "research_case_id", name="uq_report_case_initial_admissions_case"
+        ),
+        Index("ix_report_case_initial_admissions_tenant", "tenant_id"),
+        Index(
+            "ix_report_case_initial_admissions_source_record",
+            "document_source_record_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    document_source_record_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_source_records.id"), nullable=False
+    )
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class RecoverySupplementSnapshot(Base):
+    """Case-local recovery provenance when global content dedup prevents a new document."""
+
+    __tablename__ = "recovery_supplement_snapshots"
+    __table_args__ = (
+        Index("ix_recovery_supplement_snapshots_case", "research_case_id"),
+        Index(
+            "ix_recovery_supplement_snapshots_original_document",
+            "original_document_version_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    research_case_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("research_cases.id"), nullable=False
+    )
+    original_document_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("document_versions.id"), nullable=False
+    )
+    source_contract_version_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("source_contract_versions.id"), nullable=False
+    )
+    tenant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_identity: Mapped[str] = mapped_column(Text, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    verbatim_text: Mapped[str] = mapped_column(Text, nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    claimed_page_reference: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class DocumentBlob(Base):
+    """Immutable reference to bytes supplied directly by a researcher.
+
+    DocumentVersion deliberately remains a ledger identity record rather than
+    an unbounded binary column.  For uploads, this companion record points to
+    content-addressed bytes in the configured local immutable blob store.
+    """
+
+    __tablename__ = "document_blobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_version_id", name="uq_document_blobs_document_version"
+        ),
+        UniqueConstraint("storage_key", name="uq_document_blobs_storage_key"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     document_version_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("document_versions.id"), nullable=False, index=True
     )
+    storage_key: Mapped[str] = mapped_column(String(256), nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    object_version: Mapped[str] = mapped_column(String(96), nullable=False)
-    storage_kind: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="database_blob"
-    )
-    file_name: Mapped[str] = mapped_column(String(512), nullable=False)
-    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
-    raw_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    uploaded_by: Mapped[str] = mapped_column(String(128), nullable=False)
-    retention_policy: Mapped[str] = mapped_column(String(128), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    media_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class CaseDocumentVersion(Base):
@@ -347,6 +442,7 @@ class CaseDocumentVersion(Base):
 
 class SourceSpan(Base):
     __tablename__ = "source_spans"
+    __table_args__ = (Index("ix_source_spans_document_version", "document_version_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     document_version_id: Mapped[uuid.UUID] = mapped_column(
@@ -388,35 +484,6 @@ class ResearchCase(Base):
     evidence_cutoff: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
-class CaseTenantAdmission(Base):
-    """Immutable ownership of an event Case's initial source admission.
-
-    Document versions are content-addressed and may be reused, so their hash
-    cannot establish who may inspect a Case.  This record binds the Case to
-    the tenant that opened it and to the exact initial frozen document.
-    """
-
-    __tablename__ = "case_tenant_admissions"
-    __table_args__ = (
-        UniqueConstraint("research_case_id", name="uq_case_tenant_admissions_case"),
-        Index("ix_case_tenant_admissions_tenant", "tenant_id"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    research_case_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("research_cases.id"), nullable=False
-    )
-    tenant_id: Mapped[str] = mapped_column(String(256), nullable=False)
-    initial_document_version_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("document_versions.id"), nullable=False
-    )
-    admitted_by: Mapped[str] = mapped_column(String(128), nullable=False)
-    admission_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    admitted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-
-
 class Thesis(Base):
     __tablename__ = "theses"
 
@@ -425,9 +492,6 @@ class Thesis(Base):
         Uuid, ForeignKey("research_cases.id"), nullable=False
     )
     statement: Mapped[str] = mapped_column(Text, nullable=False)
-    research_protocol_required: Mapped[bool] = mapped_column(
-        nullable=False, default=False, server_default="false"
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -486,12 +550,6 @@ class CausalEdge(Base):
 
 class SourceStatement(Base):
     __tablename__ = "source_statements"
-    __table_args__ = (
-        UniqueConstraint(
-            "automatic_admission_decision_id",
-            name="uq_source_statements_automatic_admission_decision",
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     source_span_id: Mapped[uuid.UUID] = mapped_column(
@@ -500,79 +558,13 @@ class SourceStatement(Base):
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
     observed_period: Mapped[date | None] = mapped_column(Date, nullable=True)
-    atomic_claim_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("atomic_claim_candidates.id"), nullable=True, index=True
-    )
-    automatic_admission_decision_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid,
-        ForeignKey(
-            "automatic_admission_decisions.id",
-            name="fk_source_statements_automatic_admission_decision_id",
-        ),
-        nullable=True,
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
 
 
-class AtomicClaimCandidate(Base):
-    """A validated but not-yet-formal statement candidate from frozen text."""
-
-    __tablename__ = "atomic_claim_candidates"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    source_span_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("source_spans.id"), nullable=False, index=True)
-    canonical_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    quote: Mapped[str] = mapped_column(Text, nullable=False)
-    quote_start: Mapped[int] = mapped_column(Integer, nullable=False)
-    quote_end: Mapped[int] = mapped_column(Integer, nullable=False)
-    quote_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
-    claim_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    assertion_actor: Mapped[str | None] = mapped_column(Text, nullable=True)
-    authority_level: Mapped[str] = mapped_column(String(32), nullable=False)
-    structured_fields: Mapped[dict] = mapped_column(JSON, nullable=False)
-    validation_result: Mapped[dict] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class AtomicClaimReview(Base):
-    """Append-only human decision for one atomic claim candidate."""
-
-    __tablename__ = "atomic_claim_reviews"
-    __table_args__ = (UniqueConstraint("atomic_claim_candidate_id", "idempotency_key", name="uq_atomic_claim_reviews_idempotency"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    atomic_claim_candidate_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("atomic_claim_candidates.id"), nullable=False, index=True)
-    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
-    reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
-    reason: Mapped[str] = mapped_column(Text, nullable=False)
-    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
-    published_source_statement_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("source_statements.id"), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class EvidenceLink(Base):
     __tablename__ = "evidence_links"
-    __table_args__ = (
-        CheckConstraint(
-            "(review_state = 'automatically_admitted' AND "
-            "automatic_admission_decision_id IS NOT NULL) OR "
-            "(review_state <> 'automatically_admitted' AND "
-            "automatic_admission_decision_id IS NULL)",
-            name="ck_evidence_links_automatic_admission_provenance",
-        ),
-        Index(
-            "uq_evidence_links_automatic_admission_decision",
-            "automatic_admission_decision_id",
-            unique=True,
-            sqlite_where=text("automatic_admission_decision_id IS NOT NULL"),
-            postgresql_where=text("automatic_admission_decision_id IS NOT NULL"),
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     thesis_id: Mapped[uuid.UUID] = mapped_column(
@@ -592,14 +584,6 @@ class EvidenceLink(Base):
         String(32), nullable=False, default="machine_generated"
     )
     model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    automatic_admission_decision_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid,
-        ForeignKey(
-            "automatic_admission_decisions.id",
-            name="fk_evidence_links_automatic_admission_decision_id",
-        ),
-        nullable=True,
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -623,20 +607,6 @@ class EvidenceSnapshot(Base):
 
 class AIAssessment(Base):
     __tablename__ = "ai_assessments"
-    __table_args__ = (
-        CheckConstraint(
-            "(research_protocol_status IS NULL AND effective_binding_id IS NULL "
-            "AND mechanism_template_version_id IS NULL AND verification_rule_ids IS NULL) "
-            "OR (research_protocol_status IS NOT NULL "
-            "AND research_protocol_status IN ('single_metric_monitoring', 'ready') "
-            "AND effective_binding_id IS NOT NULL "
-            "AND mechanism_template_version_id IS NOT NULL "
-            "AND verification_rule_ids IS NOT NULL "
-            "AND (research_protocol_status <> 'single_metric_monitoring' "
-            "OR conclusion = 'insufficient_evidence'))",
-            name="ck_ai_assessments_research_protocol_status",
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     snapshot_id: Mapped[uuid.UUID] = mapped_column(
@@ -645,20 +615,6 @@ class AIAssessment(Base):
     conclusion: Mapped[str] = mapped_column(String(32), nullable=False)
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     gaps: Mapped[list] = mapped_column(JSON, nullable=False)
-    # Frozen protocol footprint at the strict assessment write boundary.
-    # Legacy and non-strict assessments retain NULL provenance.
-    research_protocol_status: Mapped[str | None] = mapped_column(
-        String(32), nullable=True
-    )
-    effective_binding_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("outcome_binding_versions.id"), nullable=True
-    )
-    mechanism_template_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("mechanism_template_versions.id"), nullable=True
-    )
-    verification_rule_ids: Mapped[list[str] | None] = mapped_column(
-        JSON(none_as_null=True), nullable=True
-    )
     displayed_as_provisional: Mapped[bool] = mapped_column(
         nullable=False, default=True
     )
@@ -667,368 +623,6 @@ class AIAssessment(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-
-
-_SQLITE_ASSESSMENT_PROTOCOL_TRIGGER = DDL(
-    """
-    CREATE TRIGGER trg_ai_assessments_protocol_scope
-    BEFORE INSERT ON ai_assessments
-    WHEN NEW.research_protocol_status IS NOT NULL
-    BEGIN
-      SELECT RAISE(ABORT, 'assessment binding does not match snapshot thesis')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN outcome_binding_versions b
-          ON b.id = NEW.effective_binding_id AND b.thesis_id = s.thesis_id
-        WHERE s.id = NEW.snapshot_id
-          AND t.research_protocol_required = 1
-          AND b.state = 'approved'
-          AND NOT EXISTS (
-            SELECT 1 FROM outcome_binding_versions newer
-            WHERE newer.thesis_id = b.thesis_id
-              AND (newer.created_at > b.created_at
-                   OR (newer.created_at = b.created_at AND newer.id > b.id))
-          )
-      );
-      SELECT RAISE(ABORT, 'assessment template is not current for snapshot case')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN case_mechanism_selection_versions c
-          ON c.research_case_id = t.research_case_id
-         AND c.template_version_id = NEW.mechanism_template_version_id
-        WHERE s.id = NEW.snapshot_id
-          AND NOT EXISTS (
-            SELECT 1 FROM case_mechanism_selection_versions newer
-            WHERE newer.research_case_id = c.research_case_id
-              AND (newer.created_at > c.created_at
-                   OR (newer.created_at = c.created_at AND newer.id > c.id))
-          )
-      );
-      SELECT RAISE(ABORT, 'assessment verification rules must be a JSON array')
-      WHERE json_type(NEW.verification_rule_ids) <> 'array';
-      SELECT RAISE(ABORT, 'assessment verification rules must be unique')
-      WHERE (
-        SELECT COUNT(*) FROM json_each(NEW.verification_rule_ids)
-      ) <> (
-        SELECT COUNT(DISTINCT replace(lower(j.value), '-', ''))
-        FROM json_each(NEW.verification_rule_ids) j
-        WHERE j.type = 'text'
-      );
-      SELECT RAISE(ABORT, 'assessment verification rule is not current in snapshot protocol scope')
-      WHERE EXISTS (
-        SELECT 1
-        FROM json_each(NEW.verification_rule_ids) j
-        LEFT JOIN verification_rule_versions r
-          ON r.id = replace(lower(j.value), '-', '') AND j.type = 'text'
-        LEFT JOIN mechanism_edge_versions e ON e.id = r.mechanism_edge_id
-        WHERE r.id IS NULL
-           OR r.research_case_id IS NULL
-           OR r.research_case_id <> (
-             SELECT t.research_case_id
-             FROM evidence_snapshots s JOIN theses t ON t.id = s.thesis_id
-             WHERE s.id = NEW.snapshot_id
-           )
-           OR e.id IS NULL
-           OR e.template_version_id <> NEW.mechanism_template_version_id
-           OR EXISTS (
-             SELECT 1 FROM verification_rule_versions newer
-             WHERE newer.research_case_id = r.research_case_id
-               AND newer.mechanism_edge_id = r.mechanism_edge_id
-               AND (newer.created_at > r.created_at
-                    OR (newer.created_at = r.created_at AND newer.id > r.id))
-           )
-      );
-      SELECT RAISE(ABORT, 'assessment verification rules omit current protocol rules')
-      WHERE EXISTS (
-        SELECT 1
-        FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN verification_rule_versions r
-          ON r.research_case_id = t.research_case_id
-        JOIN mechanism_edge_versions e
-          ON e.id = r.mechanism_edge_id
-         AND e.template_version_id = NEW.mechanism_template_version_id
-        WHERE s.id = NEW.snapshot_id
-          AND NOT EXISTS (
-            SELECT 1 FROM verification_rule_versions newer
-            WHERE newer.research_case_id = r.research_case_id
-              AND newer.mechanism_edge_id = r.mechanism_edge_id
-              AND (newer.created_at > r.created_at
-                   OR (newer.created_at = r.created_at AND newer.id > r.id))
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM json_each(NEW.verification_rule_ids) j
-            WHERE j.type = 'text'
-              AND replace(lower(j.value), '-', '') = r.id
-          )
-      );
-      SELECT RAISE(ABORT, 'assessment protocol is missing a required verification rule')
-      WHERE EXISTS (
-        SELECT 1
-        FROM mechanism_edge_versions e
-        JOIN mechanism_node_versions target ON target.id = e.target_node_id
-        WHERE e.template_version_id = NEW.mechanism_template_version_id
-          AND target.role IN ('required_for_outcome', 'required_for_attribution')
-          AND NOT EXISTS (
-            SELECT 1
-            FROM evidence_snapshots s
-            JOIN theses t ON t.id = s.thesis_id
-            JOIN verification_rule_versions r
-              ON r.research_case_id = t.research_case_id
-             AND r.mechanism_edge_id = e.id
-            WHERE s.id = NEW.snapshot_id
-              AND NOT EXISTS (
-                SELECT 1 FROM verification_rule_versions newer
-                WHERE newer.research_case_id = r.research_case_id
-                  AND newer.mechanism_edge_id = r.mechanism_edge_id
-                  AND (newer.created_at > r.created_at
-                       OR (newer.created_at = r.created_at AND newer.id > r.id))
-              )
-          )
-      );
-      SELECT RAISE(ABORT, 'assessment protocol is missing a counter hypothesis')
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN verification_rule_versions r
-          ON r.research_case_id = t.research_case_id
-        JOIN mechanism_edge_versions e
-          ON e.id = r.mechanism_edge_id
-         AND e.template_version_id = NEW.mechanism_template_version_id
-        WHERE s.id = NEW.snapshot_id
-          AND r.contradiction_predicate <> ''
-          AND NOT EXISTS (
-            SELECT 1 FROM verification_rule_versions newer
-            WHERE newer.research_case_id = r.research_case_id
-              AND newer.mechanism_edge_id = r.mechanism_edge_id
-              AND (newer.created_at > r.created_at
-                   OR (newer.created_at = r.created_at AND newer.id > r.id))
-          )
-      );
-      SELECT RAISE(ABORT, 'assessment research protocol status does not match current footprint')
-      WHERE NEW.research_protocol_status <> (
-        SELECT CASE
-          WHEN CASE json_type(b.entity_scope, '$.business_line')
-            WHEN 'true' THEN 1
-            WHEN 'integer' THEN json_extract(b.entity_scope, '$.business_line') <> 0
-            WHEN 'real' THEN json_extract(b.entity_scope, '$.business_line') <> 0
-            WHEN 'text' THEN json_extract(b.entity_scope, '$.business_line') <> ''
-            WHEN 'array' THEN json_array_length(b.entity_scope, '$.business_line') > 0
-            WHEN 'object' THEN EXISTS (
-              SELECT 1 FROM json_each(b.entity_scope, '$.business_line')
-            )
-            ELSE 0
-          END
-           AND (
-             SELECT COUNT(DISTINCT r.metric_definition_id)
-             FROM mechanism_edge_versions e
-             JOIN mechanism_node_versions target ON target.id = e.target_node_id
-             JOIN verification_rule_versions r ON r.mechanism_edge_id = e.id
-             WHERE e.template_version_id = NEW.mechanism_template_version_id
-               AND target.role IN ('required_for_outcome', 'required_for_attribution')
-               AND r.research_case_id = t.research_case_id
-               AND NOT EXISTS (
-                 SELECT 1 FROM verification_rule_versions newer
-                 WHERE newer.research_case_id = r.research_case_id
-                   AND newer.mechanism_edge_id = r.mechanism_edge_id
-                   AND (newer.created_at > r.created_at
-                        OR (newer.created_at = r.created_at AND newer.id > r.id))
-               )
-           ) < 2
-          THEN 'single_metric_monitoring'
-          ELSE 'ready'
-        END
-        FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN outcome_binding_versions b ON b.id = NEW.effective_binding_id
-        WHERE s.id = NEW.snapshot_id
-      );
-    END
-    """
-).execute_if(dialect="sqlite")
-
-_POSTGRES_ASSESSMENT_PROTOCOL_TRIGGER_FUNCTION = DDL(
-    """
-    CREATE OR REPLACE FUNCTION validate_ai_assessment_protocol_scope()
-    RETURNS trigger LANGUAGE plpgsql AS $$
-    BEGIN
-      IF NEW.research_protocol_status IS NULL THEN RETURN NEW; END IF;
-      IF NOT EXISTS (
-        SELECT 1 FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN outcome_binding_versions b
-          ON b.id = NEW.effective_binding_id AND b.thesis_id = s.thesis_id
-        WHERE s.id = NEW.snapshot_id
-          AND t.research_protocol_required IS TRUE
-          AND b.state = 'approved'
-          AND NOT EXISTS (
-            SELECT 1 FROM outcome_binding_versions newer
-            WHERE newer.thesis_id = b.thesis_id
-              AND (newer.created_at, newer.id) > (b.created_at, b.id)
-          )
-      ) THEN RAISE EXCEPTION 'assessment binding does not match snapshot thesis' USING ERRCODE = '23514'; END IF;
-      IF NOT EXISTS (
-        SELECT 1 FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN case_mechanism_selection_versions c
-          ON c.research_case_id = t.research_case_id
-         AND c.template_version_id = NEW.mechanism_template_version_id
-        WHERE s.id = NEW.snapshot_id
-          AND NOT EXISTS (
-            SELECT 1 FROM case_mechanism_selection_versions newer
-            WHERE newer.research_case_id = c.research_case_id
-              AND (newer.created_at, newer.id) > (c.created_at, c.id)
-          )
-      ) THEN RAISE EXCEPTION 'assessment template is not current for snapshot case' USING ERRCODE = '23514'; END IF;
-      IF json_typeof(NEW.verification_rule_ids) <> 'array' THEN
-        RAISE EXCEPTION 'assessment verification rules must be a JSON array' USING ERRCODE = '23514';
-      END IF;
-      IF json_array_length(NEW.verification_rule_ids) <> (
-        SELECT COUNT(DISTINCT lower(j.value))
-        FROM json_array_elements_text(NEW.verification_rule_ids) j(value)
-      ) THEN RAISE EXCEPTION 'assessment verification rules must be unique' USING ERRCODE = '23514'; END IF;
-      IF EXISTS (
-        SELECT 1 FROM json_array_elements_text(NEW.verification_rule_ids) j(value)
-        LEFT JOIN verification_rule_versions r
-          ON r.id::text = lower(j.value)
-        LEFT JOIN mechanism_edge_versions e ON e.id = r.mechanism_edge_id
-        WHERE r.id IS NULL
-           OR r.research_case_id IS DISTINCT FROM (
-             SELECT t.research_case_id
-             FROM evidence_snapshots s JOIN theses t ON t.id = s.thesis_id
-             WHERE s.id = NEW.snapshot_id
-           )
-           OR e.id IS NULL
-           OR e.template_version_id <> NEW.mechanism_template_version_id
-           OR EXISTS (
-             SELECT 1 FROM verification_rule_versions newer
-             WHERE newer.research_case_id = r.research_case_id
-               AND newer.mechanism_edge_id = r.mechanism_edge_id
-               AND (newer.created_at, newer.id) > (r.created_at, r.id)
-           )
-      ) THEN RAISE EXCEPTION 'assessment verification rule is not current in snapshot protocol scope' USING ERRCODE = '23514'; END IF;
-      IF EXISTS (
-        SELECT 1
-        FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN verification_rule_versions r
-          ON r.research_case_id = t.research_case_id
-        JOIN mechanism_edge_versions e
-          ON e.id = r.mechanism_edge_id
-         AND e.template_version_id = NEW.mechanism_template_version_id
-        WHERE s.id = NEW.snapshot_id
-          AND NOT EXISTS (
-            SELECT 1 FROM verification_rule_versions newer
-            WHERE newer.research_case_id = r.research_case_id
-              AND newer.mechanism_edge_id = r.mechanism_edge_id
-              AND (newer.created_at, newer.id) > (r.created_at, r.id)
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM json_array_elements_text(NEW.verification_rule_ids) j(value)
-            WHERE lower(j.value) = r.id::text
-          )
-      ) THEN RAISE EXCEPTION 'assessment verification rules omit current protocol rules' USING ERRCODE = '23514'; END IF;
-      IF EXISTS (
-        SELECT 1
-        FROM mechanism_edge_versions e
-        JOIN mechanism_node_versions target ON target.id = e.target_node_id
-        WHERE e.template_version_id = NEW.mechanism_template_version_id
-          AND target.role IN ('required_for_outcome', 'required_for_attribution')
-          AND NOT EXISTS (
-            SELECT 1
-            FROM evidence_snapshots s
-            JOIN theses t ON t.id = s.thesis_id
-            JOIN verification_rule_versions r
-              ON r.research_case_id = t.research_case_id
-             AND r.mechanism_edge_id = e.id
-            WHERE s.id = NEW.snapshot_id
-              AND NOT EXISTS (
-                SELECT 1 FROM verification_rule_versions newer
-                WHERE newer.research_case_id = r.research_case_id
-                  AND newer.mechanism_edge_id = r.mechanism_edge_id
-                  AND (newer.created_at, newer.id) > (r.created_at, r.id)
-              )
-          )
-      ) THEN RAISE EXCEPTION 'assessment protocol is missing a required verification rule' USING ERRCODE = '23514'; END IF;
-      IF NOT EXISTS (
-        SELECT 1
-        FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN verification_rule_versions r
-          ON r.research_case_id = t.research_case_id
-        JOIN mechanism_edge_versions e
-          ON e.id = r.mechanism_edge_id
-         AND e.template_version_id = NEW.mechanism_template_version_id
-        WHERE s.id = NEW.snapshot_id
-          AND r.contradiction_predicate <> ''
-          AND NOT EXISTS (
-            SELECT 1 FROM verification_rule_versions newer
-            WHERE newer.research_case_id = r.research_case_id
-              AND newer.mechanism_edge_id = r.mechanism_edge_id
-              AND (newer.created_at, newer.id) > (r.created_at, r.id)
-          )
-      ) THEN RAISE EXCEPTION 'assessment protocol is missing a counter hypothesis' USING ERRCODE = '23514'; END IF;
-      IF NEW.research_protocol_status <> (
-        SELECT CASE
-          WHEN COALESCE(
-            (b.entity_scope::jsonb -> 'business_line') NOT IN (
-              'null'::jsonb,
-              'false'::jsonb,
-              '0'::jsonb,
-              '""'::jsonb,
-              '[]'::jsonb,
-              '{}'::jsonb
-            ),
-            FALSE
-          )
-           AND (
-             SELECT COUNT(DISTINCT r.metric_definition_id)
-             FROM mechanism_edge_versions e
-             JOIN mechanism_node_versions target ON target.id = e.target_node_id
-             JOIN verification_rule_versions r ON r.mechanism_edge_id = e.id
-             WHERE e.template_version_id = NEW.mechanism_template_version_id
-               AND target.role IN ('required_for_outcome', 'required_for_attribution')
-               AND r.research_case_id = t.research_case_id
-               AND NOT EXISTS (
-                 SELECT 1 FROM verification_rule_versions newer
-                 WHERE newer.research_case_id = r.research_case_id
-                   AND newer.mechanism_edge_id = r.mechanism_edge_id
-                   AND (newer.created_at, newer.id) > (r.created_at, r.id)
-               )
-           ) < 2
-          THEN 'single_metric_monitoring'
-          ELSE 'ready'
-        END
-        FROM evidence_snapshots s
-        JOIN theses t ON t.id = s.thesis_id
-        JOIN outcome_binding_versions b ON b.id = NEW.effective_binding_id
-        WHERE s.id = NEW.snapshot_id
-      ) THEN RAISE EXCEPTION 'assessment research protocol status does not match current footprint' USING ERRCODE = '23514'; END IF;
-      RETURN NEW;
-    END $$
-    """
-).execute_if(dialect="postgresql")
-
-_POSTGRES_ASSESSMENT_PROTOCOL_TRIGGER = DDL(
-    """
-    CREATE TRIGGER trg_ai_assessments_protocol_scope
-    BEFORE INSERT ON ai_assessments
-    FOR EACH ROW EXECUTE FUNCTION validate_ai_assessment_protocol_scope()
-    """
-).execute_if(dialect="postgresql")
-
-event.listen(AIAssessment.__table__, "after_create", _SQLITE_ASSESSMENT_PROTOCOL_TRIGGER)
-event.listen(
-    AIAssessment.__table__,
-    "after_create",
-    _POSTGRES_ASSESSMENT_PROTOCOL_TRIGGER_FUNCTION,
-)
-event.listen(AIAssessment.__table__, "after_create", _POSTGRES_ASSESSMENT_PROTOCOL_TRIGGER)
 
 
 class ReviewDecision(Base):
@@ -1076,18 +670,39 @@ class EvidenceReview(Base):
 
 class Company(Base):
     __tablename__ = "companies"
+    __table_args__ = (
+        Index(
+            "uq_companies_type_canonical_identity",
+            "type",
+            "canonical_identity",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(String(64), nullable=False)
+    canonical_identity: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
 
 
+@event.listens_for(Company, "before_insert")
+def _set_company_canonical_identity(_mapper, _connection, target: Company) -> None:
+    from unicodedata import normalize
+
+    target.canonical_identity = " ".join(
+        normalize("NFKC", target.name).split()
+    ).casefold()
+
+
 class Stock(Base):
     __tablename__ = "stocks"
+    __table_args__ = (
+        Index("ix_stocks_company_market", "company_id", "market"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     company_id: Mapped[uuid.UUID] = mapped_column(
@@ -1131,6 +746,20 @@ class Fund(Base):
 
 class ValuationSnapshot(Base):
     __tablename__ = "valuation_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_valuation_snapshots_stock_metric_as_of",
+            "stock_id",
+            "metric_name",
+            "as_of_date",
+        ),
+        Index(
+            "ix_valuation_snapshots_availability",
+            "stock_id",
+            "as_of_date",
+            "available_at",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     stock_id: Mapped[uuid.UUID] = mapped_column(
@@ -1141,18 +770,126 @@ class ValuationSnapshot(Base):
     metric_value: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
     source: Mapped[str] = mapped_column(String(128), nullable=False)
     definition: Mapped[str] = mapped_column(Text, nullable=False)
+    # The first time the normalized metric was externally visible.  Legacy
+    # snapshots intentionally remain NULL after migration: a historical
+    # backfill is useful context, but cannot prove what was knowable inside an
+    # event window.
+    available_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
 
 
+class ChinaIndustryIndex(Base):
+    """One provider-defined China industry index, frozen as ledger metadata."""
+
+    __tablename__ = "china_industry_indexes"
+    __table_args__ = (
+        UniqueConstraint("provider", "code", name="uq_china_industry_index_provider_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    market: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ChinaIndustryIndexMembership(Base):
+    """Point-in-time visible company-to-industry-index mapping."""
+
+    __tablename__ = "china_industry_index_memberships"
+    __table_args__ = (
+        Index(
+            "ix_china_industry_memberships_company_available",
+            "company_id",
+            "available_at",
+        ),
+        Index(
+            "ix_china_industry_memberships_index_available",
+            "industry_index_id",
+            "available_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("companies.id"), nullable=False
+    )
+    industry_index_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("china_industry_indexes.id"), nullable=False
+    )
+    applicable_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    applicable_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ChinaIndustryIndexSnapshot(Base):
+    """One externally visible industry-index metric observation."""
+
+    __tablename__ = "china_industry_index_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_china_industry_index_snapshots_metric_as_of",
+            "industry_index_id",
+            "metric_name",
+            "as_of_date",
+        ),
+        Index(
+            "ix_china_industry_index_snapshots_availability",
+            "industry_index_id",
+            "as_of_date",
+            "available_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    industry_index_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("china_industry_indexes.id"), nullable=False
+    )
+    as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
+    metric_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    metric_value: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[str] = mapped_column(Text, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+@event.listens_for(ChinaIndustryIndexSnapshot, "before_insert")
+def _validate_industry_snapshot_availability(
+    _mapper, _connection, target: ChinaIndustryIndexSnapshot
+) -> None:
+    if target.available_at.date() < target.as_of_date:
+        raise ValueError(
+            "industry index snapshot availability cannot predate its trade date"
+        )
+
+
+
+
 class HoldingDisclosure(Base):
     __tablename__ = "holding_disclosures"
     __table_args__ = (
-        CheckConstraint("coverage_status IN ('complete', 'partial', 'not_recorded')", name="ck_holding_disclosures_coverage_status"),
-        CheckConstraint(
-            "filing_kind IN ('quarterly', 'annual', 'correction', 'other')",
-            name="ck_holding_disclosures_filing_kind",
+        Index(
+            "ix_holding_disclosures_stock_published_report",
+            "stock_id",
+            "published_at",
+            "report_period",
         ),
     )
 
@@ -1172,14 +909,6 @@ class HoldingDisclosure(Base):
         DateTime(timezone=True), nullable=False
     )
     source: Mapped[str] = mapped_column(String(128), nullable=False)
-    source_document_version_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("document_versions.id"), nullable=True)
-    source_span_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("source_spans.id"), nullable=True)
-    provider_record_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("provider_records.id"), nullable=True)
-    coverage_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_recorded")
-    filing_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="other")
-    supersedes_disclosure_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("holding_disclosures.id"), nullable=True
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -1255,9 +984,6 @@ class AIRun(Base):
 
     __tablename__ = "ai_runs"
 
-    # Null means historical/uninstrumented, not zero provider consumption.
-    usage: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     model_version: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1272,11 +998,6 @@ class AIRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-
-
-# Use the exact fixed-path expressions used by usage queries on both dialects.
-from app.ai.scope_columns import AuditCaseRef, AuditRunRef
-Index("ix_ai_runs_research_scope", AuditCaseRef(AIRun.input_ref), AuditRunRef(AIRun.input_ref))
 
 
 class AuditLog(Base):

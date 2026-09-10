@@ -33,25 +33,22 @@ def upgrade() -> None:
     )
 
     # Defence-in-depth: reject UPDATE/DELETE for every new ledger table.
-    # SQLite is supported for isolated demos but does not expose the
-    # PostgreSQL append-only trigger function.
-    if op.get_bind().dialect.name != "postgresql":
-        return
-
     # reject_mutable_ledger() was created in migration 0001.
-    for table in IMMUTABLE_TABLES:
-        op.execute(
-            f"CREATE TRIGGER no_update_{table} BEFORE UPDATE ON {table} "
-            f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
-        )
-        op.execute(
-            f"CREATE TRIGGER no_delete_{table} BEFORE DELETE ON {table} "
-            f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
-        )
+    if op.get_bind().dialect.name == "postgresql":
+        for table in IMMUTABLE_TABLES:
+            op.execute(
+                f"CREATE TRIGGER no_update_{table} BEFORE UPDATE ON {table} "
+                f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+            )
+            op.execute(
+                f"CREATE TRIGGER no_delete_{table} BEFORE DELETE ON {table} "
+                f"FOR EACH ROW EXECUTE FUNCTION reject_mutable_ledger();"
+            )
 
 
 def downgrade() -> None:
-    for table in IMMUTABLE_TABLES:
-        op.execute(f"DROP TRIGGER IF EXISTS no_update_{table} ON {table};")
-        op.execute(f"DROP TRIGGER IF EXISTS no_delete_{table} ON {table};")
+    if op.get_bind().dialect.name == "postgresql":
+        for table in IMMUTABLE_TABLES:
+            op.execute(f"DROP TRIGGER IF EXISTS no_update_{table} ON {table};")
+            op.execute(f"DROP TRIGGER IF EXISTS no_delete_{table} ON {table};")
     op.drop_table("ai_runs")

@@ -75,11 +75,6 @@ class ProposalPublisher:
             )
             return None
 
-        if decision.outcome == "needs_more_evidence":
-            # The reviewer explicitly requested a further collection round;
-            # the proposal remains auditable but cannot become formal evidence.
-            return None
-
         if proposal.kind == "evidence_link":
             return self._publish_evidence_link(proposal, decision)
         # Other kinds: recorded but not yet auto-published (returns None until

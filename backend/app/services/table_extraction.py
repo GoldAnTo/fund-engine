@@ -194,9 +194,6 @@ class TableFact:
     metric_name: str
     statement_text: str
     observed_period: date
-    quote: str
-    quote_start: int
-    quote_end: int
 
 
 # ---------------------------------------------------------------------------
@@ -214,16 +211,11 @@ class FinancialTableExtractor:
         facts: list[TableFact] = []
         current_years: list[str] = []
         current_unit: str | None = None
-        offset = 0
 
-        for raw_line in text.splitlines(keepends=True):
-            line_offset = offset
-            offset += len(raw_line)
-            line = raw_line.rstrip("\r\n")
+        for line in text.splitlines():
             clean = line.strip()
             if not clean:
                 continue
-            quote_start = line_offset + line.index(clean)
 
             years = [m.group("year") for m in re.finditer(YEAR_PATTERN, clean)]
             unit = self._unit_from_line(clean)
@@ -264,9 +256,6 @@ class FinancialTableExtractor:
                         metric_name=metric_name,
                         statement_text=f"{period}年{label}为{value}",
                         observed_period=date(int(period), 12, 31),
-                        quote=clean,
-                        quote_start=quote_start,
-                        quote_end=quote_start + len(clean),
                     )
                 )
 

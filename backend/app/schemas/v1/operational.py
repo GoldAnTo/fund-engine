@@ -27,11 +27,10 @@ class ProposalItemDTO(V1Model):
     basis_cutoff: str | None = None
     status: str
     version: int
-    display_withheld: bool = False
 
 
 class ReviewDecisionRequest(V1Model):
-    outcome: Literal["confirmed", "modified", "rejected", "needs_more_evidence"]
+    outcome: Literal["confirmed", "modified", "rejected"]
     reason: str = Field(min_length=1)
     expected_version: int = Field(ge=1)
     reviewer_id: str = Field(min_length=1)

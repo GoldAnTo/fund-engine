@@ -1,22 +1,21 @@
 """End-to-end AI research engine script.
 
-Runs ``extract -> propose -> assess`` on a seeded case using a live LLM.
-Operational CLI runs require ``LLM_API_KEY``; deterministic mock output is
-restricted to automated tests running with ``APP_ENV=test``.
+Runs ``extract -> propose -> assess`` on a seeded case.  Without
+``LLM_API_KEY`` the engine runs in mock mode, producing deterministic
+machine-generated statements, links, and assessments.
 
 Usage::
 
-    # auto-seed then run with a live provider (SQLite)
-    LLM_API_KEY=your-api-key python -m app.scripts.run_ai_engine --seed
+    # auto-seed then run (mock mode, SQLite)
+    python -m app.scripts.run_ai_engine --seed
 
-    # run on an existing seeded case with live provider settings in the env
-    LLM_API_KEY=your-api-key python -m app.scripts.run_ai_engine --case-id <uuid>
+    # run on an existing seeded case
+    python -m app.scripts.run_ai_engine --case-id <uuid>
 """
 from __future__ import annotations
 
 import argparse
 import os
-import sys
 import uuid
 from datetime import datetime, timezone
 
@@ -24,7 +23,7 @@ from sqlalchemy import create_engine, exists, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import LLMClient, LLMProviderError, LLM_PROVIDER_ERROR_MESSAGE
+from app.ai.client import LLMClient
 from app.ai.extraction import StatementExtractor
 from app.ai.proposal import EvidenceProposer
 from app.env import load_local_env
@@ -37,9 +36,7 @@ from app.models.ledger import (
     SourceSpan,
     SourceStatement,
     Thesis,
-    ValidationError,
 )
-from app.models.source_governance import SourceContract
 from app.services.compliance import ComplianceRefusedError
 
 
@@ -90,19 +87,10 @@ def _pending_versions(
         texts_by_version.setdefault(span_row.document_version_id, []).append(
             span_row.verbatim_text
         )
-    contracts = {
-        contract.document_version_id: contract
-        for contract in session.scalars(
-            select(SourceContract).where(
-                SourceContract.document_version_id.in_([v.id for v in retryable])
-            )
-        )
-    } if retryable else {}
     return [
         v
         for v in retryable
         if assess_span_texts(texts_by_version.get(v.id, []))[0] != "degenerate"
-        and (contracts.get(v.id) is None or contracts[v.id].allow_ai_processing)
     ]
 
 
@@ -123,13 +111,7 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
         versions = _pending_versions(session, case.id)
         total_statements = 0
         for version in versions:
-            try:
-                statements = extractor.extract(version.id, session)
-            except Exception:
-                # The extractor owns the failed AIRun in the current
-                # post-provider transaction. Preserve it, then fail closed.
-                session.commit()
-                raise
+            statements = extractor.extract(version.id, session)
             total_statements += len(statements)
         session.commit()
         print(
@@ -147,34 +129,25 @@ def run_engine(session: Session, case: ResearchCase, skip_extract: bool = False)
     )
     total_links = 0
     for thesis in theses:
-        try:
-            links = proposer.propose(thesis.id, session)
-        except Exception:
-            # Do not let process teardown roll back the proposer-owned failed
-            # AIRun, and never continue into assessment after this failure.
-            session.commit()
-            raise
+        links = proposer.propose(thesis.id, session)
         total_links += len(links)
     session.commit()  # persist proposals before the assess loop
     print(f"[propose] {total_links} evidence links for {len(theses)} theses")
 
-    # 3. Generate an AI assessment for every thesis. A compliance/protocol
-    # refusal on one thesis must not kill the run: roll back that thesis's
-    # half-frozen snapshot, preserve its failed AIRun, and continue.
+    # 3. Generate an AI assessment for every thesis.  A compliance refusal
+    # on one thesis must not kill the run: roll back that thesis's
+    # half-frozen snapshot + failed AIRun, report it, and continue.
     cutoff = datetime.now(timezone.utc)
     for thesis in theses:
         label = thesis.statement[:50]
         try:
             assessment = generator.generate(thesis.id, cutoff, session)
-        except (ComplianceRefusedError, ValidationError) as exc:
-            # The generator rolled back partial immutable writes; keep its
-            # clean failed AIRun transaction and continue with the next thesis.
+        except ComplianceRefusedError as exc:
+            # Snapshot already deleted by the generator; keep the failed
+            # AIRun as the audit trail and continue with the next thesis.
             session.commit()
-            print(f"[assess]  {label}… → ASSESSMENT REFUSED ({exc})")
+            print(f"[assess]  {label}… → COMPLIANCE REFUSED ({exc})")
             continue
-        except Exception:
-            session.commit()
-            raise
         session.commit()
         print(
             f"[assess]  {label}… → {assessment.conclusion} "
@@ -244,15 +217,5 @@ def main() -> None:
         session.commit()
 
 
-def cli_main() -> int:
-    """Keep known provider exception causes out of terminal/log tracebacks."""
-    try:
-        main()
-    except LLMProviderError:
-        print(LLM_PROVIDER_ERROR_MESSAGE, file=sys.stderr)
-        return 1
-    return 0
-
-
 if __name__ == "__main__":
-    sys.exit(cli_main())
+    main()

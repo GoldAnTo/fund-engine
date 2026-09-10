@@ -27,7 +27,6 @@ from app.models.ledger import (
     SourceStatement,
     Thesis,
 )
-from tests.tenant_admission import admit_case
 
 
 def _seed_minimal_case(session, sha256_suffix):
@@ -64,7 +63,7 @@ def _seed_minimal_case(session, sha256_suffix):
 
     # Document → span → statement → reviewed link (T1)
     doc = DocumentVersion(
-        content_sha256=f"{sha256_suffix}" * 4,
+        content_sha256=f"{sha256_suffix}" * 64,
         source_url="u",
         published_at=datetime(2025, 2, 1, tzinfo=UTC),
         available_at=datetime(2025, 2, 1, tzinfo=UTC),
@@ -143,7 +142,6 @@ def _seed_minimal_case(session, sha256_suffix):
         )
     )
     session.flush()
-    admit_case(session, case_id, document_version_id=doc.id)
     return case_id
 
 
@@ -186,14 +184,13 @@ def test_conclusion_header_exposes_ai_and_human_boundary(api_client, seeded_case
     assert header["reviewer"] == "tester"
 
 
-def test_conclusion_comparison_excludes_retired_impact_object_column(api_client, seeded_case):
+def test_conclusion_comparison_has_eight_columns(api_client, seeded_case):
     response = api_client.get(f"/api/v1/research-cases/{seeded_case}/conclusion")
     cols = response.json()["comparison"]["columns"]
-    assert len(cols) == 7
+    assert len(cols) == 8
     assert "评审维度" in cols
     assert "直接证据" in cols
     assert "替代解释" in cols
-    assert "影响对象" not in cols
 
 
 def test_conclusion_404_for_unknown_case(api_client):

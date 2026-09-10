@@ -24,8 +24,6 @@ an audit row for the superseded run.
 """
 from __future__ import annotations
 
-from app.ai.usage import capture_usage
-
 import json
 import uuid
 from collections.abc import Callable
@@ -33,13 +31,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.ai.client import LLMClient, operation_budget
-from app.ai.output_schema import AssessmentOutput, validate_output
-from app.ai.error_safety import (
-    AI_COMPLIANCE_ERROR_MESSAGE,
-    AI_OPERATION_ERROR_MESSAGE,
-    AI_PROTOCOL_ERROR_MESSAGE,
-)
+from app.ai.client import LLMClient
 from app.ai.prompts import (
     ASSESS_PROMPT_VERSION,
     ASSESS_SYSTEM,
@@ -50,21 +42,14 @@ from app.models.ledger import (
     AIAssessment,
     SourceStatement,
     Thesis,
-    ValidationError,
 )
 from app.repositories.research import ResearchRepository
 from app.services.assessment import AssessmentService
-from app.services.event_research_scope_evidence import lock_event_scope_case
-from app.services.research_protocol import ResearchProtocolService
 from app.services.compliance import (
     ComplianceAction,
     ComplianceRefusedError,
     evaluate_compliance,
 )
-
-
-class ResearchProtocolGateError(ValidationError):
-    """A protocol gate decision, distinct from generic ledger validation."""
 
 
 class AssessmentGenerator:
@@ -73,75 +58,35 @@ class AssessmentGenerator:
     def __init__(self, client: LLMClient) -> None:
         self._client = client
 
-    @capture_usage()
     def generate(
         self,
         thesis_id: uuid.UUID,
         cutoff: datetime,
         session: Session,
         *,
-        evidence_link_ids: list[uuid.UUID | str] | None = None,
         before_persist: Callable[[], bool] | None = None,
     ) -> AIAssessment | None:
         started_at = datetime.now(timezone.utc)
         repo = ResearchRepository(session)
-        assessment_service = AssessmentService(repo, session)
+        assessment_service = AssessmentService(repo)
+
+        thesis = session.get(Thesis, thesis_id)
+        if thesis is None:
+            raise ValueError(f"thesis {thesis_id} not found")
+
         input_ref = {
             "thesis_id": str(thesis_id),
             "cutoff": cutoff.isoformat(),
-            "initial_protocol_status": None,
-            "research_protocol_status": None,
-            "effective_binding_id": None,
-            "mechanism_template_version_id": None,
-            "verification_rule_ids": None,
-            "evidence_link_ids": None,
-            "link_count": None,
         }
 
         try:
-            thesis = session.get(Thesis, thesis_id)
-            if thesis is None:
-                raise ValueError(f"thesis {thesis_id} not found")
-            initial_gate = ResearchProtocolService(session).check_researchability(
-                thesis_id
-            )
-            input_ref["initial_protocol_status"] = (
-                initial_gate.status if thesis.research_protocol_required else None
-            )
-            if thesis.research_protocol_required:
-                self._capture_protocol_footprint(input_ref, initial_gate)
-            if thesis.research_protocol_required and initial_gate.status == "blocked":
-                raise ResearchProtocolGateError(
-                    "researchability gate blocked: "
-                    + ", ".join(initial_gate.reason_codes)
-                )
             # Compliance BEFORE persistence: gather the visible links and
             # run the model + non-investment-advice gate first.  Only when
             # the text passes do we freeze the snapshot and append the
             # assessment — a refusal therefore leaves nothing behind except
             # the failed AIRun recorded below (the ledger's immutability
             # guard forbids deleting a half-frozen snapshot).
-            if evidence_link_ids is None:
-                links = repo.visible_links(thesis_id=thesis_id, cutoff=cutoff)
-            else:
-                try:
-                    explicit_ids = [
-                        uuid.UUID(str(link_id)) for link_id in evidence_link_ids
-                    ]
-                except (TypeError, ValueError, AttributeError) as exc:
-                    raise ValueError(
-                        "explicit evidence link IDs must be UUID values"
-                    ) from exc
-                links = repo.visible_links_by_ids(
-                    thesis_id=thesis_id,
-                    cutoff=cutoff,
-                    evidence_link_ids=explicit_ids,
-                )
-            prompt_link_ids = [link.id for link in links]
-            input_ref["evidence_link_ids"] = [
-                str(link_id) for link_id in prompt_link_ids
-            ]
-            input_ref["link_count"] = len(prompt_link_ids)
+            links = repo.visible_links(thesis_id=thesis_id, cutoff=cutoff)
             links_data: list[dict] = []
             for link in links:
                 statement = session.get(SourceStatement, link.source_statement_id)
@@ -167,16 +112,15 @@ class AssessmentGenerator:
             # Only reads have occurred so far.  Do not retain an idle
             # database transaction while waiting on an external provider.
             session.commit()
-            with operation_budget(self._client):
-                result = self._client.chat_json(messages, schema_hint="assess")
-                result = validate_output(result, AssessmentOutput)
-                conclusion = result["conclusion"]
-                rationale = result["rationale"]
-                gaps = result["gaps"]
-                # Non-investment-advice gate (with one bounded rewrite attempt
-                # for REWRITE-category hits): refused text never reaches the
-                # ledger; the failure is recorded on the AIRun below.
-                rationale, gaps, rewritten = self._ensure_compliant(rationale, gaps)
+            result = self._client.chat_json(messages, schema_hint="assess")
+            conclusion = result["conclusion"]
+            rationale = result["rationale"]
+            gaps = result.get("gaps", [])
+
+            # Non-investment-advice gate (with one bounded rewrite attempt
+            # for REWRITE-category hits): refused text never reaches the
+            # ledger; the failure is recorded on the AIRun below.
+            rationale, gaps, rewritten = self._ensure_compliant(rationale, gaps)
 
             # Auto research supplies a case/run/task output slot here.  If a
             # scope replacement committed while the provider was in flight,
@@ -184,82 +128,18 @@ class AssessmentGenerator:
             if before_persist is not None and not before_persist():
                 return None
 
-            # Provider/compliance work can outlive a protocol change. Serialize
-            # the final protocol footprint and immutable ledger writes with all
-            # protocol mutations. Lock order is Case -> protocol rows; the
-            # caller retains this lock through its outer commit.
-            lock_event_scope_case(session, thesis.research_case_id)
-            session.expire(thesis)
-            thesis = session.get(Thesis, thesis_id)
-            if thesis is None:
-                raise ValidationError("thesis not found")
-            final_gate = ResearchProtocolService(session).check_researchability(
-                thesis_id
-            )
-            input_ref["final_protocol_status"] = (
-                final_gate.status if thesis.research_protocol_required else None
-            )
-            frozen_rule_ids = sorted(
-                str(rule_id) for rule_id in final_gate.verification_rule_ids
-            )
-            if thesis.research_protocol_required:
-                self._capture_protocol_footprint(input_ref, final_gate)
-            if thesis.research_protocol_required and final_gate.status == "blocked":
-                raise ResearchProtocolGateError(
-                    "researchability gate blocked: "
-                    + ", ".join(final_gate.reason_codes)
-                )
-            if thesis.research_protocol_required:
-                allowed_conclusions = (
-                    ResearchProtocolService.allowed_assessment_conclusions(final_gate)
-                )
-                if conclusion not in allowed_conclusions:
-                    if final_gate.status == "single_metric_monitoring":
-                        conclusion = "insufficient_evidence"
-                    else:
-                        raise ResearchProtocolGateError(
-                            f"researchability gate disallows conclusion: {conclusion}"
-                        )
-            if (
-                thesis.research_protocol_required
-                and final_gate.status == "single_metric_monitoring"
-            ):
-                # This protocol-derived machine reason is intentionally
-                # independent of model prose and compliance rewrites.
-                gaps = [
-                    gap for gap in gaps if gap != "insufficient_primary_metrics"
-                ]
-                gaps.append("insufficient_primary_metrics")
-
             snapshot = assessment_service.freeze_snapshot(
-                thesis_id,
-                cutoff=cutoff,
-                evidence_link_ids=prompt_link_ids,
+                thesis_id, cutoff=cutoff
             )
             assessment = assessment_service.create_ai_assessment(
                 snapshot.id,
                 conclusion=conclusion,
                 rationale=rationale,
                 gaps=gaps,
-                research_protocol_status=(
-                    final_gate.status if thesis.research_protocol_required else None
-                ),
-                effective_binding_id=(
-                    final_gate.effective_binding_id
-                    if thesis.research_protocol_required
-                    else None
-                ),
-                mechanism_template_version_id=(
-                    final_gate.mechanism_template_version_id
-                    if thesis.research_protocol_required
-                    else None
-                ),
-                verification_rule_ids=(
-                    frozen_rule_ids if thesis.research_protocol_required else None
-                ),
             )
 
             input_ref["snapshot_id"] = str(snapshot.id)
+            input_ref["link_count"] = len(links)
             summary = f"conclusion={conclusion}, links={len(links)}"
             if rewritten:
                 summary += ", rewritten_for_compliance"
@@ -276,17 +156,6 @@ class AssessmentGenerator:
             return assessment
 
         except Exception as exc:
-            # A failed assessment is a separate clean unit of work: discard
-            # every partial immutable domain write, then append exactly one
-            # durable audit row for the caller to commit with its failure
-            # handling. Worker task state was committed before provider work.
-            session.rollback()
-            if isinstance(exc, ComplianceRefusedError):
-                safe_error = AI_COMPLIANCE_ERROR_MESSAGE
-            elif isinstance(exc, ResearchProtocolGateError):
-                safe_error = AI_PROTOCOL_ERROR_MESSAGE
-            else:
-                safe_error = AI_OPERATION_ERROR_MESSAGE
             record_run(
                 session,
                 kind="assess",
@@ -295,28 +164,10 @@ class AssessmentGenerator:
                 input_ref=input_ref,
                 output_summary="",
                 status="failed",
-                error=safe_error,
+                error=str(exc),
                 started_at=started_at,
             )
             raise
-
-    @staticmethod
-    def _capture_protocol_footprint(input_ref: dict, gate) -> None:
-        """Attach one strict gate footprint to the mutable AIRun input."""
-        input_ref["research_protocol_status"] = gate.status
-        input_ref["effective_binding_id"] = (
-            str(gate.effective_binding_id)
-            if gate.effective_binding_id is not None
-            else None
-        )
-        input_ref["mechanism_template_version_id"] = (
-            str(gate.mechanism_template_version_id)
-            if gate.mechanism_template_version_id is not None
-            else None
-        )
-        input_ref["verification_rule_ids"] = sorted(
-            str(rule_id) for rule_id in gate.verification_rule_ids
-        )
 
     # ------------------------------------------------------------------ compliance
 

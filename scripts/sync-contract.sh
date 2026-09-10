@@ -20,7 +20,7 @@ if [ ! -x "$PY" ]; then
   exit 1
 fi
 
-PYTHONPATH="$ROOT/backend${PYTHONPATH:+:$PYTHONPATH}" "$PY" backend/scripts/dump_openapi.py
+"$PY" backend/scripts/dump_openapi.py
 ( cd frontend && npx openapi-typescript openapi.json -o src/contracts/v1.ts )
 
 if [ "$MODE" = "--update" ]; then

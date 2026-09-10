@@ -6,9 +6,8 @@ services so CLI and tests get the same guarantees.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Literal
-from uuid import UUID
 
 from pydantic import Field
 
@@ -68,21 +67,6 @@ class CreateThesisRequest(ThesisInput):
 
 class CreateThesisResponse(V1Model):
     thesis: CreatedThesisDTO
-
-
-class CreateDocumentSupplementRequest(V1Model):
-    case_id: str = Field(min_length=1)
-    raw_text: str = Field(min_length=1)
-    claimed_page_reference: str = Field(min_length=1, max_length=256)
-    created_by: str = Field(min_length=1, max_length=128)
-    source_metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class CreateDocumentSupplementResponse(V1Model):
-    document_version_id: str
-    original_document_version_id: str
-    claimed_page_reference: str
-    extraction_allowed: bool
 
 
 # ---------------------------------------------------------------------------
@@ -159,9 +143,8 @@ class RerunResponse(V1Model):
 
     A rerun freezes a NEW snapshot and appends a NEW provisional assessment;
     prior snapshots/assessments are never touched, and the difference shows
-    up in the snapshot-compare view.  ``mode`` is ``mock`` only when
-    ``APP_ENV=test`` and no LLM key is configured; every non-test runtime
-    requires a live provider.
+    up in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key
+    (non-production only — production fails closed per provider discipline).
     """
 
     thesis_id: str
@@ -201,122 +184,35 @@ class ReviewQueueResponse(V1Model):
 
 
 # ---------------------------------------------------------------------------
-# 原子陈述审核（抽取候选只能经人工审核后发布为正式 SourceStatement）
-# ---------------------------------------------------------------------------
-
-
-class PublishedSourceStatementDTO(V1Model):
-    id: str
-    normalized_text: str
-    kind: str
-    observed_period: date | None
-    created_at: datetime
-
-
-class AtomicClaimReviewDTO(V1Model):
-    id: str
-    outcome: Literal["confirmed", "modified", "rejected"]
-    reviewer: str
-    reason: str
-    published_source_statement: PublishedSourceStatementDTO | None
-    created_at: datetime
-
-
-class AtomicClaimCandidateDTO(V1Model):
-    id: str
-    source_span_id: str
-    document_version_id: str
-    document_source_url: str
-    locator: dict[str, Any]
-    quote: str
-    quote_start: int
-    quote_end: int
-    quote_sha256: str
-    normalized_text: str
-    claim_type: str
-    assertion_actor: str | None
-    authority_level: str
-    structured_fields: dict[str, Any]
-    validation_result: dict[str, Any]
-    created_at: datetime
-    review_state: Literal["awaiting_review", "confirmed", "modified", "rejected"]
-    review_history: list[AtomicClaimReviewDTO]
-    published_source_statement: PublishedSourceStatementDTO | None
-
-
-class AtomicClaimQueueResponse(V1Model):
-    items: list[AtomicClaimCandidateDTO]
-    has_more: bool = False
-    next_cursor: str | None = None
-
-
-class AtomicClaimReviewRequest(V1Model):
-    outcome: Literal["confirmed", "modified", "rejected"]
-    normalized_text: str | None = Field(default=None, min_length=1)
-    observed_period: date | None = None
-    reviewer: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    idempotency_key: str = Field(min_length=1)
-
-
-class CreateAtomicClaimCandidateRequest(V1Model):
-    """A researcher-proposed, review-gated claim from one frozen span.
-
-    The server derives the quote and offsets from ``source_span_id`` so the
-    browser cannot silently alter the cited wording or location.
-    """
-
-    source_span_id: UUID
-    normalized_text: str = Field(min_length=1)
-    claim_type: Literal[
-        "disclosed_fact",
-        "reported_claim",
-        "management_attribution",
-        "forecast",
-        "research_opinion",
-    ] = "reported_claim"
-    assertion_actor: str | None = Field(default=None, max_length=512)
-    subject: str | None = Field(default=None, max_length=512)
-    predicate: str | None = Field(default=None, max_length=512)
-    object_text: str | None = Field(default=None, max_length=2_000)
-    numeric_value: str | None = Field(default=None, max_length=128)
-    unit: str | None = Field(default=None, max_length=128)
-    observed_period: date | None = None
-    scope: dict[str, str] = Field(default_factory=dict)
-    actor: str = Field(min_length=1, max_length=128)
-
-
-# ---------------------------------------------------------------------------
 # 抽取 / 提案 (extract / propose — AI engine steps as commands)
 # ---------------------------------------------------------------------------
 
 
-class ExtractCandidateDTO(V1Model):
-    """One source-grounded candidate awaiting human review."""
+class ExtractStatementDTO(V1Model):
+    """One statement produced by the extraction step."""
 
     id: str
-    claim_type: str
+    kind: str
     normalized_text: str
-    quote: str
-    quote_start: int
-    quote_end: int
-    review_state: Literal["awaiting_review"] = "awaiting_review"
+    observed_period: str | None
 
 
 class ExtractResponse(V1Model):
-    """Result of running review-gated extraction over one document version.
+    """Result of running statement extraction over one document version.
 
-    The extractor never writes formal SourceStatements. Every returned item
-    has a continuous source quote and stays in ``awaiting_review`` until a
-    human confirms, modifies, or rejects it. ``reason`` explains a zero
-    candidate result without pretending that extraction succeeded silently.
+    Append-only: re-running extraction on a version that already has
+    statements will append duplicates; the engine script only feeds
+    pending versions (spans present, no statements yet).  ``mode`` is
+    ``mock`` without an LLM key (non-production only).  ``reason`` is the
+    honest explanation when ``statement_count`` is 0 (无片段 / 表格无可提
+    事实 / LLM 拒答).
     """
 
     document_version_id: str
     mode: str
-    candidate_count: int
+    statement_count: int
     reason: str | None = None
-    candidates: list[ExtractCandidateDTO]
+    statements: list[ExtractStatementDTO]
 
 
 class ProposedLinkDTO(V1Model):
@@ -334,9 +230,7 @@ class ProposeResponse(V1Model):
 
     Every proposed link lands as a ``Proposal(kind=evidence_link)`` in the
     review queue; nothing is auto-confirmed.  ``job_id`` lets the client track
-    progress / cancellation.  ``mode`` is ``mock`` only when
-    ``APP_ENV=test`` and no LLM key is configured; every non-test runtime
-    requires a live provider.
+    progress / cancellation.  ``mode`` is ``mock`` without an LLM key.
     """
 
     thesis_id: str
@@ -354,12 +248,12 @@ class ProposeResponse(V1Model):
 class IngestRequest(V1Model):
     """Trigger a Gildata ingest run.
 
-    Query fields are optional and fall back to the AI-compute defaults.
-    ``case_id`` is required: an ingest may attach frozen provider material only
-    to the current tenant's explicitly selected Case.
+    All fields optional: omitted queries fall back to the AI-compute
+    defaults.  ``case_id`` tags ingested span locators against a case;
+    when omitted the first existing case is used (or none).
     """
 
-    case_id: str
+    case_id: str | None = None
     research_queries: list[str] | None = None
     announcement_query: str | None = None
     news_query: str | None = None

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, DocumentVersion, SourceSpan
+from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan
 
 
 class DocumentRepository:
@@ -58,9 +60,6 @@ class DocumentRepository:
         byte_size: int | None = None,
         language: str | None = None,
         parse_state: str = "success",
-        source_authority: str = "unknown",
-        supplements_document_version_id: uuid.UUID | None = None,
-        claimed_page_reference: str | None = None,
     ) -> DocumentVersion:
         version = DocumentVersion(
             content_sha256=content_sha256,
@@ -75,13 +74,70 @@ class DocumentRepository:
             byte_size=byte_size,
             language=language,
             parse_state=parse_state,
-            source_authority=source_authority,
-            supplements_document_version_id=supplements_document_version_id,
-            claimed_page_reference=claimed_page_reference,
         )
         self._session.add(version)
         self._session.flush()
         return version
+
+    def insert_version_or_existing(
+        self,
+        *,
+        content_sha256: str,
+        source_url: str,
+        published_at: datetime | None,
+        available_at: datetime,
+        acquired_at: datetime,
+        parser_version: str,
+        supersedes_id: uuid.UUID | None,
+        natural_key: str | None = None,
+        title: str | None = None,
+        byte_size: int | None = None,
+        language: str | None = None,
+        parse_state: str = "success",
+    ) -> tuple[DocumentVersion, bool]:
+        """Insert inside a savepoint, rereading normal idempotency races.
+
+        A duplicate content/natural key must not roll back the caller's outer
+        transaction. PostgreSQL aborts a transaction after a unique conflict,
+        hence the deliberately narrow savepoint.
+        """
+        try:
+            with self._session.begin_nested():
+                version = self.insert_version(
+                    content_sha256=content_sha256,
+                    source_url=source_url,
+                    published_at=published_at,
+                    available_at=available_at,
+                    acquired_at=acquired_at,
+                    parser_version=parser_version,
+                    supersedes_id=supersedes_id,
+                    natural_key=natural_key,
+                    title=title,
+                    byte_size=byte_size,
+                    language=language,
+                    parse_state=parse_state,
+                )
+            return version, True
+        except IntegrityError:
+            # The competing commit is now visible under READ COMMITTED. Hash
+            # is authoritative; natural key is the intentional semantic
+            # fallback for non-report callers.
+            existing = self.by_hash(content_sha256)
+            if existing is None and natural_key:
+                existing = self.by_natural_key(natural_key)
+            if existing is None:
+                raise
+            return existing, False
+
+    def lock_source_for_append(self, source_url: str) -> None:
+        """Serialize successor selection for one source on PostgreSQL only."""
+        if self._session.bind is None or self._session.bind.dialect.name != "postgresql":
+            return
+        digest = hashlib.sha256(source_url.encode("utf-8")).digest()[:8]
+        lock_key = int.from_bytes(digest, byteorder="big", signed=True)
+        self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key}
+        )
 
     def insert_span(
         self,
@@ -128,28 +184,12 @@ class DocumentRepository:
 
     # ------------------------------------------------------------------ readers
 
-    @staticmethod
-    def owned_attachment(tenant_id: str, case_id: uuid.UUID | None = None):
-        """EXISTS keeps shared versions unique and scopes before pagination."""
-        attachment = select(CaseDocumentVersion.id).join(
-            CaseTenantAdmission,
-            CaseTenantAdmission.research_case_id == CaseDocumentVersion.research_case_id,
-        ).where(
-            CaseDocumentVersion.document_version_id == DocumentVersion.id,
-            CaseTenantAdmission.tenant_id == tenant_id,
-        )
-        if case_id is not None:
-            attachment = attachment.where(CaseDocumentVersion.research_case_id == case_id)
-        return attachment.exists()
-
     def visible_versions(
         self,
         *,
         cutoff: datetime,
         limit: int,
         query: str | None = None,
-        tenant_id: str | None = None,
-        case_id: uuid.UUID | None = None,
         cursor_at: datetime | None = None,
         cursor_id: uuid.UUID | None = None,
     ) -> list[DocumentVersion]:
@@ -162,13 +202,6 @@ class DocumentRepository:
         )
         if query:
             stmt = stmt.where(DocumentVersion.source_url.ilike(f"%{query}%"))
-        if tenant_id is not None:
-            stmt = stmt.where(self.owned_attachment(tenant_id, case_id))
-        elif case_id is not None:
-            stmt = stmt.join(
-                CaseDocumentVersion,
-                CaseDocumentVersion.document_version_id == DocumentVersion.id,
-            ).where(CaseDocumentVersion.research_case_id == case_id)
         if cursor_at is not None and cursor_id is not None:
             # Order is (available_at DESC, id DESC); fetch rows strictly before
             # the cursor tuple.

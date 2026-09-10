@@ -67,6 +67,7 @@ _COMPARISON_COLUMNS: list[tuple[str, str]] = [
     ("backing_evidence", "佐证证据"),
     ("scope_warning", "范围警示"),
     ("alternative", "替代解释"),
+    ("impact_object", "影响对象"),
     ("reviewer_role", "评审角色"),
     ("gate_result", "限制因素"),
 ]
@@ -354,6 +355,9 @@ class ConclusionQueries:
             ),
             scope_warning=scope_warning,
             falsifier=thesis.falsification_condition or "（未填写证伪条件）",
+            impact_object=(
+                head.scope.get("segment", "AI 算力链") if head else "AI 算力链"
+            ),
         )
 
     @staticmethod
@@ -411,6 +415,8 @@ class ConclusionQueries:
                         cell_text = r.scope.get("segment", "—")
                     elif col_id_x == "scope_warning" and r.scope.get("note"):
                         cell_text = r.scope["note"]
+                    elif col_id_x == "impact_object":
+                        cell_text = r.scope.get("segment", "AI 算力链")
                     elif col_id_x == "reviewer_role":
                         cell_text = r.effective_state
                     elif col_id_x == "gate_result":

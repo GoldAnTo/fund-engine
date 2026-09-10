@@ -4,8 +4,8 @@ Compliance: keyword rules (six violation categories, allow/rewrite/refuse),
 sanitize/word-boundary engineering details, and the integration points that
 keep refused AI text out of the ledger.
 
-Provider discipline: only APP_ENV=test permits a missing LLM_API_KEY to select
-deterministic mock mode. Every live runtime fails closed instead.
+Provider discipline: with APP_ENV=production a missing LLM_API_KEY is a hard
+failure, never a silent fallback to mock mode.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import select
 
 from app.ai.assessment_gen import AssessmentGenerator
-from app.ai.client import DEFAULT_TIMEOUT_SECONDS, LLMClient
+from app.ai.client import LLMClient
 from app.ai.proposal import EvidenceProposer
 from app.models.ledger import AIRun
 from app.services.compliance import (
@@ -148,82 +148,18 @@ def test_proposal_skips_refused_links_but_keeps_clean_ones(
 # ---------------------------------------------------------------------------
 
 
-def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (
-        "LLM_API_KEY",
-        "LLM_BASE_URL",
-        "LLM_MODEL",
-        "LLM_TEMPERATURE",
-        "LLM_SEED",
-        "LLM_TIMEOUT_SECONDS",
-        "LLM_MAX_ATTEMPTS",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LLM_BASE_URL", "https://llm.example.invalid/v1")
-    monkeypatch.setenv("LLM_MODEL", "test-model")
-    monkeypatch.setenv("LLM_TEMPERATURE", "0.0")
-    monkeypatch.setenv("LLM_SEED", "")
-
-
-@pytest.mark.parametrize("app_env", [None, "", "development", "production"])
-def test_live_runtime_without_api_key_fails_loudly(monkeypatch, app_env):
-    _isolate_llm_env(monkeypatch)
-    if app_env is None:
-        monkeypatch.delenv("APP_ENV", raising=False)
-    else:
-        monkeypatch.setenv("APP_ENV", app_env)
-
-    with pytest.raises(RuntimeError, match="LLM_API_KEY"):
-        LLMClient.from_env()
-
-
-@pytest.mark.parametrize("invalid_knob", ["LLM_TEMPERATURE", "LLM_SEED"])
-def test_missing_live_api_key_error_precedes_invalid_knobs(
-    monkeypatch, invalid_knob
-):
-    _isolate_llm_env(monkeypatch)
+def test_production_without_api_key_fails_loudly(monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv(invalid_knob, "invalid")
-
     with pytest.raises(RuntimeError, match="LLM_API_KEY"):
         LLMClient.from_env()
 
 
-def test_test_environment_without_api_key_uses_mock(monkeypatch):
-    _isolate_llm_env(monkeypatch)
-    monkeypatch.setenv("APP_ENV", "test")
+def test_development_without_api_key_uses_mock(monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.setenv("APP_ENV", "development")
     client = LLMClient.from_env()
-    assert client._mock is True
     assert client.model_version.startswith("mock-")
-
-
-def test_test_environment_with_api_key_uses_external_client(monkeypatch):
-    from unittest.mock import patch
-
-    _isolate_llm_env(monkeypatch)
-    base_url = "https://external-llm.example.invalid/v1"
-    monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("LLM_API_KEY", "dummy")
-    monkeypatch.setenv("LLM_BASE_URL", base_url)
-    monkeypatch.setenv("LLM_MODEL", "external-test-model")
-    monkeypatch.setenv("LLM_TEMPERATURE", "0.25")
-    monkeypatch.setenv("LLM_SEED", "42")
-
-    sdk_client = object()
-    with patch("openai.OpenAI", return_value=sdk_client) as openai_constructor:
-        client = LLMClient.from_env()
-
-    openai_constructor.assert_called_once_with(
-        api_key="dummy",
-        base_url=base_url,
-        timeout=DEFAULT_TIMEOUT_SECONDS,
-        max_retries=0,
-    )
-    assert client._client is sdk_client
-    assert client._mock is False
-    assert client.model_version == "external-test-model"
-    assert client._temperature == 0.25
-    assert client._seed == 42
 
 
 # ---------------------------------------------------------------------------

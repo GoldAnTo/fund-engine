@@ -16,19 +16,18 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
-    Index,
     Integer,
     JSON,
     String,
     Text,
     Uuid,
-    text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,16 +37,8 @@ from app.models.ledger import Base, _uuid
 # --------------------------------------------------------------------------- #
 # Jobs
 # --------------------------------------------------------------------------- #
-JobStatus = Literal[
-    "queued",
-    "running",
-    "waiting_for_sources",
-    "waiting_for_review",
-    "succeeded",
-    "failed",
-    "cancelled",
-]
-JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse", "prepare_research"]
+JobStatus = Literal["queued", "running", "waiting_for_review", "succeeded", "failed", "cancelled"]
+JobKind = Literal["ingest", "extract", "propose", "assess", "project", "parse"]
 
 
 class Job(Base):
@@ -73,9 +64,6 @@ class Job(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Soft cancel: the worker polls this and stops at the next safe boundary.
     cancel_requested: Mapped[bool] = mapped_column(default=False, nullable=False)
-    # Per-claim ownership lease.  A recovered worker must never be able to
-    # mutate a Job that a newer worker has subsequently claimed.
-    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # The ledger entity this job ultimately mutates (e.g. thesis_id for an
     # assess job), used to resume and to build task items.
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -103,22 +91,6 @@ class Job(Base):
             from datetime import datetime as _dt, timezone as _tz
 
             self.created_at = _dt.now(_tz.utc)
-
-
-Index(
-    "ix_jobs_company_research_worker_candidates",
-    Job.status,
-    Job.created_at,
-    Job.id,
-    sqlite_where=text(
-        "kind = 'prepare_company_research' AND "
-        "target_type = 'company_research_preparation' AND research_case_id IS NULL"
-    ),
-    postgresql_where=text(
-        "kind = 'prepare_company_research' AND "
-        "target_type = 'company_research_preparation' AND research_case_id IS NULL"
-    ),
-)
 
 
 class JobEvent(Base):
@@ -194,6 +166,18 @@ class TaskItem(Base):
     """
 
     __tablename__ = "task_items"
+    __table_args__ = (
+        # ``review_company_impact`` uses a non-null scope id, giving the
+        # operational queue a database-enforced idempotency key even when two
+        # workers discover the same candidate concurrently.
+        UniqueConstraint(
+            "task_type",
+            "ref_type",
+            "ref_id",
+            "scope_version_id",
+            name="uq_task_items_type_ref_scope",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     title: Mapped[str] = mapped_column(Text, nullable=False)
@@ -207,6 +191,11 @@ class TaskItem(Base):
     ref_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     research_case_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("research_cases.id"), nullable=True
+    )
+    # Optional for legacy/general operational tasks.  Scope-bound impact
+    # reviews always populate it so a successor scope can close stale work.
+    scope_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("event_research_scope_versions.id"), nullable=True
     )
     assignee: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -282,14 +271,6 @@ class ProjectionCheckpoint(Base):
 # --------------------------------------------------------------------------- #
 class ResearchRun(Base):
     __tablename__ = "research_runs"
-    __table_args__ = (
-        Index(
-            "uq_research_runs_case_id",
-            "research_case_id",
-            "id",
-            unique=True,
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False)
@@ -303,11 +284,6 @@ class ResearchRun(Base):
     # The exact thesis set selected when this run was created.  Later scope
     # revisions must not silently expand an in-flight run back to all case theses.
     scope_thesis_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    # The monitor configuration that authorized this run.  Older / one-off
-    # runs legitimately have no monitor version and remain replayable.
-    monitor_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("case_monitor_versions.id"), nullable=True
-    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -331,26 +307,6 @@ class ResearchTask(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class ResearchWorkerHeartbeat(Base):
-    """Mutable liveness record for a process that consumes ResearchRun jobs.
-
-    This is intentionally operational state rather than a research event:
-    users need to know whether queued work can advance, but a polling tick is
-    not evidence about any Case and must not clutter its immutable audit log.
-    """
-
-    __tablename__ = "research_worker_heartbeats"
-
-    worker_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    worker_kind: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="research_run", server_default="research_run"
-    )
-    mode: Mapped[str] = mapped_column(String(16), nullable=False)
-    state: Mapped[str] = mapped_column(String(32), nullable=False)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 # --------------------------------------------------------------------------- #
 # Event-research lifecycle projection
 # --------------------------------------------------------------------------- #
@@ -362,7 +318,6 @@ EVENT_RESEARCH_LIFECYCLE_STATES = frozenset(
         "continuing",
         "awaiting_scope",
         "draft_ready",
-        "completed",
         "published",
         "exhausted",
     }
@@ -381,7 +336,7 @@ class EventResearchLifecycle(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('extracting', 'researching', 'awaiting_key_review', "
-            "'continuing', 'awaiting_scope', 'draft_ready', 'completed', 'published', 'exhausted')",
+            "'continuing', 'awaiting_scope', 'draft_ready', 'published', 'exhausted')",
             name="ck_event_research_lifecycle_status",
         ),
     )

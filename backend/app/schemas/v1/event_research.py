@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
 from pydantic import Field, model_validator
 
-from app.domain.event_research import EventNextActionKind
 from app.schemas.v1.common import V1Model
 from app.services.event_research_factors import (
     EventResearchScopeFactorValue,
@@ -15,31 +13,9 @@ from app.services.event_research_factors import (
 from app.services.source_admission import SourceStatus
 
 
-SourceAdmissionType = Literal[
-    "pasted_snapshot", "uploaded_file", "licensed_provider", "public_url"
-]
-
-
-def _validate_public_url_intake(
-    source_type: SourceAdmissionType, source_url: str | None
-) -> None:
-    """Require a real public URL without treating its contents as verified."""
-    if source_type != "public_url":
-        return
-    if not source_url or not source_url.strip():
-        raise ValueError("public URL intake requires a source_url")
-
-
 class ExtractEventResearchRequest(V1Model):
     raw_input: str = Field(min_length=1)
     source_url: str | None = None
-    source_type: SourceAdmissionType = "pasted_snapshot"
-    source_metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_public_url(self) -> "ExtractEventResearchRequest":
-        _validate_public_url_intake(self.source_type, self.source_url)
-        return self
 
 
 class ExtractEventResearchResponse(V1Model):
@@ -57,8 +33,6 @@ class ExtractEventResearchResponse(V1Model):
 class CreateEventResearchRequest(V1Model):
     raw_input: str = Field(min_length=1)
     source_url: str | None = None
-    source_type: SourceAdmissionType = "pasted_snapshot"
-    source_metadata: dict[str, Any] = Field(default_factory=dict)
     event_title: str = Field(min_length=1)
     company_name: str | None = None
     ticker: str | None = None
@@ -66,13 +40,11 @@ class CreateEventResearchRequest(V1Model):
     market_reaction: str | None = None
     research_question: str = Field(min_length=1)
     candidate_factors: list[str] = Field(min_length=3, max_length=5)
-    research_protocol_required: bool = True
     created_by: str = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_candidate_factors(self) -> "CreateEventResearchRequest":
         self.candidate_factors = normalize_event_research_factors(self.candidate_factors)
-        _validate_public_url_intake(self.source_type, self.source_url)
         return self
 
 
@@ -91,64 +63,6 @@ class CreateEventResearchResponse(V1Model):
     lifecycle: EventResearchLifecycleDTO
 
 
-class LegacyCaseAdmissionRequest(V1Model):
-    tenant_id: str = Field(min_length=1, max_length=256)
-    initial_document_version_id: str = Field(min_length=1)
-    admitted_by: str = Field(min_length=1, max_length=128)
-    reason: str = Field(min_length=1, max_length=2000)
-
-
-class LegacyCaseAdmissionResponse(V1Model):
-    case_id: str
-    tenant_id: str
-    initial_document_version_id: str
-    admitted_by: str
-    reason: str
-    admitted_at: datetime
-
-
-class LegacyCaseAdmissionDocumentDTO(V1Model):
-    document_version_id: str
-    title: str | None
-    source_url: str
-    available_at: datetime
-
-
-class LegacyCaseAdmissionCandidateDTO(V1Model):
-    case_id: str
-    event_title: str
-    created_at: datetime
-    documents: list[LegacyCaseAdmissionDocumentDTO]
-
-
-class LegacyCaseAdmissionQueueResponse(V1Model):
-    items: list[LegacyCaseAdmissionCandidateDTO]
-
-
-class AttachEventMaterialRequest(V1Model):
-    raw_input: str = Field(min_length=1)
-    source_url: str | None = None
-    source_type: SourceAdmissionType = "pasted_snapshot"
-    source_metadata: dict[str, Any] = Field(default_factory=dict)
-    actor: str = Field(min_length=1, max_length=128)
-
-    @model_validator(mode="after")
-    def validate_public_url(self) -> "AttachEventMaterialRequest":
-        _validate_public_url_intake(self.source_type, self.source_url)
-        return self
-
-
-class AttachEventMaterialResponse(V1Model):
-    document_version_id: str
-    source_type: SourceAdmissionType
-
-
-class UploadEventMaterialResponse(V1Model):
-    document_version_id: str
-    parse_state: Literal["parsed", "partial", "failed"]
-    next_action: Literal["review_original", "supplement_original"]
-
-
 class EventResearchScopeFactorDTO(V1Model):
     statement: str = Field(min_length=1)
     description: str | None = None
@@ -157,9 +71,6 @@ class EventResearchScopeFactorDTO(V1Model):
 class UpdateEventResearchScopeRequest(V1Model):
     factors: list[str | EventResearchScopeFactorDTO] = Field(min_length=3, max_length=5)
     changed_by: str = Field(min_length=1, max_length=128)
-    change_reason: str = Field(
-        default="未记录具体原因（兼容旧客户端）", min_length=1, max_length=2000
-    )
 
     @model_validator(mode="after")
     def validate_factors(self) -> "UpdateEventResearchScopeRequest":
@@ -185,22 +96,8 @@ class UpdateEventResearchScopeResponse(V1Model):
     unmapped_evidence_count: int
 
 
-class EventResearchScopeHistoryItemDTO(V1Model):
-    version: int
-    factors: list[EventResearchScopeFactorDTO]
-    changed_by: str
-    change_reason: str
-    created_at: datetime
-
-
-class EventResearchScopeHistoryResponse(V1Model):
-    case_id: str
-    items: list[EventResearchScopeHistoryItemDTO]
-
-
 class EventResearchListItemDTO(V1Model):
     case_id: str
-    workflow_mode: Literal["reviewed", "automatic"]
     event_title: str
     company_name: str | None
     ticker: str | None
@@ -208,7 +105,6 @@ class EventResearchListItemDTO(V1Model):
     lifecycle_status: str
     status_summary: str
     next_human_action: str | None
-    next_action_kind: EventNextActionKind
     updated_at: datetime
 
 
@@ -216,62 +112,10 @@ class EventResearchListResponse(V1Model):
     items: list[EventResearchListItemDTO]
 
 
-class CaseRelationCaseDTO(V1Model):
-    case_id: str
-    title: str
-    lifecycle_status: str
-
-
-class CaseRelationCandidateOriginDTO(V1Model):
-    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
-    reason: str
-    created_by: str
-    created_at: datetime
-
-
-class CaseRelationDTO(V1Model):
-    id: str
-    source_case: CaseRelationCaseDTO
-    target_case: CaseRelationCaseDTO
-    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
-    reason: str
-    created_by: str
-    review_state: Literal["machine_generated", "reviewed", "rejected"]
-    created_at: datetime
-    review_history: list["CaseRelationReviewDTO"] = Field(default_factory=list)
-    candidate_origin: CaseRelationCandidateOriginDTO | None = None
-
-
-class CaseRelationReviewRequest(V1Model):
-    outcome: Literal["confirmed", "modified", "rejected", "needs_more_evidence"]
-    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
-    reviewer: str = Field(min_length=1, max_length=128)
-    reason: str = Field(min_length=1, max_length=2000)
-    idempotency_key: str = Field(min_length=1, max_length=256)
-
-
-class CaseRelationReviewDTO(V1Model):
-    id: str
-    case_relation_id: str
-    outcome: Literal["confirmed", "modified", "rejected", "needs_more_evidence"]
-    relation_type: Literal["shared_driver", "follow_up_validation", "potential_conflict", "shared_material"]
-    reviewer: str
-    reason: str
-    reviewed_relation_id: str | None
-    created_at: datetime
-
-
-class ResearchNetworkResponse(V1Model):
-    reviewed_relations: list[CaseRelationDTO]
-    candidate_relations: list[CaseRelationDTO]
-    resolved_candidates: list[CaseRelationDTO] = Field(default_factory=list)
-
-
 class EventReviewQueueItemDTO(V1Model):
     """A pending event-evidence proposal, including source admission context."""
 
     proposal_id: str
-    proposal_version: int
     status: str
     proposed_at: datetime
     link_id: str
@@ -295,7 +139,6 @@ class EventReviewQueueItemDTO(V1Model):
     source_status: SourceStatus
     source_status_reason: str
     can_accept: bool
-    display_withheld: bool = False
     proposal_reason: str
     position: int | None
 
@@ -315,7 +158,6 @@ class EventReviewQueueResponse(V1Model):
 
 
 class EventResearchFactorDTO(V1Model):
-    thesis_id: str
     statement: str
     description: str | None = None
     position: int
@@ -332,8 +174,6 @@ class EventKeyEvidenceDTO(V1Model):
     review_state: str
     source_title: str | None
     source_url: str | None
-    document_version_id: str
-    source_visible_in_case: bool
     excerpt: str
     locator: dict
     available_at: datetime
@@ -346,24 +186,6 @@ class EventConclusionDraftDTO(V1Model):
     citations: list[EventKeyEvidenceDTO]
 
 
-class EventConclusionVersionDTO(V1Model):
-    id: str
-    sequence: int
-    state: str
-    text: str
-    primary_factor: str | None
-    scope_version: int | None
-    based_on_conclusion_id: str | None
-    reviewer: str | None
-    evidence_count: int
-    created_at: datetime
-
-
-class EventConclusionHistoryResponse(V1Model):
-    case_id: str
-    versions: list[EventConclusionVersionDTO]
-
-
 class PublishEventConclusionRequest(V1Model):
     text: str = Field(min_length=1)
     reviewer: str = Field(min_length=1)
@@ -374,43 +196,8 @@ class PublishEventConclusionResponse(V1Model):
     state: str
 
 
-class ContinueEventResearchRequest(V1Model):
-    document_version_id: str = Field(min_length=1)
-    reason: str = Field(min_length=1, max_length=2000)
-    triggered_by: str = Field(min_length=1, max_length=128)
-
-
-class ContinueEventResearchResponse(V1Model):
-    run_id: str
-    lifecycle: EventResearchLifecycleDTO
-
-
-class PublishedMaterialDecisionRequest(V1Model):
-    raw_input: str = Field(min_length=1)
-    source_url: str | None = None
-    source_type: SourceAdmissionType = "pasted_snapshot"
-    source_metadata: dict[str, Any] = Field(default_factory=dict)
-    decision: Literal["reopen", "no_change"]
-    reason: str = Field(min_length=1, max_length=2000)
-    actor: str = Field(min_length=1, max_length=128)
-
-    @model_validator(mode="after")
-    def validate_public_url(self) -> "PublishedMaterialDecisionRequest":
-        _validate_public_url_intake(self.source_type, self.source_url)
-        return self
-
-
-class PublishedMaterialDecisionResponse(V1Model):
-    document_version_id: str
-    decision: Literal["reopen", "no_change"]
-    decision_event_id: str
-    run_id: str | None = None
-    recovery_required: bool = False
-    lifecycle: EventResearchLifecycleDTO
-
-
 class EventNextActionDTO(V1Model):
-    kind: EventNextActionKind
+    kind: str
     label: str
     count: int | None = None
 
@@ -420,22 +207,6 @@ class EventWorkbenchProgressDTO(V1Model):
     pending: int
     invalid_source: int
     current_gap: str | None
-
-
-class EventPreparationStepDTO(V1Model):
-    state: str
-
-
-class EventPreparationSummaryDTO(V1Model):
-    """Safe preparation progress shown alongside the existing event lifecycle."""
-
-    status: str
-    revision: int
-    research_run_id: str | None
-    next_attempt_at: datetime | None
-    last_error_message: str | None
-    system: dict[str, EventPreparationStepDTO]
-    review: dict[str, EventPreparationStepDTO]
 
 
 class EventResearchScopeDTO(V1Model):
@@ -453,4 +224,3 @@ class EventWorkbenchDTO(V1Model):
     progress: EventWorkbenchProgressDTO
     scope: EventResearchScopeDTO
     next_action: EventNextActionDTO
-    preparation: EventPreparationSummaryDTO | None = None

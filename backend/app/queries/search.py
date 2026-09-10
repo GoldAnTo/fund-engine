@@ -17,21 +17,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.errors import ValidationFailedError
 from app.models.ledger import (
     Company,
-    CaseTenantAdmission,
     EvidenceLink,
     EvidenceReview,
     Fund,
-    HoldingDisclosure,
     ResearchCase,
     SourceStatement,
     Stock,
-    ThemeRole,
     Thesis,
 )
 from app.queries.basis import HistoricalBasis
@@ -62,7 +59,6 @@ class LedgerSearchQueries:
         basis: HistoricalBasis,
         limit: int,
         research_mode: bool = False,
-        tenant_id: str,
     ) -> SearchResponse:
         requested = types if types is not None else _VALID_TYPES_SET
         unknown = requested - _VALID_TYPES_SET
@@ -80,7 +76,7 @@ class LedgerSearchQueries:
             if object_type not in requested:
                 continue
             hits = self._search_type(
-                object_type, needle, cutoff, limit, allowed_states, tenant_id
+                object_type, needle, cutoff, limit, allowed_states
             )
             if len(hits) > limit:
                 has_more = True
@@ -100,21 +96,14 @@ class LedgerSearchQueries:
         cutoff: datetime,
         limit: int,
         allowed_states: frozenset[str],
-        tenant_id: str,
     ) -> list[SearchHitDTO]:
         if object_type == "case":
-            query = (
+            rows = self._session.scalars(
                 select(ResearchCase)
                 .where(func.lower(ResearchCase.title).like(needle))
                 .where(ResearchCase.created_at <= cutoff)
+                .limit(limit + 1)
             )
-            query = query.join(
-                CaseTenantAdmission,
-                CaseTenantAdmission.research_case_id == ResearchCase.id,
-            ).where(CaseTenantAdmission.tenant_id == tenant_id).where(
-                CaseTenantAdmission.admitted_at <= cutoff
-            )
-            rows = self._session.scalars(query.limit(limit + 1))
             return [
                 SearchHitDTO(
                     object_type="case",
@@ -130,20 +119,14 @@ class LedgerSearchQueries:
             ]
 
         if object_type == "thesis":
-            query = (
+            rows = self._session.scalars(
                 select(Thesis)
                 .join(ResearchCase, ResearchCase.id == Thesis.research_case_id)
                 .where(func.lower(Thesis.statement).like(needle))
                 .where(Thesis.created_at <= cutoff)
                 .where(ResearchCase.created_at <= cutoff)
+                .limit(limit + 1)
             )
-            query = query.join(
-                CaseTenantAdmission,
-                CaseTenantAdmission.research_case_id == ResearchCase.id,
-            ).where(CaseTenantAdmission.tenant_id == tenant_id).where(
-                CaseTenantAdmission.admitted_at <= cutoff
-            )
-            rows = self._session.scalars(query.limit(limit + 1))
             return [
                 SearchHitDTO(
                     object_type="thesis",
@@ -221,12 +204,6 @@ class LedgerSearchQueries:
                 .where(Thesis.created_at <= cutoff)
                 .where(ResearchCase.created_at <= cutoff)
                 .where(effective_state.in_(list(allowed_states)))
-                .where(CaseTenantAdmission.tenant_id == tenant_id)
-                .where(CaseTenantAdmission.admitted_at <= cutoff)
-                .join(
-                    CaseTenantAdmission,
-                    CaseTenantAdmission.research_case_id == ResearchCase.id,
-                )
                 .limit(limit + 1)
             )
             hits: list[SearchHitDTO] = []
@@ -252,180 +229,64 @@ class LedgerSearchQueries:
             return hits
 
         if object_type == "company":
-            visible_companies = (
-                select(
-                    Company.id.label("company_id"),
-                    ThemeRole.research_case_id.label("case_id"),
-                    func.row_number()
-                    .over(
-                        partition_by=Company.id,
-                        order_by=(ThemeRole.created_at, ThemeRole.id),
-                    )
-                    .label("role_rank"),
-                )
-                .join(ThemeRole, ThemeRole.company_id == Company.id)
-                .join(
-                    CaseTenantAdmission,
-                    CaseTenantAdmission.research_case_id
-                    == ThemeRole.research_case_id,
-                )
+            rows = self._session.scalars(
+                select(Company)
                 .where(func.lower(Company.name).like(needle))
                 .where(Company.created_at <= cutoff)
-                .where(ThemeRole.created_at <= cutoff)
-                .where(CaseTenantAdmission.tenant_id == tenant_id)
-                .where(CaseTenantAdmission.admitted_at <= cutoff)
-                .where(
-                    or_(
-                        ThemeRole.applicable_from.is_(None),
-                        ThemeRole.applicable_from <= cutoff.date(),
-                    )
-                )
-                .where(
-                    or_(
-                        ThemeRole.applicable_to.is_(None),
-                        ThemeRole.applicable_to >= cutoff.date(),
-                    )
-                )
-                .subquery()
-            )
-            rows = self._session.execute(
-                select(Company, visible_companies.c.case_id)
-                .join(visible_companies, visible_companies.c.company_id == Company.id)
-                .where(visible_companies.c.role_rank == 1)
-                .order_by(func.lower(Company.name), Company.id)
                 .limit(limit + 1)
             )
             return [
                 SearchHitDTO(
                     object_type="company",
-                    object_id=str(company.id),
-                    title=company.name,
-                    snippet=company.code or "",
-                    case_id=str(case_id),
+                    object_id=str(r.id),
+                    title=r.name,
+                    snippet=r.code or "",
+                    case_id=None,
                     review_state=None,
                     available_at=None,
-                    deep_link=f"/research-cases/{case_id}/dossier",
+                    deep_link=f"/instruments/companies/{r.id}",
                 )
-                for company, case_id in rows
+                for r in rows
             ]
 
         if object_type == "stock":
-            visible_stocks = (
-                select(
-                    Stock.id.label("stock_id"),
-                    ThemeRole.research_case_id.label("case_id"),
-                    func.row_number()
-                    .over(
-                        partition_by=Stock.id,
-                        order_by=(ThemeRole.created_at, ThemeRole.id),
-                    )
-                    .label("role_rank"),
-                )
-                .join(Company, Company.id == Stock.company_id)
-                .join(ThemeRole, ThemeRole.company_id == Company.id)
-                .join(
-                    CaseTenantAdmission,
-                    CaseTenantAdmission.research_case_id
-                    == ThemeRole.research_case_id,
-                )
+            rows = self._session.scalars(
+                select(Stock)
                 .where(func.lower(Stock.name).like(needle))
                 .where(Stock.created_at <= cutoff)
-                .where(ThemeRole.created_at <= cutoff)
-                .where(CaseTenantAdmission.tenant_id == tenant_id)
-                .where(CaseTenantAdmission.admitted_at <= cutoff)
-                .where(
-                    or_(
-                        ThemeRole.applicable_from.is_(None),
-                        ThemeRole.applicable_from <= cutoff.date(),
-                    )
-                )
-                .where(
-                    or_(
-                        ThemeRole.applicable_to.is_(None),
-                        ThemeRole.applicable_to >= cutoff.date(),
-                    )
-                )
-                .subquery()
-            )
-            rows = self._session.execute(
-                select(Stock, visible_stocks.c.case_id)
-                .join(visible_stocks, visible_stocks.c.stock_id == Stock.id)
-                .where(visible_stocks.c.role_rank == 1)
-                .order_by(func.lower(Stock.name), Stock.id)
                 .limit(limit + 1)
             )
             return [
                 SearchHitDTO(
                     object_type="stock",
-                    object_id=str(stock.id),
-                    title=stock.name,
-                    snippet=stock.code or "",
-                    case_id=str(case_id),
+                    object_id=str(r.id),
+                    title=r.name,
+                    snippet=r.code or "",
+                    case_id=None,
                     review_state=None,
                     available_at=None,
-                    deep_link=f"/research-cases/{case_id}/dossier",
+                    deep_link=f"/instruments/stocks/{r.id}",
                 )
-                for stock, case_id in rows
+                for r in rows
             ]
 
         # fund
-        visible_funds = (
-            select(
-                Fund.id.label("fund_id"),
-                ThemeRole.research_case_id.label("case_id"),
-                func.row_number()
-                .over(
-                    partition_by=Fund.id,
-                    order_by=(ThemeRole.created_at, ThemeRole.id),
-                )
-                .label("role_rank"),
-            )
-            .join(HoldingDisclosure, HoldingDisclosure.fund_id == Fund.id)
-            .join(Stock, Stock.id == HoldingDisclosure.stock_id)
-            .join(Company, Company.id == Stock.company_id)
-            .join(ThemeRole, ThemeRole.company_id == Company.id)
-            .join(
-                CaseTenantAdmission,
-                CaseTenantAdmission.research_case_id == ThemeRole.research_case_id,
-            )
+        rows = self._session.scalars(
+            select(Fund)
             .where(func.lower(Fund.name).like(needle))
             .where(Fund.created_at <= cutoff)
-            .where(HoldingDisclosure.created_at <= cutoff)
-            .where(HoldingDisclosure.published_at <= cutoff)
-            .where(ThemeRole.created_at <= cutoff)
-            .where(CaseTenantAdmission.tenant_id == tenant_id)
-            .where(CaseTenantAdmission.admitted_at <= cutoff)
-            .where(
-                or_(
-                    ThemeRole.applicable_from.is_(None),
-                    ThemeRole.applicable_from <= cutoff.date(),
-                )
-            )
-            .where(
-                or_(
-                    ThemeRole.applicable_to.is_(None),
-                    ThemeRole.applicable_to >= cutoff.date(),
-                )
-            )
-            .subquery()
-        )
-        rows = self._session.execute(
-            select(Fund, visible_funds.c.case_id)
-            .join(visible_funds, visible_funds.c.fund_id == Fund.id)
-            .where(visible_funds.c.role_rank == 1)
-            .order_by(func.lower(Fund.name), Fund.id)
             .limit(limit + 1)
         )
         return [
             SearchHitDTO(
                 object_type="fund",
-                object_id=str(fund.id),
-                title=fund.name,
-                snippet=fund.code or "",
-                case_id=str(case_id),
+                object_id=str(r.id),
+                title=r.name,
+                snippet=r.code or "",
+                case_id=None,
                 review_state=None,
                 available_at=None,
-                deep_link=f"/research-cases/{case_id}/dossier",
+                deep_link=f"/instruments/funds/{r.id}",
             )
-            for fund, case_id in rows
+            for r in rows
         ]

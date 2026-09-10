@@ -5,14 +5,6 @@ class NotFoundError(Exception):
     """Raised when a requested ledger object does not exist."""
 
 
-class AuthenticationRequiredError(Exception):
-    """Raised when a protected API route has no trusted caller identity."""
-
-
-class PermissionDeniedError(Exception):
-    """Raised when a trusted caller is not allowed to access a resource."""
-
-
 class ValidationFailedError(Exception):
     """Raised when a client-supplied value (e.g. cursor) is malformed.
 
@@ -37,3 +29,15 @@ class ConflictError(Exception):
     record*, not *fix your request body*. Mapped to a 409 ``conflict`` v1
     error envelope.
     """
+
+
+class ReportIntakeNotReadyError(Exception):
+    """Raised when a report Wiki is requested before an explicit scope exists."""
+
+
+class AuthenticationRequiredError(Exception):
+    """Raised when a protected v1 read has no verified caller credential."""
+
+
+class PermissionDeniedError(Exception):
+    """Raised when a verified credential is not permitted for a resource."""
