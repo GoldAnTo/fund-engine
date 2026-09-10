@@ -183,8 +183,8 @@ def test_dump_openapi_includes_underwriting_routes_without_touching_default(
     tmp_path: Path,
 ) -> None:
     backend = Path(__file__).parents[2]
-    default_output = backend.parent / "frontend" / "openapi.json"
-    default_before = default_output.read_bytes()
+    default_output = backend.parent / "contracts" / "openapi.json"
+    default_before = default_output.read_bytes() if default_output.exists() else None
     output = tmp_path / "explicit-output" / "openapi.json"
     subprocess.run(
         [
@@ -196,7 +196,7 @@ def test_dump_openapi_includes_underwriting_routes_without_touching_default(
         cwd=backend,
         check=True,
     )
-    assert default_output.read_bytes() == default_before
+    assert (default_output.read_bytes() if default_output.exists() else None) == default_before
     openapi = json.loads(output.read_text())
     assert "/api/underwriting/v1/objects" in openapi["paths"]
     assert "UnderwritingErrorEnvelope" in openapi["components"]["schemas"]
