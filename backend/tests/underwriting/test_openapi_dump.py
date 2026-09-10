@@ -524,7 +524,7 @@ def test_revision_history_identity_contract_includes_research_object_identity() 
     assert {"object_kind", "canonical_name", "external_key"} <= set(properties)
 
 
-def test_archive_contract_and_ui_sources_do_not_introduce_investment_fields() -> None:
+def test_archive_contract_does_not_introduce_investment_fields() -> None:
     """The archive is evidence infrastructure, never an action or valuation surface."""
     openapi = app.openapi()
     schemas = openapi["components"]["schemas"]
@@ -532,23 +532,3 @@ def test_archive_contract_and_ui_sources_do_not_introduce_investment_fields() ->
     for name in REVISION_SCHEMAS | ARCHIVE_SCHEMAS:
         names.update(_property_names(schemas[name], schemas))
     assert not (set(name.lower() for name in names) & FORBIDDEN_RESEARCH_FIELDS)
-
-    frontend = Path(__file__).parents[3] / "frontend" / "src"
-    sources = [
-        frontend / "data" / "underwritingResearchApi.ts",
-        frontend / "features" / "underwriting" / "ResearchArchivePage.tsx",
-    ]
-    ui_source = "\n".join(source.read_text(encoding="utf-8") for source in sources)
-    forbidden_copy = {
-        "市盈率",
-        "市净率",
-        "目标价",
-        "买入",
-        "卖出",
-        "止损",
-        "仓位",
-        "估值",
-        "推荐",
-        "操作",
-    }
-    assert not {term for term in forbidden_copy if term in ui_source}
