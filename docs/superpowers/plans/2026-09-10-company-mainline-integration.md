@@ -29,7 +29,7 @@
 - [x] 合并验证：Python 3.11 干净环境执行 `python -m pytest -q`；执行 `npm ci && npm run typecheck && npm test`（`clients/research`）；重新生成并核对 OpenAPI/TypeScript 契约。
 - [x] 数据库验证：隔离 SQLite 和一次性 PostgreSQL 执行完整升级及 0072 → 0074 → 0072 → 0074；验证单一 head 和追加记录约束，运行 `pytest tests -m pg_only -q`。不连接现有业务数据库。
 - [x] 边界验证：执行 `backend/scripts/verify_live_event_api.py` 与 `backend/scripts/verify_upload_proxy.py`；检查旧页面目录和客户端页面入口仍不存在。审查合并 diff，确认没有私有运行产物进入新增提交。
-- [ ] 集成：补全实际检查结果与剩余边界，提交到隔离分支；确认 main 未被其他工作改变后快进合入并正常推送 main。检查该提交的远端 CI；不强制推送，不推送其他历史分支。
+- [x] 集成：补全实际检查结果与剩余边界，提交到隔离分支；确认 main 未被其他工作改变后快进合入并正常推送 main。检查该提交的远端 CI；不强制推送，不推送其他历史分支。
 
 ## 完成条件
 

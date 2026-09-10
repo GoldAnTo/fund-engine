@@ -42,6 +42,15 @@
 
 独立审查提出的科学计数法兼容问题已通过失败复现和修复后回归关闭。没有将历史页面验收记录当成本轮浏览器验收。
 
+## 远端回执
+
+功能提交 [`18325756`](https://github.com/GoldAnTo/fund-engine/commit/183257569ee3a8bdafd334c9066ec6952eb63354) 已快进合入并推送至 `main`。该提交的远端检查全部通过：
+
+- [backend-ci](https://github.com/GoldAnTo/fund-engine/actions/runs/34458608551)：后端全量 **4,701 passed、46 skipped**；PostgreSQL、真实 HTTP/上传边界、发布门禁及召回评估均通过。
+- [research-client-ci](https://github.com/GoldAnTo/fund-engine/actions/runs/34458608641)：类型检查、客户端测试与旧界面清理检查通过。
+
+后续回执提交仅更新本记录、计划完成状态及历史文档提示，不改变上述已测试代码。本轮两个临时整合分支及工作目录已清理；其提交已存入项目外校验通过的增量 bundle，原开发分支保留。
+
 ## 保留的边界和后续整合
 
 - 条件财务模型目前仅适配 Alphabet 的已保存财务基线；状态始终为 `unreviewed`，不自动发布正式研究 V2。原有研究缺口、正式输入复核和任意公司适配仍待后续完成。
