@@ -26,6 +26,7 @@ import {
 } from "./companyResearchView";
 
 import { COMPANY_RESEARCH_STATUS_LABELS } from "./companyResearchProgress";
+import { CompanyFinancialModelPanel } from "./CompanyFinancialModelPanel";
 import { CompanyResearchDraftPanel } from "./CompanyResearchDraftPanel";
 
 type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
@@ -821,6 +822,19 @@ export default function ResearchWorkbenchPage() {
   if (!page) return <Navigate replace to={`/research/projects/${projectId}/overview`} />;
   if (!activePage) return <main className="ir-page"><h1>未找到研究页面</h1><p>该页面地址不存在，请从研究概览继续。</p><Link to={`/research/projects/${projectId}/overview`}>返回研究概览</Link></main>;
   const pageBase = `/research/projects/${projectId}`;
+  const hasConditionalModel = workspace.preparation.status === "completed" && workspace.selected_revision !== null && activeFrozenRevision !== null
+    && (activePage.key === "forecast" || activePage.key === "valuation");
+  const originalModelContent = <>
+    {frozenWorkspaceIsBound && workspace.research_draft ? <CompanyResearchDraftPanel draft={workspace.research_draft} page={activePage.key} saved={workspace.selected_revision !== null} /> : null}
+    {frozenWorkspaceIsBound ? activePage.modules.map((moduleKey) => {
+      const module = workspace.modules.find((item) => item.key === moduleKey);
+      const label = COMPANY_RESEARCH_MODULES.find((item) => item.key === moduleKey)?.label;
+      return <section className="ir-page-section" key={moduleKey} aria-label={label}>
+        {activePage.modules.length > 1 ? <h3 className="ir-page-section-title">{label}</h3> : null}
+        <ModulePanel page={activePage.key} activeModule={moduleKey} moduleState={module?.state ?? "not_started"} valuationState={module?.valuation_state ?? "not_applicable"} workspace={workspace} reviewLocked={mutationBusy} onReview={reviewFact} lastSuccess={lastSuccess} />
+      </section>;
+    }) : <EmptyModule message="冻结版本尚未验证；当前工作区模块内容已隐藏。" />}
+  </>;
   const preparationError = workspace.preparation.error;
   const productProgress = workspace.product_progress;
   return <main className="ir-page ir-workbench" aria-busy={mutationBusy}>
@@ -863,15 +877,11 @@ export default function ResearchWorkbenchPage() {
       workspace={workspace}
     /> : null}
 
-      {frozenWorkspaceIsBound && workspace.research_draft ? <CompanyResearchDraftPanel draft={workspace.research_draft} page={activePage.key} saved={workspace.selected_revision !== null} /> : null}
-      {frozenWorkspaceIsBound ? activePage.modules.map((moduleKey) => {
-        const module = workspace.modules.find((item) => item.key === moduleKey);
-        const label = COMPANY_RESEARCH_MODULES.find((item) => item.key === moduleKey)?.label;
-        return <section className="ir-page-section" key={moduleKey} aria-label={label}>
-          {activePage.modules.length > 1 ? <h3 className="ir-page-section-title">{label}</h3> : null}
-          <ModulePanel page={activePage.key} activeModule={moduleKey} moduleState={module?.state ?? "not_started"} valuationState={module?.valuation_state ?? "not_applicable"} workspace={workspace} reviewLocked={mutationBusy} onReview={reviewFact} lastSuccess={lastSuccess} />
-        </section>;
-      }) : <EmptyModule message="冻结版本尚未验证；当前工作区模块内容已隐藏。" />}</section>
+      {hasConditionalModel && activeFrozenRevision !== null && (activePage.key === "forecast" || activePage.key === "valuation") ? <>
+        <CompanyFinancialModelPanel projectId={workspace.project_id} parentRevisionId={activeFrozenRevision.id} parentManifestHash={activeFrozenRevision.manifest_hash} mode={activePage.key} />
+        {activePage.key === "valuation" ? <p>原冻结报告的正式判断：{answerabilityView(workspace).label}。条件模型草稿尚未复核。</p> : null}
+        <details className="ir-frozen-model-replay"><summary>原冻结报告的模型与引用（回放）</summary>{originalModelContent}</details>
+      </> : originalModelContent}</section>
       <aside className="ir-boundary" aria-label="研究状态摘要"><p className="ir-eyebrow">Research state</p><h2>准备状态</h2><dl><div><dt>{workspace.research_draft ? "本次原文" : "来源"}</dt><dd>{workspace.research_draft?.sources.length ?? workspace.source_count}</dd></div><div><dt>缺口</dt><dd>{workspace.gap_count}</dd></div><div><dt>已审核事实</dt><dd>{workspace.change_summary.reviewed_fact_count}</dd></div></dl><details id="audit-details"><summary>审计详情</summary><dl><div><dt>Project</dt><dd>{workspace.project_id}</dd></div><div><dt>Preparation</dt><dd>{workspace.preparation.id}</dd></div><div><dt>内部阶段</dt><dd>{workspace.preparation.status} · {workspace.preparation.current_step ?? "全部阶段"} · {workspace.preparation.progress}%</dd></div>{preparationError ? <div><dt>内部错误</dt><dd>{preparationError.code} · {preparationError.failed_step}</dd></div> : null}<div><dt>Draft</dt><dd>{workspace.draft.id}</dd></div><div><dt>Selected revision</dt><dd>{workspace.selected_revision ?? "尚未选择冻结版本"}</dd></div></dl>{Object.entries(workspace.change_summary.artifact_versions).map(([kind, version]) => <span id={`audit-${encodeURIComponent(kind)}`} key={kind}>{kind} v{version}</span>)}</details></aside>
     </div>
     </div>

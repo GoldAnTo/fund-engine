@@ -52,6 +52,7 @@ from app.underwriting.api.company_research_schemas import (
 )
 from app.underwriting.api.schemas import UnderwritingErrorEnvelope
 from app.underwriting.api.transactions import commit_write
+from app.underwriting.api.company_research_financial_router import router as financial_router
 from app.underwriting.domain.company_research import CompanyResearchPreview
 from app.underwriting.services.company_research_progress import company_research_product_progress
 from app.underwriting.services.company_research_initializer import (
@@ -74,6 +75,7 @@ from app.underwriting.services.company_research_workbench import (
 )
 
 router = APIRouter(prefix="/product/company-research", tags=["company-research-v1"])
+router.include_router(financial_router)
 DbSession = Annotated[Session, Depends(get_db)]
 WRITE_ERROR_RESPONSES = {
     409: {"model": UnderwritingErrorEnvelope},

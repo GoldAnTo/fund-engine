@@ -1,0 +1,77 @@
+/** Wire data for independent, unreviewed model drafts attached to a frozen report. */
+export const FINANCIAL_DRIVERS = ["revenue", "operating_margin", "cash_tax_rate", "depreciation", "capex", "working_capital_change"] as const;
+export type FinancialDriver = typeof FINANCIAL_DRIVERS[number];
+export type FinancialScenarioId = "base" | "bull" | "bear";
+export type FinancialScenario = { scenario_id: FinancialScenarioId; mechanism: string; paths: Record<FinancialDriver, string[]>; rationales: Record<FinancialDriver, string> };
+export type CompanyFinancialModelInputs = { schema_version: "company-research.financial-model-inputs.v1"; first_fiscal_year: number; scenarios: FinancialScenario[]; discount_rate: string; discount_rate_rationale: string; terminal_growth: string; terminal_roic: string; terminal_rationale: string; first_year_cash_flow_fraction: string; timing_rationale: string };
+export type FinancialSource = { id: string; title: string; url: string; raw_content_hash: string; available_at: string };
+export type FinancialFact = { fact_key: string; label: string; value: string; unit: string; period_start: string; period_end: string; scope: "group" | "google_cloud"; state: "reported" | "derived" | "guidance"; source_ids: string[]; source_locator: string; quote: string; formula?: string | null; input_fact_keys: string[] };
+export type FinancialBaseline = { schema_version?: "company-research.financial-baseline.v1"; content_hash: string; sources: FinancialSource[]; facts: FinancialFact[]; research_gaps: { key: string; label: string; detail: string }[] };
+type SourceReference = { fact_key: string; source_url: string; source_locator: string; raw_hash: string; source_role: string };
+export type FinancialMarket = { capital_structure: { cash: string; debt: string; minority_interest: string; investments: string; pension_liabilities: string; other_adjustments: string; basic_shares: string; diluted_shares: string; source_ref: SourceReference; capital_bridge_policy_version: string; policy_ref: SourceReference; policy_excluded_adjustments: string[] }; securities: { security_external_key: string; listed_class_economic_units: string; conversion_ratio: string; adr_ratio: string; dividend_rights_per_unit: string; market_price_usd: string; usd_cny_rate: string; rights_ref: SourceReference; price_ref: SourceReference }[]; usd_cny_rate: string; fx_ref: SourceReference; market_at: string; snapshot_bindings: Record<string, unknown>[] };
+export type FinancialResultRow = Record<FinancialDriver | "operating_income" | "fcff", string> & { fiscal_year: number; discounted_fcff?: string; forecast_state?: "assumption" };
+export type FinancialResultScenario = { scenario_id: FinancialScenarioId; mechanism: string; rows: FinancialResultRow[]; enterprise_value_usd_million: string; terminal_value_share: string | null; terminal_fcff_usd_million?: string; securities: { security_external_key: string; value_usd_per_share: string; value_cny_per_share: string; market_price_usd: string; value_price_gap_ratio: string }[] };
+export type FinancialModelResult = { schema_version: "company-research.financial-model-result.v1"; status: "unreviewed"; valuation_date: string; scenarios: FinancialResultScenario[]; warnings: string[]; policies: string[]; model_scope?: "group"; discount_rate?: string; terminal_growth?: string; terminal_roic?: string; timing?: { first_year_discount_period: string; first_year_cash_flow_fraction: string }; input_anchors?: Record<FinancialDriver, string[]> };
+export type CompanyFinancialModelRecord = { id: string; project_id: string; parent_revision_id: string; parent_manifest_hash: string; cutoff_at: string; sequence: number; created_at: string; status: "unreviewed"; input_hash: string; content_hash: string; baseline: FinancialBaseline; market: FinancialMarket | null; inputs: CompanyFinancialModelInputs; result: FinancialModelResult };
+export type FinancialModelHistory = Pick<CompanyFinancialModelRecord, "id" | "sequence" | "created_at" | "input_hash" | "content_hash">;
+export type CompanyFinancialModelWorkspace = { project_id: string; parent_revision_id: string; parent_manifest_hash: string; cutoff_at: string; baseline: FinancialBaseline; market: FinancialMarket | null; initial_inputs: CompanyFinancialModelInputs; latest: CompanyFinancialModelRecord | null; history: FinancialModelHistory[] };
+export type SaveCompanyFinancialModelRequest = { parent_revision_id: string; expected_latest_id: string | null; baseline_content_hash: string; inputs: CompanyFinancialModelInputs };
+export type FinancialModelExport = { filename: string; media_type: string; content: string; content_hash: string; schema_version?: "underwriting.v1" };
+
+const record = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const text = (v: unknown): v is string => typeof v === "string";
+const hash = (v: unknown): v is string => text(v) && /^[a-f0-9]{64}$/.test(v);
+const uuid = (v: unknown): v is string => text(v) && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(v);
+const date = (v: unknown): v is string => text(v) && /^\d{4}-\d{2}-\d{2}/.test(v) && Number.isFinite(Date.parse(v));
+export const financialDecimal = (v: unknown): v is string => text(v) && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(v) && Number.isFinite(Number(v));
+const texts = (v: unknown): v is string[] => Array.isArray(v) && v.every(text);
+const exact = (v: Record<string, unknown>, keys: readonly string[], optional: readonly string[] = []) => keys.every((k) => k in v) && Object.keys(v).every((k) => keys.includes(k) || optional.includes(k));
+const unique = (v: string[]) => new Set(v).size === v.length;
+const scenario = (v: unknown): v is FinancialScenarioId => v === "base" || v === "bull" || v === "bear";
+const url = (v: unknown): v is string => { if (!text(v)) return false; try { return ["https:", "http:"].includes(new URL(v).protocol); } catch { return false; } };
+const threeScenarios = (v: unknown): v is Record<string, unknown>[] => Array.isArray(v) && v.length === 3 && v.every((s) => record(s) && scenario(s.scenario_id)) && unique(v.map((s) => s.scenario_id as string));
+
+export function isFinancialModelInputs(v: unknown, allowEmpty = false): v is CompanyFinancialModelInputs {
+  const decimal = (n: unknown) => financialDecimal(n) || (allowEmpty && n === "");
+  return record(v) && exact(v, ["schema_version", "first_fiscal_year", "scenarios", "discount_rate", "discount_rate_rationale", "terminal_growth", "terminal_roic", "terminal_rationale", "first_year_cash_flow_fraction", "timing_rationale"])
+    && v.schema_version === "company-research.financial-model-inputs.v1" && Number.isInteger(v.first_fiscal_year) && Number(v.first_fiscal_year) >= 2000 && Number(v.first_fiscal_year) <= 2200
+    && threeScenarios(v.scenarios) && v.scenarios.every((s) => exact(s, ["scenario_id", "mechanism", "paths", "rationales"]) && text(s.mechanism) && record(s.paths) && record(s.rationales) && exact(s.paths, FINANCIAL_DRIVERS) && exact(s.rationales, FINANCIAL_DRIVERS) && FINANCIAL_DRIVERS.every((k) => { const paths = (s.paths as Record<string, unknown>)[k]; return Array.isArray(paths) && paths.length === 5 && paths.every(decimal) && text((s.rationales as Record<string, unknown>)[k]); }))
+    && [v.discount_rate, v.terminal_growth, v.terminal_roic, v.first_year_cash_flow_fraction].every(decimal)
+    && [v.discount_rate_rationale, v.terminal_rationale, v.timing_rationale].every(text);
+}
+function baseline(v: unknown): v is FinancialBaseline {
+  if (!record(v) || !exact(v, ["content_hash", "sources", "facts", "research_gaps"], ["schema_version"]) || (v.schema_version !== undefined && v.schema_version !== "company-research.financial-baseline.v1") || !hash(v.content_hash) || !Array.isArray(v.sources) || !Array.isArray(v.facts) || !Array.isArray(v.research_gaps)) return false;
+  if (!v.sources.every((s) => record(s) && exact(s, ["id", "title", "url", "raw_content_hash", "available_at"]) && text(s.id) && text(s.title) && url(s.url) && hash(s.raw_content_hash) && date(s.available_at))) return false;
+  const ids = v.sources.map((s) => s.id as string);
+  return unique(ids) && v.facts.every((f) => record(f) && exact(f, ["fact_key", "label", "value", "unit", "period_start", "period_end", "scope", "state", "source_ids", "source_locator", "quote", "input_fact_keys"], ["formula"])
+    && [f.fact_key, f.label, f.unit, f.source_locator, f.quote].every(text) && financialDecimal(f.value) && date(f.period_start) && date(f.period_end) && Date.parse(f.period_start) <= Date.parse(f.period_end)
+    && ["group", "google_cloud"].includes(String(f.scope)) && ["reported", "derived", "guidance"].includes(String(f.state)) && texts(f.source_ids) && f.source_ids.every((id) => ids.includes(id)) && texts(f.input_fact_keys) && (f.formula === undefined || f.formula === null || text(f.formula)))
+    && unique(v.facts.map((f) => f.fact_key as string)) && v.research_gaps.every((g) => record(g) && exact(g, ["key", "label", "detail"]) && [g.key, g.label, g.detail].every(text));
+}
+function sourceRef(v: unknown, allowCapitalPolicy = false): v is SourceReference { return record(v) && exact(v, ["fact_key", "source_url", "source_locator", "raw_hash", "source_role"]) && [v.fact_key, v.source_locator, v.source_role].every(text) && (url(v.source_url) || (allowCapitalPolicy && v.fact_key === "capital_bridge_policy" && v.source_url === "urn:company-research:capital-bridge-policy")) && hash(v.raw_hash); }
+function market(v: unknown): v is FinancialMarket {
+  if (!record(v) || !exact(v, ["capital_structure", "securities", "usd_cny_rate", "fx_ref", "market_at", "snapshot_bindings"]) || !record(v.capital_structure)) return false;
+  const c = v.capital_structure;
+  return ["cash", "debt", "minority_interest", "investments", "pension_liabilities", "other_adjustments", "basic_shares", "diluted_shares"].every((k) => financialDecimal(c[k])) && sourceRef(c.source_ref) && sourceRef(c.policy_ref, true) && text(c.capital_bridge_policy_version) && texts(c.policy_excluded_adjustments)
+    && Array.isArray(v.securities) && v.securities.length > 0 && v.securities.every((s) => record(s) && text(s.security_external_key) && ["listed_class_economic_units", "conversion_ratio", "adr_ratio", "dividend_rights_per_unit", "market_price_usd", "usd_cny_rate"].every((k) => financialDecimal(s[k])) && sourceRef(s.rights_ref) && sourceRef(s.price_ref))
+    && financialDecimal(v.usd_cny_rate) && sourceRef(v.fx_ref) && date(v.market_at) && Array.isArray(v.snapshot_bindings) && v.snapshot_bindings.every(record);
+}
+function result(v: unknown, inputs: CompanyFinancialModelInputs): v is FinancialModelResult {
+  return record(v) && exact(v, ["schema_version", "status", "valuation_date", "scenarios", "warnings", "policies"], ["model_scope", "discount_rate", "terminal_growth", "terminal_roic", "timing", "input_anchors"]) && v.schema_version === "company-research.financial-model-result.v1" && v.status === "unreviewed" && date(v.valuation_date) && texts(v.warnings) && texts(v.policies)
+    && (v.model_scope === undefined || v.model_scope === "group")
+    && ["discount_rate", "terminal_growth", "terminal_roic"].every((key) => v[key] === undefined || financialDecimal(v[key]))
+    && (v.timing === undefined || (record(v.timing) && exact(v.timing, ["first_year_discount_period", "first_year_cash_flow_fraction"]) && financialDecimal(v.timing.first_year_discount_period) && financialDecimal(v.timing.first_year_cash_flow_fraction)))
+    && (v.input_anchors === undefined || (record(v.input_anchors) && exact(v.input_anchors, FINANCIAL_DRIVERS) && Object.values(v.input_anchors).every(texts)))
+    && threeScenarios(v.scenarios) && v.scenarios.every((s) => exact(s, ["scenario_id", "mechanism", "rows", "enterprise_value_usd_million", "terminal_value_share", "securities"], ["terminal_fcff_usd_million"]) && (s.terminal_fcff_usd_million === undefined || financialDecimal(s.terminal_fcff_usd_million)) && text(s.mechanism) && financialDecimal(s.enterprise_value_usd_million) && (s.terminal_value_share === null || financialDecimal(s.terminal_value_share)) && Array.isArray(s.rows) && s.rows.length === 5 && s.rows.every((r, i) => record(r) && exact(r, ["fiscal_year", ...FINANCIAL_DRIVERS, "operating_income", "fcff"], ["discounted_fcff", "forecast_state"]) && (r.discounted_fcff === undefined || financialDecimal(r.discounted_fcff)) && (r.forecast_state === undefined || r.forecast_state === "assumption") && r.fiscal_year === inputs.first_fiscal_year + i && [...FINANCIAL_DRIVERS, "operating_income", "fcff"].every((k) => financialDecimal(r[k]))) && Array.isArray(s.securities) && s.securities.every((q) => record(q) && exact(q, ["security_external_key", "value_usd_per_share", "value_cny_per_share", "market_price_usd", "value_price_gap_ratio"]) && text(q.security_external_key) && ["value_usd_per_share", "value_cny_per_share", "market_price_usd", "value_price_gap_ratio"].every((k) => financialDecimal(q[k]))));
+}
+function history(v: unknown): v is FinancialModelHistory & Record<string, unknown> { return record(v) && uuid(v.id) && Number.isInteger(v.sequence) && Number(v.sequence) > 0 && date(v.created_at) && hash(v.input_hash) && hash(v.content_hash); }
+export function isFinancialModelRecord(v: unknown): v is CompanyFinancialModelRecord {
+  return record(v) && exact(v, ["id", "project_id", "parent_revision_id", "parent_manifest_hash", "cutoff_at", "sequence", "created_at", "status", "input_hash", "content_hash", "baseline", "market", "inputs", "result"])
+    && history(v) && uuid(v.project_id) && uuid(v.parent_revision_id) && hash(v.parent_manifest_hash) && date(v.cutoff_at) && v.status === "unreviewed" && baseline(v.baseline) && (v.market === null || market(v.market)) && isFinancialModelInputs(v.inputs) && result(v.result, v.inputs);
+}
+export function isFinancialModelWorkspace(v: unknown): v is CompanyFinancialModelWorkspace {
+  if (!record(v) || !exact(v, ["project_id", "parent_revision_id", "parent_manifest_hash", "cutoff_at", "baseline", "market", "initial_inputs", "latest", "history"]) || !uuid(v.project_id) || !uuid(v.parent_revision_id) || !hash(v.parent_manifest_hash) || !date(v.cutoff_at) || !baseline(v.baseline) || !(v.market === null || market(v.market)) || !isFinancialModelInputs(v.initial_inputs, true) || !Array.isArray(v.history) || !v.history.every(history) || !unique(v.history.map((h) => h.id))) return false;
+  if (v.latest === null) return v.history.length === 0;
+  return isFinancialModelRecord(v.latest) && v.latest.project_id === v.project_id && v.latest.parent_revision_id === v.parent_revision_id && v.latest.parent_manifest_hash === v.parent_manifest_hash && v.latest.cutoff_at === v.cutoff_at && v.history.some((h) => h.id === (v.latest as CompanyFinancialModelRecord).id && h.content_hash === (v.latest as CompanyFinancialModelRecord).content_hash && h.sequence === (v.latest as CompanyFinancialModelRecord).sequence);
+}
+export function isFinancialModelExport(v: unknown): v is FinancialModelExport { return record(v) && exact(v, ["filename", "media_type", "content", "content_hash"], ["schema_version"]) && (v.schema_version === undefined || v.schema_version === "underwriting.v1") && text(v.filename) && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(v.filename) && ["text/markdown", "application/json"].includes(String(v.media_type)) && text(v.content) && hash(v.content_hash); }

@@ -282,3 +282,29 @@ class CompanyResearchDraft(Base):
     payload: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CompanyResearchFinancialDraft(Base):
+    """Append-only conditional model inputs/results beside a frozen revision."""
+
+    __tablename__ = "uw_company_research_financial_drafts"
+    __table_args__ = (
+        UniqueConstraint("project_id", "sequence", name="uq_uw_financial_draft_sequence"),
+        UniqueConstraint("idempotency_key", name="uq_uw_financial_draft_idempotency"),
+        CheckConstraint("sequence >= 1", name="ck_uw_financial_draft_sequence"),
+        CheckConstraint("length(input_hash) = 64 AND length(content_hash) = 64 AND length(request_hash) = 64", name="ck_uw_financial_draft_hashes"),
+        CheckConstraint("(supersedes_id IS NULL AND parent_content_hash IS NULL) OR (supersedes_id IS NOT NULL AND length(parent_content_hash) = 64)", name="ck_uw_financial_draft_parent"),
+        *_json_shape_constraints("payload", "object", "ck_uw_financial_draft_payload"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
+    project_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("uw_research_projects.id"), nullable=False)
+    parent_revision_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("uw_research_versions.id"), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("uw_company_research_financial_drafts.id"), nullable=True)
+    parent_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON(none_as_null=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

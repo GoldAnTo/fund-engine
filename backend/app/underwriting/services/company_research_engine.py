@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, localcontext
 
 from app.models.ledger import ValidationError
+from app.underwriting.services.company_research_cash_flow import unlevered_free_cash_flow
 from app.underwriting.domain.company_research import (
     CompanyResearchAssessment,
     COMPANY_RESEARCH_DECIMAL_PRECISION,
@@ -448,11 +449,10 @@ class CompanyResearchEngine:
                     * overrides["working_capital_change"]
                 )
                 operating_income = revenue * operating_margin
-                fcff = +(
-                    operating_income * (Decimal("1") - cash_tax_rate)
-                    + depreciation
-                    - capex
-                    - working_capital_change
+                fcff = unlevered_free_cash_flow(
+                    operating_income=operating_income, cash_tax_rate=cash_tax_rate,
+                    depreciation=depreciation, capex=capex,
+                    working_capital_change=working_capital_change,
                 )
                 rows.append(
                     FinancialBridgeRow(
@@ -475,11 +475,10 @@ class CompanyResearchEngine:
     def _validate_financial_closure(row: FinancialBridgeRow) -> None:
         with localcontext() as context:
             context.prec = COMPANY_RESEARCH_DECIMAL_PRECISION
-            expected_fcff = +(
-                row.operating_income * (Decimal("1") - row.cash_tax_rate)
-                + row.depreciation
-                - row.capex
-                - row.working_capital_change
+            expected_fcff = unlevered_free_cash_flow(
+                operating_income=row.operating_income, cash_tax_rate=row.cash_tax_rate,
+                depreciation=row.depreciation, capex=row.capex,
+                working_capital_change=row.working_capital_change,
             )
         if row.fcff != expected_fcff:
             raise ValidationError("financial bridge does not close")

@@ -1,4 +1,6 @@
 import type { components } from "../contracts/v1";
+import { isFinancialModelWorkspace, isFinancialModelRecord, isFinancialModelExport, type CompanyFinancialModelWorkspace, type CompanyFinancialModelRecord, type SaveCompanyFinancialModelRequest, type FinancialModelExport } from "./companyFinancialModel";
+export type { CompanyFinancialModelWorkspace, CompanyFinancialModelRecord, SaveCompanyFinancialModelRequest, FinancialModelExport } from "./companyFinancialModel";
 
 type Schemas = components["schemas"];
 
@@ -73,6 +75,12 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 function hasKeysWithOptional(value: Record<string, unknown>, required: readonly string[], optional: readonly string[]): boolean {
   return required.every((key) => Object.prototype.hasOwnProperty.call(value, key))
     && Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
+}
+
+function sameJsonData(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((item, i) => sameJsonData(item, right[i]));
+  if (isRecord(left) && isRecord(right)) return Object.keys(left).length === Object.keys(right).length && Object.keys(left).every((key) => key in right && sameJsonData(left[key], right[key]));
+  return left === right;
 }
 
 function normalizedResearchFocus(value: string | null | undefined): string | null {
@@ -1949,6 +1957,36 @@ export class InvestmentResearchApi {
     assertUuid(projectId, "projectId");
     const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/workspace`, isCompanyResearchWorkspace, 200, { method: "GET" });
     if (value.project_id !== projectId) mismatch("company-research workspace project identity mismatch");
+    return value;
+  }
+
+  async companyFinancialModel(projectId: string): Promise<CompanyFinancialModelWorkspace> {
+    assertUuid(projectId, "projectId");
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/financial-model`, isFinancialModelWorkspace, 200, { method: "GET" });
+    if (!sameUuid(value.project_id, projectId)) mismatch("financial model project identity mismatch");
+    return value;
+  }
+
+  async saveCompanyFinancialModel(projectId: string, body: SaveCompanyFinancialModelRequest, idempotencyKey: string): Promise<CompanyFinancialModelRecord> {
+    assertUuid(projectId, "projectId");
+    if (!idempotencyKey.trim()) throw new InvestmentResearchRequestError("idempotencyKey 不能为空", 0, "invalid_request", null);
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/financial-model/drafts`, isFinancialModelRecord, 201, jsonInit("POST", body, { "Idempotency-Key": idempotencyKey }));
+    if (!sameUuid(value.project_id, projectId) || !sameUuid(value.parent_revision_id, body.parent_revision_id)
+      || value.baseline.content_hash !== body.baseline_content_hash || !sameJsonData(value.inputs, body.inputs)) mismatch("financial model saved input binding mismatch");
+    return value;
+  }
+
+  async companyFinancialModelDraft(projectId: string, draftId: string): Promise<CompanyFinancialModelRecord> {
+    assertUuid(projectId, "projectId"); assertUuid(draftId, "draftId");
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/financial-model/drafts/${encodeURIComponent(draftId)}`, isFinancialModelRecord, 200, { method: "GET" });
+    if (!sameUuid(value.project_id, projectId) || !sameUuid(value.id, draftId)) mismatch("financial model draft identity mismatch");
+    return value;
+  }
+
+  async exportCompanyFinancialModelDraft(projectId: string, draftId: string): Promise<FinancialModelExport> {
+    assertUuid(projectId, "projectId"); assertUuid(draftId, "draftId");
+    const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/financial-model/drafts/${encodeURIComponent(draftId)}/export`, isFinancialModelExport, 200, { method: "GET" });
+    if (!value.filename.includes(draftId) || await sha256Utf8(value.content) !== value.content_hash) mismatch("financial model export binding mismatch");
     return value;
   }
 

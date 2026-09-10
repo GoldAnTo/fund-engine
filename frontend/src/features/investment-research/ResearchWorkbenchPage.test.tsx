@@ -14,6 +14,7 @@ import {
 } from "../../data/investmentResearchApi";
 import ResearchWorkbenchPage from "./ResearchWorkbenchPage";
 import { CompanyResearchRoutes } from "../../app/CompanyResearchRoutes";
+import { modelWorkspace } from "../../data/companyFinancialModel.test-fixtures";
 import { liveResearchDraftFixture } from "../../data/companyResearchDraft.test-fixtures";
 
 const hash = "a".repeat(64);
@@ -339,6 +340,11 @@ async function bindFrozenWorkspace(_user: ReturnType<typeof userEvent.setup>) {
   await screen.findByText("冻结版本已自动验证并载入。");
 }
 
+async function openFrozenModelReplay(user: ReturnType<typeof userEvent.setup>) {
+  const summary = screen.queryByText("原冻结报告的模型与引用（回放）");
+  if (summary && !summary.closest("details")?.open) await user.click(summary);
+}
+
 async function decodeWorkspaceFixture(candidate: CompanyResearchWorkspace) {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(candidate), {
     status: 200, headers: { "content-type": "application/json" },
@@ -501,6 +507,38 @@ describe("Alphabet company research workbench", () => {
     expect(retry).toHaveBeenCalledWith(ids.project);
   });
 
+  it("loads the attached model only after the frozen forecast identity is authenticated", async () => {
+    const candidate = workspace({ rich: true, status: "completed" });
+    const frozen = frozenRevisionFor(candidate);
+    const pending = deferred<CompanyResearchFrozenRevision>();
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(candidate);
+    vi.spyOn(investmentResearchApi, "companyResearchRevision").mockReturnValue(pending.promise);
+    const model = vi.spyOn(investmentResearchApi, "companyFinancialModel").mockResolvedValue({ ...modelWorkspace(), parent_manifest_hash: frozen.manifest_hash });
+    renderPage("forecast");
+    await screen.findByRole("heading", { name: "研究工作台" });
+    expect(model).not.toHaveBeenCalled();
+    await act(async () => pending.resolve(frozen));
+    expect(await screen.findByRole("heading", { name: "条件估值模型草稿" })).toBeVisible();
+    await waitFor(() => expect(model).toHaveBeenCalledWith(ids.project));
+    expect(await screen.findByLabelText("基准 2026 收入")).toBeVisible();
+    expect(screen.getByText("revenue × growth")).not.toBeVisible();
+    const replay = screen.getByText("原冻结报告的模型与引用（回放）").closest("details")!;
+    expect(replay).not.toHaveAttribute("open");
+    await userEvent.click(screen.getByText("原冻结报告的模型与引用（回放）"));
+    expect(screen.getByText("revenue × growth")).toBeVisible();
+  });
+
+  it("does not request a conditional financial model for an unfrozen forecast", async () => {
+    vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
+    vi.spyOn(investmentResearchApi, "companyResearchWorkspace").mockResolvedValue(workspace());
+    const model = vi.spyOn(investmentResearchApi, "companyFinancialModel");
+    renderPage("forecast");
+    await screen.findByRole("heading", { name: "研究工作台" });
+    expect(model).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "条件估值模型草稿" })).not.toBeInTheDocument();
+  });
+
   it("groups real business and forecast modules while keeping valuation on its own page", async () => {
     const candidate = workspace({ rich: true, status: "completed" });
     vi.spyOn(investmentResearchApi, "project").mockResolvedValue(project());
@@ -509,6 +547,7 @@ describe("Alphabet company research workbench", () => {
     const user = userEvent.setup();
     renderPage("forecast");
     await bindFrozenWorkspace(user);
+    await openFrozenModelReplay(user);
     expect(screen.getByText("revenue × growth")).toBeVisible();
     expect(screen.getByRole("heading", { name: "FY2025" })).toBeVisible();
     expect(screen.getByText("base_search_ai")).toBeVisible();
@@ -519,6 +558,7 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText(/接口未提供行业、竞争与监管专属语义/)).toBeVisible();
     expect(screen.getByText("Q3 Cloud backlog 与 AI capex 回报验证")).toBeVisible();
     await user.click(screen.getByRole("link", { name: /价值判断/ }));
+    await openFrozenModelReplay(user);
     expect(screen.getByRole("heading", { name: "反向 DCF" })).toBeVisible();
     expect(screen.queryByText("revenue × growth")).not.toBeInTheDocument();
     expect(screen.queryByText("base_search_ai")).not.toBeInTheDocument();
@@ -531,6 +571,7 @@ describe("Alphabet company research workbench", () => {
     mockFrozenRevision(candidate);
     renderPage("valuation");
     await screen.findByText("冻结版本已自动验证并载入。");
+    await openFrozenModelReplay(userEvent.setup());
     expect(screen.getByRole("heading", { name: "要求回报比较" })).toBeVisible();
     expect(screen.getByRole("article", { name: "NASDAQ:GOOGL 要求回报 0.12" })).toHaveTextContent("FY2025 / cutoff 2026-02-05");
     const market = screen.getByRole("region", { name: "市场输入来源" });
@@ -1115,6 +1156,7 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByRole("heading", { name: "价值与回报范围" })).toBeVisible();
     expect(screen.getByText(/Q3 Cloud backlog 与 AI capex 回报验证/)).toBeVisible();
     await user.click(screen.getByRole("link", { name: /价值判断/ }));
+    await openFrozenModelReplay(user);
 
     expect(screen.getByRole("heading", { name: "DCF 情景值" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "反向 DCF" })).toBeVisible();
@@ -1130,6 +1172,7 @@ describe("Alphabet company research workbench", () => {
     expect(screen.getByText(/ai_capex_risk/)).toBeVisible();
     expect(screen.queryByText("财务效果与价值")).not.toBeInTheDocument();
     await user.click(screen.getByRole("link", { name: /预测与情景/ }));
+    await openFrozenModelReplay(user);
     expect(screen.getByText("base_search_ai")).toBeVisible();
     expect(screen.getByText("base case mechanism")).toBeVisible();
     expect(screen.getAllByText("逐情景财务效果：接口未提供（不可推断）")).toHaveLength(3);
@@ -1571,6 +1614,7 @@ describe("Alphabet company research workbench", () => {
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     if (rich.preparation.status === "completed") await bindFrozenWorkspace(user);
     await user.click(screen.getByRole("link", { name: /价值判断/ }));
+    await openFrozenModelReplay(user);
     expect(screen.getByText(copy, { exact: false })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "DCF 情景值" })).not.toBeInTheDocument();
     expect(screen.queryByText(/数据缺口阻塞/)).not.toBeInTheDocument();
@@ -1595,6 +1639,7 @@ describe("Alphabet company research workbench", () => {
     ] as const;
     for (const [pageName, expectedContent] of assertions) {
       await user.click(screen.getByRole("link", { name: pageName }));
+      await openFrozenModelReplay(user);
       for (const copy of expectedContent) expect(screen.getAllByText(copy, { exact: false })[0]!).toBeVisible();
     }
   }, 10_000);
@@ -1611,6 +1656,7 @@ describe("Alphabet company research workbench", () => {
     await screen.findByRole("heading", { name: "Alphabet Inc." });
     await bindFrozenWorkspace(user);
     await user.click(screen.getByRole("link", { name: /预测与情景/ }));
+    await openFrozenModelReplay(user);
 
     for (const [cardName, key] of [["search_growth 0.11", "assumption_search_growth"], ["missing_metric not available", "missing_metric_gap"]] as const) {
       const href = within(screen.getByRole("article", { name: cardName })).getByRole("link").getAttribute("href");

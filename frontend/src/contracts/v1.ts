@@ -2863,6 +2863,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/financial-model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Financial Workspace */
+        get: operations["get_financial_workspace_api_underwriting_v1_product_company_research_projects__project_id__financial_model_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/financial-model/drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save Financial Draft */
+        post: operations["save_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/financial-model/drafts/{draft_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Financial Draft */
+        get: operations["get_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts__draft_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/financial-model/drafts/{draft_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Financial Draft */
+        get: operations["export_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts__draft_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/underwriting/v1/product/company-research/preview": {
         parameters: {
             query?: never;
@@ -8642,6 +8710,131 @@ export interface components {
              */
             created_at: string;
         };
+        /** FinancialDraftExportResponse */
+        FinancialDraftExportResponse: {
+            /** Filename */
+            filename: string;
+            /**
+             * Media Type
+             * @constant
+             */
+            media_type: "text/markdown";
+            /** Content */
+            content: string;
+            /** Content Hash */
+            content_hash: string;
+        };
+        /** FinancialDraftResponse */
+        FinancialDraftResponse: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Sequence */
+            sequence: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Parent Revision Id
+             * Format: uuid
+             */
+            parent_revision_id: string;
+            /** Parent Manifest Hash */
+            parent_manifest_hash: string;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "unreviewed";
+            /** Baseline */
+            baseline: {
+                [key: string]: unknown;
+            };
+            /** Market */
+            market: {
+                [key: string]: unknown;
+            } | null;
+            /** Inputs */
+            inputs: {
+                [key: string]: unknown;
+            };
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            };
+        };
+        /** FinancialDraftSummary */
+        FinancialDraftSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Sequence */
+            sequence: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Input Hash */
+            input_hash: string;
+            /** Content Hash */
+            content_hash: string;
+        };
+        /** FinancialWorkspaceResponse */
+        FinancialWorkspaceResponse: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Parent Revision Id
+             * Format: uuid
+             */
+            parent_revision_id: string;
+            /** Parent Manifest Hash */
+            parent_manifest_hash: string;
+            /**
+             * Cutoff At
+             * Format: date-time
+             */
+            cutoff_at: string;
+            /** Baseline */
+            baseline: {
+                [key: string]: unknown;
+            };
+            /** Market */
+            market: {
+                [key: string]: unknown;
+            } | null;
+            /** Initial Inputs */
+            initial_inputs: {
+                [key: string]: unknown;
+            };
+            latest: components["schemas"]["FinancialDraftResponse"] | null;
+            /** History */
+            history: components["schemas"]["FinancialDraftSummary"][];
+        };
         /** ForecastEvaluationCandidateDTO */
         ForecastEvaluationCandidateDTO: {
             /** Id */
@@ -12600,6 +12793,22 @@ export interface components {
             updated_at: string;
             /** Next Action */
             next_action: string;
+        };
+        /** SaveFinancialDraftRequest */
+        SaveFinancialDraftRequest: {
+            /**
+             * Parent Revision Id
+             * Format: uuid
+             */
+            parent_revision_id: string;
+            /** Expected Latest Id */
+            expected_latest_id: string | null;
+            /** Baseline Content Hash */
+            baseline_content_hash: string;
+            /** Inputs */
+            inputs: {
+                [key: string]: unknown;
+            };
         };
         /** SaveFundDisclosureSyncConfigRequest */
         SaveFundDisclosureSyncConfigRequest: {
@@ -20222,6 +20431,210 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_financial_workspace_api_underwriting_v1_product_company_research_projects__project_id__financial_model_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinancialWorkspaceResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    save_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts_post: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveFinancialDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinancialDraftResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts__draft_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinancialDraftResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+        };
+    };
+    export_financial_draft_api_underwriting_v1_product_company_research_projects__project_id__financial_model_drafts__draft_id__export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                draft_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinancialDraftExportResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnderwritingErrorEnvelope"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

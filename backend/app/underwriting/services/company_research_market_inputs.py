@@ -12,18 +12,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
-from app.underwriting.domain.product_contracts import (
-    CapitalStructureSnapshotInput,
-    FXSnapshotInput,
-    FxQuoteDirection,
-    PriceSnapshotInput,
-    SecurityRightsInput,
-)
-from app.underwriting.fixtures.alphabet_golden_case import (
-    AlphabetMarketInputBundle,
-    CapturedProvenance,
-)
-from app.underwriting.hashing import canonical_hash
 from app.underwriting.domain.company_research import (
     CapitalStructureReference,
     MarketBridgeArtifact,
@@ -36,6 +24,18 @@ from app.underwriting.domain.company_research_market_contracts import (
     FrozenMarketSnapshotRole,
     FrozenRawComponentReference,
 )
+from app.underwriting.domain.product_contracts import (
+    CapitalStructureSnapshotInput,
+    FxQuoteDirection,
+    FXSnapshotInput,
+    PriceSnapshotInput,
+    SecurityRightsInput,
+)
+from app.underwriting.fixtures.alphabet_golden_case import (
+    AlphabetMarketInputBundle,
+    CapturedProvenance,
+)
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
@@ -60,7 +60,6 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
-
 
 _ALPHABET_COMPANY_KEY = "US:ALPHABET:COMPANY"
 _ALPHABET_SECURITY_KEYS = ("NASDAQ:GOOG", "NASDAQ:GOOGL")
@@ -254,17 +253,17 @@ class CompanyResearchMarketInputs:
             class_b = market_inputs.class_b_rights
             listed_units = sum(
                 (value.economic_units for _item, value in rights_values),
-                start=Decimal("0"),
+                start=Decimal(0),
             )
             if (
                 class_b.component_key != "class_b"
                 or class_b.economic_units != capital_value.basic_shares - listed_units
-                or class_b.economic_units < Decimal("0")
-                or class_b.votes_per_unit != Decimal("10")
+                or class_b.economic_units < Decimal(0)
+                or class_b.votes_per_unit != Decimal(10)
                 or class_b.conversion_to_security_external_key != "NASDAQ:GOOGL"
-                or class_b.conversion_ratio != Decimal("1")
-                or class_b.dividend_rights_per_unit != Decimal("1")
-                or class_b.economic_rights_per_unit != Decimal("1")
+                or class_b.conversion_ratio != Decimal(1)
+                or class_b.dividend_rights_per_unit != Decimal(1)
+                or class_b.economic_rights_per_unit != Decimal(1)
                 or class_b.price_proxy_security_external_key != "NASDAQ:GOOGL"
                 or class_b.price_proxy_policy_version
                 != "alphabet_class_b_googl_proxy.v1"
@@ -304,7 +303,7 @@ class CompanyResearchMarketInputs:
                 capital_item.capital_bridge_policy_version
                 != "alphabet-capital-bridge.v1"
                 or capital_item.policy_excluded_adjustments != ("pension_liabilities",)
-                or capital_item.value("pension_liabilities") != Decimal("0")
+                or capital_item.value("pension_liabilities") != Decimal(0)
             ):
                 raise ValidationError(
                     "capital bridge policy is unsupported or not closed"
@@ -668,6 +667,126 @@ class CompanyResearchMarketInputs:
             captures=captures,
         )
 
+    def resolve_frozen(
+        self,
+        *,
+        project_id: UUID,
+        cutoff_at: datetime,
+        bindings: tuple[FrozenMarketSnapshotBinding, ...],
+        frozen_company_id: UUID,
+        frozen_security_ids: dict[str, UUID],
+    ) -> FrozenMarketContext:
+        """Rebuild authenticated published bindings without consulting newer rows.
+
+        Callers supply identities and bindings from an authenticated revision,
+        never a browser snapshot. Every referenced row and capture is rechecked.
+        """
+        from app.underwriting.persistence.company_research_repository import (
+            CompanyResearchRepository,
+        )
+
+        cutoff = _utc(cutoff_at, "cutoff_at")
+        if (
+            type(project_id) is not UUID
+            or type(frozen_company_id) is not UUID
+            or cutoff != _ALPHABET_CUTOFF
+            or not isinstance(bindings, tuple)
+            or not bindings
+            or any(
+                type(binding) is not FrozenMarketSnapshotBinding for binding in bindings
+            )
+            or not isinstance(frozen_security_ids, dict)
+            or tuple(sorted(frozen_security_ids)) != _ALPHABET_SECURITY_KEYS
+            or any(type(value) is not UUID for value in frozen_security_ids.values())
+        ):
+            raise ValidationError("frozen Alphabet market boundary is invalid")
+        project_record = self._repository.project(project_id)
+        company = self._repository.object(frozen_company_id)
+        if (
+            project_record is None
+            or project_record[0].primary_company_id != frozen_company_id
+            or company is None
+            or company.external_key != _ALPHABET_COMPANY_KEY
+        ):
+            raise ValidationError(
+                "frozen market inputs do not match the project Company"
+            )
+        CompanyResearchRepository(self._session).validate_market_snapshot_bindings(
+            project_id=project_id,
+            bindings=bindings,
+            cutoff_at=cutoff,
+            fresh=True,
+            frozen_company_id=frozen_company_id,
+            frozen_security_ids=frozen_security_ids,
+        )
+        by_role = {
+            (binding.role, binding.security_external_key): binding
+            for binding in bindings
+        }
+
+        def exact(model, role, security_key=None):
+            binding = by_role[(role, security_key)]
+            row = self._session.get(model, binding.snapshot_id, populate_existing=True)
+            if row is None or getattr(row, "legacy_business_conflict", False):
+                raise ValidationError("frozen market snapshot is missing or conflicted")
+            if (
+                role is FrozenMarketSnapshotRole.SECURITY_RIGHTS
+                and row.effective_to is not None
+                and _stored_utc(row.effective_to) <= cutoff
+            ):
+                raise ValidationError("frozen security rights are expired at cutoff")
+            return row
+
+        prices = tuple(
+            exact(UnderwritingPriceSnapshot, FrozenMarketSnapshotRole.PRICE, key)
+            for key in _ALPHABET_SECURITY_KEYS
+        )
+        fx = exact(UnderwritingFXSnapshot, FrozenMarketSnapshotRole.FX)
+        capital = exact(
+            UnderwritingCapitalStructureSnapshot,
+            FrozenMarketSnapshotRole.CAPITAL_STRUCTURE,
+        )
+        rights = tuple(
+            exact(
+                UnderwritingSecurityRightsVersion,
+                FrozenMarketSnapshotRole.SECURITY_RIGHTS,
+                key,
+            )
+            for key in _ALPHABET_SECURITY_KEYS
+        )
+        captures = {
+            (binding.role.value, binding.snapshot_id, "primary"): self._capture(
+                binding.role.value,
+                binding.snapshot_id,
+                fresh=True,
+            )
+            for binding in bindings
+        }
+        for provenance_role in ("class_b_legal_rights", "class_b_units"):
+            captures[("capital_structure", capital.id, provenance_role)] = (
+                self._capture(
+                    "capital_structure",
+                    capital.id,
+                    provenance_role,
+                    fresh=True,
+                )
+            )
+        if any(
+            _stored_utc(capture.authenticated_available_at) > cutoff
+            for capture in captures.values()
+        ):
+            raise ValidationError("frozen market capture exceeds cutoff")
+        context = self._context(
+            prices=prices, fx=fx, capital=capital, rights=rights, captures=captures
+        )
+        if context.snapshot_bindings != tuple(
+            sorted(bindings, key=lambda binding: str(binding.snapshot_id))
+        ):
+            raise ValidationError(
+                "frozen market context differs from authenticated bindings"
+            )
+        return context
+
     def _capture(
         self,
         snapshot_kind: str,
@@ -968,7 +1087,7 @@ class CompanyResearchMarketInputs:
                 - listed["NASDAQ:GOOGL"].listed_class_economic_units
                 - listed["NASDAQ:GOOG"].listed_class_economic_units
             )
-            if class_b_units < Decimal("0"):
+            if class_b_units < Decimal(0):
                 raise ValidationError(
                     "listed Class A/C units exceed company basic shares"
                 )
@@ -1021,7 +1140,7 @@ class CompanyResearchMarketInputs:
                     units * price_by_key[proxy].price
                     for _key, units, proxy, _source in component_specs
                 ),
-                start=Decimal("0"),
+                start=Decimal(0),
             )
             target_enterprise_value = +(
                 market_equity
@@ -1032,7 +1151,7 @@ class CompanyResearchMarketInputs:
                 - capital.cash
                 - capital.investments
             )
-        if target_enterprise_value <= Decimal("0"):
+        if target_enterprise_value <= Decimal(0):
             raise ValidationError("market inputs imply a non-positive enterprise value")
 
         role_by_id = {
@@ -1109,11 +1228,11 @@ class CompanyResearchMarketInputs:
                 price_ref=price_refs[proxy],
                 **(
                     {
-                        "votes_per_unit": Decimal("10"),
+                        "votes_per_unit": Decimal(10),
                         "conversion_to_security_external_key": "NASDAQ:GOOGL",
-                        "conversion_ratio": Decimal("1"),
-                        "dividend_rights_per_unit": Decimal("1"),
-                        "economic_rights_per_unit": Decimal("1"),
+                        "conversion_ratio": Decimal(1),
+                        "dividend_rights_per_unit": Decimal(1),
+                        "economic_rights_per_unit": Decimal(1),
                         "legal_rights_ref": class_b_legal_ref,
                         "price_proxy_ref": class_b_proxy_ref,
                         "price_proxy_policy_version": "alphabet_class_b_googl_proxy.v1",
@@ -1138,7 +1257,7 @@ class CompanyResearchMarketInputs:
                 driver_key="fcff_multiplier",
                 target_enterprise_value=target_enterprise_value,
                 lower_bound=Decimal("0.01"),
-                upper_bound=Decimal("10"),
+                upper_bound=Decimal(10),
                 max_iterations=256,
             ),
         )
