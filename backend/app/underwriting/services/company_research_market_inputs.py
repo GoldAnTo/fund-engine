@@ -12,18 +12,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
-from app.underwriting.domain.product_contracts import (
-    CapitalStructureSnapshotInput,
-    FXSnapshotInput,
-    FxQuoteDirection,
-    PriceSnapshotInput,
-    SecurityRightsInput,
-)
-from app.underwriting.fixtures.alphabet_golden_case import (
-    AlphabetMarketInputBundle,
-    CapturedProvenance,
-)
-from app.underwriting.hashing import canonical_hash
 from app.underwriting.domain.company_research import (
     CapitalStructureReference,
     MarketBridgeArtifact,
@@ -36,6 +24,22 @@ from app.underwriting.domain.company_research_market_contracts import (
     FrozenMarketSnapshotRole,
     FrozenRawComponentReference,
 )
+from app.underwriting.domain.product_contracts import (
+    CapitalStructureSnapshotInput,
+    FxQuoteDirection,
+    FXSnapshotInput,
+    PriceSnapshotInput,
+    SecurityRightsInput,
+)
+from app.underwriting.fixtures.alphabet_golden_case import (
+    AlphabetMarketInputBundle,
+    CapturedProvenance,
+)
+from app.underwriting.fixtures.catl_answerable_case import (
+    CatlMarketInputBundle,
+    load_catl_answerable_case_fixture,
+)
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.product_models import (
     UnderwritingCapitalStructureSnapshot,
     UnderwritingFXSnapshot,
@@ -61,13 +65,13 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftService,
 )
 
-
 _ALPHABET_COMPANY_KEY = "US:ALPHABET:COMPANY"
 _ALPHABET_SECURITY_KEYS = ("NASDAQ:GOOG", "NASDAQ:GOOGL")
 _MODEL_CURRENCY = "CNY"
 _PRICE_TYPE = "official_close"
 _ADJUSTMENT_BASIS = "unadjusted"
 _ALPHABET_CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
+_CATL_CUTOFF = datetime(2025, 11, 6, 15, 59, 59, tzinfo=UTC)
 
 
 def _utc(value: object, field: str) -> datetime:
@@ -143,10 +147,16 @@ class CompanyResearchMarketInputs:
         *,
         project_id: UUID,
         cutoff_at: datetime,
-        market_inputs: AlphabetMarketInputBundle,
-    ) -> FrozenMarketContext:
+        market_inputs: AlphabetMarketInputBundle | CatlMarketInputBundle,
+    ) -> FrozenMarketContext | CatlMarketInputBundle:
         """Install one authenticated bundle atomically, then resolve exact refs."""
         cutoff = _utc(cutoff_at, "cutoff_at")
+        if type(market_inputs) is CatlMarketInputBundle:
+            return self._prepare_catl(
+                project_id=project_id,
+                cutoff=cutoff,
+                market_inputs=market_inputs,
+            )
         if type(market_inputs) is not AlphabetMarketInputBundle:
             raise ValidationError(
                 "market_inputs must be an authenticated Alphabet bundle"
@@ -162,9 +172,7 @@ class CompanyResearchMarketInputs:
         if project_record is None:
             raise ValidationError("company research project not found")
         project, security_ids = project_record
-        objects = tuple(
-            self._repository.object(item) for item in security_ids
-        )
+        objects = tuple(self._repository.object(item) for item in security_ids)
         by_key = {item.external_key: item for item in objects if item is not None}
         company = self._repository.object(project.primary_company_id)
         if (
@@ -397,6 +405,364 @@ class CompanyResearchMarketInputs:
                 )
             return self.resolve(project_id=project_id, cutoff_at=cutoff)
 
+    def _prepare_catl(
+        self,
+        *,
+        project_id: UUID,
+        cutoff: datetime,
+        market_inputs: CatlMarketInputBundle,
+    ) -> FrozenMarketContext:
+        """Authenticate CATL's already-frozen CNY market boundary without FX fiction."""
+        if cutoff != _CATL_CUTOFF:
+            raise ValidationError("market inputs require the exact CATL cutoff")
+        project_record = self._repository.project(project_id)
+        if project_record is None:
+            raise ValidationError("company research project not found")
+        project, security_ids = project_record
+        company = self._repository.object(project.primary_company_id)
+        securities = tuple(self._repository.object(item) for item in security_ids)
+        if (
+            company is None
+            or company.external_key != market_inputs.company_external_key
+            or company.external_key != "CN:300750:COMPANY"
+            or any(item is None for item in securities)
+            or tuple(
+                sorted(item.external_key for item in securities if item is not None)
+            )
+            != market_inputs.security_external_keys
+        ):
+            raise ValidationError(
+                "market input bundle does not match the project identity"
+            )
+        if market_inputs.base_currency != "CNY":
+            raise ValidationError("CATL market inputs must remain in CNY")
+        fixture = load_catl_answerable_case_fixture()
+        if (
+            market_inputs != fixture.market_inputs
+            or market_inputs.verify_price_record_hash()
+            != fixture.market_inputs.price.raw_hash
+        ):
+            raise ValidationError("CATL market input bundle is not governed")
+        assert company is not None
+        security = securities[0]
+        assert security is not None
+        price_item = market_inputs.price
+        capital_item = market_inputs.capital_structure
+        cash_fact = fixture.fact(capital_item.cash_fact_key)
+        debt_fact = fixture.fact(capital_item.debt_fact_key)
+        shares_fact = fixture.fact(capital_item.share_count_fact_key)
+        annual_provenance = CapturedProvenance(
+            source_url=cash_fact.source_url,
+            source_locator=(
+                f"{cash_fact.source_locator}; {debt_fact.source_locator}; "
+                f"{shares_fact.source_locator}"
+            ),
+            raw_hash=cash_fact.raw_hash,
+            provider_policy_version=capital_item.policy_version,
+        )
+        price_provenance = CapturedProvenance(
+            source_url=price_item.source_url,
+            source_locator=price_item.source_locator,
+            raw_hash=price_item.raw_hash,
+            provider_policy_version="szse-history-normalized.v1",
+        )
+        price_value = PriceSnapshotInput(
+            security_identity_id=security.id,
+            price=price_item.value,
+            currency=price_item.currency,
+            price_type=price_item.price_type,
+            adjustment_basis=price_item.adjustment_basis,
+            market_at=price_item.market_at,
+            available_at=price_item.available_at,
+            source_id=price_item.source_url,
+            raw_hash=price_item.raw_hash,
+        )
+        report_start = datetime.combine(
+            cash_fact.period_start, datetime.min.time(), tzinfo=UTC
+        )
+        report_end = datetime.combine(
+            cash_fact.period_end, datetime.max.time(), tzinfo=UTC
+        )
+        capital_value = CapitalStructureSnapshotInput(
+            company_id=company.id,
+            currency=capital_item.currency,
+            cash=capital_item.cash,
+            debt=capital_item.debt,
+            minority_interest=Decimal(0),
+            investments=Decimal(0),
+            pension_liabilities=Decimal(0),
+            other_adjustments=Decimal(0),
+            basic_shares=capital_item.shares,
+            diluted_shares=capital_item.shares,
+            potential_dilution_descriptors=(),
+            report_period_start=report_start,
+            report_period_end=report_end,
+            market_at=report_end,
+            available_at=cash_fact.available_at,
+            source_id=cash_fact.source_url,
+            raw_hash=cash_fact.raw_hash,
+        )
+        rights_value = SecurityRightsInput(
+            security_identity_id=security.id,
+            economic_units=capital_item.shares,
+            votes_per_unit=Decimal(1),
+            conversion_ratio=Decimal(1),
+            adr_ratio=Decimal(1),
+            dividend_rights_per_unit=Decimal(1),
+            effective_from=report_end,
+            effective_to=None,
+            source_id=shares_fact.source_url,
+            raw_hash=shares_fact.raw_hash,
+        )
+        market = MarketSnapshotService(self._session, now=self._clock)
+        drafts = WorkspaceDraftService(self._session, now=self._clock)
+        with self._session.begin_nested():
+            price_row = self._converge_snapshot_insert(
+                lambda: market.freeze_price(price_value),
+                UnderwritingPriceSnapshot,
+                (
+                    UnderwritingPriceSnapshot.security_identity_id
+                    == price_value.security_identity_id,
+                    UnderwritingPriceSnapshot.price_type == price_value.price_type,
+                    UnderwritingPriceSnapshot.adjustment_basis
+                    == price_value.adjustment_basis,
+                    UnderwritingPriceSnapshot.market_at == price_value.market_at,
+                ),
+                price_snapshot_hash(price_value),
+            )
+            capital_row = self._converge_snapshot_insert(
+                lambda: market.freeze_capital_structure(capital_value),
+                UnderwritingCapitalStructureSnapshot,
+                (
+                    UnderwritingCapitalStructureSnapshot.company_id
+                    == capital_value.company_id,
+                    UnderwritingCapitalStructureSnapshot.report_period_start
+                    == capital_value.report_period_start,
+                    UnderwritingCapitalStructureSnapshot.report_period_end
+                    == capital_value.report_period_end,
+                    UnderwritingCapitalStructureSnapshot.market_at
+                    == capital_value.market_at,
+                ),
+                capital_structure_snapshot_hash(capital_value),
+            )
+            rights_row = self._converge_snapshot_insert(
+                lambda: self._freeze_rights(market, rights_value),
+                UnderwritingSecurityRightsVersion,
+                (
+                    UnderwritingSecurityRightsVersion.security_identity_id
+                    == rights_value.security_identity_id,
+                    UnderwritingSecurityRightsVersion.effective_from
+                    == rights_value.effective_from,
+                ),
+                security_rights_hash(rights_value),
+            )
+            price_capture = self._persist_capture(
+                "price",
+                price_row.id,
+                "primary",
+                price_provenance,
+                price_item.available_at,
+            )
+            capital_capture = self._persist_capture(
+                "capital_structure",
+                capital_row.id,
+                "primary",
+                annual_provenance,
+                cash_fact.available_at,
+            )
+            rights_capture = self._persist_capture(
+                "security_rights",
+                rights_row.id,
+                "primary",
+                CapturedProvenance(
+                    source_url=shares_fact.source_url,
+                    source_locator=shares_fact.source_locator,
+                    raw_hash=shares_fact.raw_hash,
+                    provider_policy_version="catl-listed-common-rights.v1",
+                ),
+                shares_fact.available_at,
+            )
+            draft = drafts.read(project_id)
+            if draft is None:
+                raise ValidationError("workspace draft does not exist for project")
+            price_ids = (price_row.id,)
+            rights_ids = (rights_row.id,)
+            if (
+                draft.content.price_snapshot_ids != price_ids
+                or draft.content.fx_snapshot_ids
+                or draft.content.capital_structure_snapshot_id != capital_row.id
+                or draft.content.security_rights_ids != rights_ids
+            ):
+                drafts.save(
+                    project_id,
+                    expected_lock_version=draft.lock_version,
+                    patch=WorkspaceDraftPatch(
+                        price_snapshot_ids=price_ids,
+                        fx_snapshot_ids=(),
+                        capital_structure_snapshot_id=capital_row.id,
+                        security_rights_ids=rights_ids,
+                    ),
+                )
+            return self._catl_context(
+                price=price_row,
+                capital=capital_row,
+                rights=rights_row,
+                price_capture=price_capture,
+                capital_capture=capital_capture,
+                rights_capture=rights_capture,
+            )
+
+    @staticmethod
+    def _catl_context(
+        *,
+        price: UnderwritingPriceSnapshot,
+        capital: UnderwritingCapitalStructureSnapshot,
+        rights: UnderwritingSecurityRightsVersion,
+        price_capture: UnderwritingMarketCaptureEnvelope,
+        capital_capture: UnderwritingMarketCaptureEnvelope,
+        rights_capture: UnderwritingMarketCaptureEnvelope,
+    ) -> FrozenMarketContext:
+        security_key = "SZSE:300750"
+        price_ref = _lineage(
+            fact_key="market_price_cny_szse_300750",
+            source_id=price_capture.source_url,
+            source_locator=price_capture.source_locator,
+            raw_hash=price_capture.raw_hash,
+        )
+        capital_ref = _lineage(
+            fact_key="capital_structure_cny",
+            source_id=capital_capture.source_url,
+            source_locator=capital_capture.source_locator,
+            raw_hash=capital_capture.raw_hash,
+        )
+        rights_ref = _lineage(
+            fact_key="security_rights_szse_300750",
+            source_id=rights_capture.source_url,
+            source_locator=rights_capture.source_locator,
+            raw_hash=rights_capture.raw_hash,
+        )
+        policy_ref = _lineage(
+            fact_key="capital_bridge_policy",
+            source_id="urn:company-research:capital-bridge-policy",
+            source_locator=(
+                "catl-equity-bridge.v1: CNY reported cash and gross debt; "
+                "no unreported adjustment is fabricated"
+            ),
+            raw_hash=capital.content_hash,
+        )
+        bridge = MarketBridgeArtifact(
+            capital_structure=CapitalStructureReference(
+                cash=capital.cash,
+                debt=capital.debt,
+                minority_interest=capital.minority_interest,
+                investments=capital.investments,
+                pension_liabilities=capital.pension_liabilities,
+                other_adjustments=capital.other_adjustments,
+                basic_shares=capital.basic_shares,
+                diluted_shares=capital.diluted_shares,
+                source_ref=capital_ref,
+                capital_bridge_policy_version="catl-equity-bridge.v1",
+                policy_ref=policy_ref,
+                policy_excluded_adjustments=(),
+            ),
+            securities=(
+                SecurityValuationReference(
+                    security_external_key=security_key,
+                    listed_class_economic_units=rights.economic_units,
+                    conversion_ratio=rights.conversion_ratio,
+                    adr_ratio=rights.adr_ratio,
+                    dividend_rights_per_unit=rights.dividend_rights_per_unit,
+                    rights_ref=rights_ref,
+                    price_ref=price_ref,
+                    market_price=price.price,
+                    quote_currency="CNY",
+                    quote_to_base_rate=Decimal(1),
+                ),
+            ),
+            base_currency="CNY",
+            financial_currency="CNY",
+            financial_to_base_rate=Decimal(1),
+            fx_ref=None,
+        )
+        captures = {
+            price.id: (price_capture, FrozenMarketSnapshotRole.PRICE, security_key),
+            capital.id: (
+                capital_capture,
+                FrozenMarketSnapshotRole.CAPITAL_STRUCTURE,
+                None,
+            ),
+            rights.id: (
+                rights_capture,
+                FrozenMarketSnapshotRole.SECURITY_RIGHTS,
+                security_key,
+            ),
+        }
+        refs = {
+            price.id: price_ref,
+            capital.id: capital_ref,
+            rights.id: rights_ref,
+        }
+        rows = {price.id: price, capital.id: capital, rights.id: rights}
+        snapshot_ids = tuple(sorted(rows, key=str))
+        bindings = tuple(
+            FrozenMarketSnapshotBinding(
+                snapshot_id=snapshot_id,
+                role=captures[snapshot_id][1],
+                security_external_key=captures[snapshot_id][2],
+                source_ref=refs[snapshot_id],
+                snapshot_content_hash=rows[snapshot_id].content_hash,
+                capture_envelope_id=captures[snapshot_id][0].id,
+                capture_content_hash=captures[snapshot_id][0].content_hash,
+                provenance_role="primary",
+                provider_policy_version=captures[snapshot_id][
+                    0
+                ].provider_policy_version,
+                raw_components=tuple(
+                    FrozenRawComponentReference(**component)
+                    for component in captures[snapshot_id][0].raw_components
+                ),
+            )
+            for snapshot_id in snapshot_ids
+        )
+        with localcontext() as context:
+            context.prec = 60
+            target = +(
+                rights.economic_units * price.price
+                + capital.debt
+                + capital.minority_interest
+                + capital.pension_liabilities
+                + capital.other_adjustments
+                - capital.cash
+                - capital.investments
+            )
+        return FrozenMarketContext(
+            price_snapshot_ids=(price.id,),
+            fx_snapshot_ids=(),
+            capital_structure_snapshot_id=capital.id,
+            security_rights_ids=(rights.id,),
+            snapshot_ids=snapshot_ids,
+            market_at=max(_stored_utc(price.market_at), _stored_utc(capital.market_at)),
+            market_bridge=bridge,
+            snapshot_bindings=bindings,
+            equity_components=(
+                FrozenMarketEquityComponent(
+                    component_key="listed_common",
+                    economic_units=rights.economic_units,
+                    price_proxy_security_external_key=security_key,
+                    unit_source_ref=rights_ref,
+                    price_snapshot_id=price.id,
+                    price_ref=price_ref,
+                ),
+            ),
+            reverse_dcf_request=ReverseDcfRequest(
+                driver_key="fcff_multiplier",
+                target_enterprise_value=target,
+                lower_bound=Decimal("0.01"),
+                upper_bound=Decimal("10"),
+                max_iterations=256,
+            ),
+        )
+
     @staticmethod
     def _freeze_rights(market: MarketSnapshotService, value: SecurityRightsInput):
         expected_hash = security_rights_hash(value)
@@ -595,8 +961,7 @@ class CompanyResearchMarketInputs:
         project, security_ids = project_record
         company = self._repository.object(project.primary_company_id)
         securities = tuple(
-            self._repository.object(security_id)
-            for security_id in security_ids
+            self._repository.object(security_id) for security_id in security_ids
         )
         if (
             company is None
@@ -772,9 +1137,7 @@ class CompanyResearchMarketInputs:
         rows = self._session.scalars(statement)
         return _latest_exact(rows, time_field="market_at", label="USD/CNY FX")
 
-    def _capital(
-        self, company_id: UUID, cutoff: datetime, *, fresh: bool = False
-    ):
+    def _capital(self, company_id: UUID, cutoff: datetime, *, fresh: bool = False):
         statement = (
             select(UnderwritingCapitalStructureSnapshot)
             .join(

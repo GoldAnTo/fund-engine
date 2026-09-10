@@ -17,9 +17,6 @@ def test_conftest_forces_offline_provider_environment_before_collection() -> Non
         "LLM_MODEL",
         "LLM_TEMPERATURE",
         "LLM_SEED",
-        "LLM_TIMEOUT_SECONDS",
-        "LLM_MAX_ATTEMPTS",
-        "GILDATA_MAX_ATTEMPTS",
         "GILDATA_TOKEN",
     )
     test_database_url = "postgresql://test-isolation.example.invalid/test"
@@ -33,9 +30,6 @@ def test_conftest_forces_offline_provider_environment_before_collection() -> Non
             "LLM_MODEL": "live-model",
             "LLM_TEMPERATURE": "0.9",
             "LLM_SEED": "999",
-            "LLM_TIMEOUT_SECONDS": "123",
-            "LLM_MAX_ATTEMPTS": "9",
-            "GILDATA_MAX_ATTEMPTS": "9",
             "GILDATA_TOKEN": "sentinel-gildata-token",
             "TEST_DATABASE_URL": test_database_url,
             "NEO4J_URL": neo4j_url,

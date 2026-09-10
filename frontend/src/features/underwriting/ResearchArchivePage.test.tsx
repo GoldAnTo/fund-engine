@@ -294,7 +294,7 @@ const candidateDossierCanonicalItems = candidateEvidenceBase.items.map(({
 
 const candidateEvidence = {
   ...candidateEvidenceBase,
-  items: [candidateEvidenceBase.items[1]!, candidateEvidenceBase.items[0]!, candidateEvidenceBase.items[2]!],
+  items: [candidateEvidenceBase.items[1], candidateEvidenceBase.items[0], candidateEvidenceBase.items[2]],
   parent_refs: candidateRevision.parent_refs
     .filter((parent) => ["candidate_dossier", "candidate_review", "source_manifest"].includes(parent.artifact_type))
     .map(({ schema_version, reference, artifact_type, identity, content_hash }) => ({
@@ -340,10 +340,10 @@ const candidateEvidence = {
     },
   },
   reviews: [{
-    ...candidateEvidenceBase.reviews[0]!,
+    ...candidateEvidenceBase.reviews[0],
     content_hash: "824f5d58e5251ed91a916340b1b0ba2f8c606261dddcf81f0b7ac203a2b3ac7e",
   }, {
-    ...candidateEvidenceBase.reviews[1]!,
+    ...candidateEvidenceBase.reviews[1],
     content_hash: "bc6fdfe9d7221f5992c18df7d5cb8713564cb5516a599acc0a9a5cd2c4e76274",
   }],
 };
@@ -521,13 +521,13 @@ describe("ResearchArchivePage", () => {
   it.each([
     ["does not bind to the selected revision", { ...candidateEvidence, revision_id: "00000000-0000-4000-8000-000000000199" }],
     ["adds an unrecognised top-level field", { ...candidateEvidence, unexpected: true }],
-    ["has a malformed nested review", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0]!, reviewed_at: "not-a-timestamp" }, candidateEvidence.reviews[1]!] }],
+    ["has a malformed nested review", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0], reviewed_at: "not-a-timestamp" }, candidateEvidence.reviews[1]] }],
     ["omits the frozen rejected calculations", { ...candidateEvidence, dossier: Object.fromEntries(Object.entries(candidateEvidence.dossier).filter(([key]) => key !== "rejected_calculations")) }],
     ["has malformed frozen rejected calculations", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, rejected_calculations: [""] } }],
     ["uses a foreign but structurally valid dossier", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, reference: "00000000-0000-4000-8000-000000000109" } }],
-    ["has a review content hash mismatch", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0]!, content_hash: "a".repeat(64) }, candidateEvidence.reviews[1]!] }],
+    ["has a review content hash mismatch", { ...candidateEvidence, reviews: [{ ...candidateEvidence.reviews[0], content_hash: "a".repeat(64) }, candidateEvidence.reviews[1]] }],
     ["omits a sealed parent descriptor", { ...candidateEvidence, parent_refs: candidateEvidence.parent_refs.slice(1) }],
-    ["duplicates a sealed parent descriptor", { ...candidateEvidence, parent_refs: [...candidateEvidence.parent_refs, candidateEvidence.parent_refs[3]!] }],
+    ["duplicates a sealed parent descriptor", { ...candidateEvidence, parent_refs: [...candidateEvidence.parent_refs, candidateEvidence.parent_refs[3]] }],
     ["uses a foreign sealed parent descriptor", {
       ...candidateEvidence,
       parent_refs: candidateEvidence.parent_refs.map((parent) => parent.artifact_type === "source_manifest" ? { ...parent, reference: "00000000-0000-4000-8000-000000000109" } : parent),
@@ -546,7 +546,7 @@ describe("ResearchArchivePage", () => {
     }],
     ["has a rehashed forged review with the same reference", {
       ...candidateEvidence,
-      reviews: [{ ...candidateEvidence.reviews[0]!, content_hash: "43c1672a21b1bd0dae4590e27d548db9a38199878fcd2de9993b9f01eeae1ed6", rationale: "篡改后的方法说明。" }, candidateEvidence.reviews[1]!],
+      reviews: [{ ...candidateEvidence.reviews[0], content_hash: "43c1672a21b1bd0dae4590e27d548db9a38199878fcd2de9993b9f01eeae1ed6", rationale: "篡改后的方法说明。" }, candidateEvidence.reviews[1]],
     }],
     ["contains prohibited calculation semantics", { ...candidateEvidence, dossier: { ...candidateEvidence.dossier, rejected_calculations: ["建议买入并设定目标价"] } }],
   ])("fails closed when candidate evidence %s", async (_name, response) => {
@@ -567,9 +567,9 @@ describe("ResearchArchivePage", () => {
 
   it.each([
     ["omits a required candidate parent", candidateRevision.parent_refs.slice(1)],
-    ["duplicates a candidate parent", [...candidateRevision.parent_refs, candidateRevision.parent_refs[4]!]],
+    ["duplicates a candidate parent", [...candidateRevision.parent_refs, candidateRevision.parent_refs[4]]],
     ["injects a second source-manifest parent", [...candidateRevision.parent_refs, {
-      ...candidateRevision.parent_refs[4]!,
+      ...candidateRevision.parent_refs[4],
       reference: "00000000-0000-4000-8000-000000000109",
       identity: "candidate-manifest|2",
       content_hash: "6".repeat(64),
@@ -928,7 +928,7 @@ describe("ResearchArchivePage", () => {
 
   it("fails closed when a selected detail injects a candidate boundary absent from history", async () => {
     const injectedBoundary = {
-      ...revisionTwo.parent_refs[1]!,
+      ...revisionTwo.parent_refs[1],
       reference: "injected boundary",
       identity: "injected-answerability",
       content_hash: "9".repeat(64),
@@ -949,10 +949,10 @@ describe("ResearchArchivePage", () => {
   it.each(["replaces", "omits"] as const)("fails closed when a selected detail %s a frozen parent reference", async (operation) => {
     const parent_refs = operation === "replaces"
       ? [{
-        ...revisionTwo.parent_refs[0]!,
+        ...revisionTwo.parent_refs[0],
         source_locators: ["changed immutable locator"],
-      }, revisionTwo.parent_refs[1]!]
-      : [revisionTwo.parent_refs[0]!];
+      }, revisionTwo.parent_refs[1]]
+      : [revisionTwo.parent_refs[0]];
     installApi({ revision: vi.fn().mockResolvedValue({ ...revisionTwo, parent_refs }) });
     renderArchive("/underwriting/research/company-id/catl_economic_model_evidence_only");
 
@@ -981,7 +981,7 @@ describe("ResearchArchivePage", () => {
 
   it("fails closed when an adjacent diff injects a nonmember artifact", async () => {
     const injected = {
-      ...revisionTwo.parent_refs[0]!,
+      ...revisionTwo.parent_refs[0],
       reference: "injected evidence",
       identity: "invented-fact",
       content_hash: "9".repeat(64),
@@ -998,7 +998,7 @@ describe("ResearchArchivePage", () => {
           schema_version: "underwriting.v1",
           group: "evidence",
           change_type: "added",
-          artifact_type: ("artifact_type" in injected ? injected.artifact_type : undefined),
+          artifact_type: injected.artifact_type,
           identity: injected.identity,
           before: null,
           after: injected,
@@ -1024,10 +1024,10 @@ describe("ResearchArchivePage", () => {
           schema_version: "underwriting.v1",
           group: "mechanism",
           change_type: "replaced",
-          artifact_type: revisionTwo.parent_refs[0]!.artifact_type,
-          identity: revisionTwo.parent_refs[0]!.identity,
+          artifact_type: revisionTwo.parent_refs[0].artifact_type,
+          identity: revisionTwo.parent_refs[0].identity,
           before: null,
-          after: revisionTwo.parent_refs[0]!,
+          after: revisionTwo.parent_refs[0],
         }],
       }),
     });
@@ -1059,7 +1059,7 @@ describe("ResearchArchivePage", () => {
     const loadMorePending = new Promise<ResearchArchiveList>((resolve) => { resolveLoadMore = resolve; });
     const filteredArchive: ResearchArchiveList = {
       ...archive,
-      items: [{ ...archive.items[0]!, canonical_name: "新查询档案" }],
+      items: [{ ...archive.items[0], canonical_name: "新查询档案" }],
       next_cursor: null,
     };
     const listArchives = vi.fn()
@@ -1076,7 +1076,7 @@ describe("ResearchArchivePage", () => {
     await waitFor(() => expect(listArchives).toHaveBeenLastCalledWith(expect.objectContaining({ query: "新" })));
     expect(await screen.findByText("新查询档案")).toBeVisible();
 
-    resolveLoadMore?.({ ...archive, items: [{ ...archive.items[0]!, canonical_name: "旧分页档案" }], next_cursor: null });
+    resolveLoadMore?.({ ...archive, items: [{ ...archive.items[0], canonical_name: "旧分页档案" }], next_cursor: null });
     await waitFor(() => expect(screen.queryByText("旧分页档案")).not.toBeInTheDocument());
     expect(screen.getByText("新查询档案")).toBeVisible();
   });

@@ -21,8 +21,9 @@ import tomllib
 ROOT = Path(__file__).parents[2]
 FRONTEND = ROOT / "frontend"
 PASS_LINE = (
-    "PASS: default frontend completed live Alphabet company research through "
-    "reviewed evidence, frozen revision replay, and verified Markdown export"
+    "PASS: default frontend completed live CATL answerable and Alphabet "
+    "not-answerable company research through frozen revision replay and verified "
+    "Markdown export"
 )
 SENSITIVE_OUTPUT_MARKERS = (
     "ALL_PROXY",
@@ -52,8 +53,9 @@ SENSITIVE_HOST_ENV_KEYS = (
     "RESEARCH_TENANT_TOKENS",
 )
 RUN_LIVE_COMPANY_RESEARCH = os.environ.get("RUN_LIVE_COMPANY_RESEARCH") == "1"
-VERIFIER_INTERNAL_TIMEOUT_SECONDS = 180
-# The verifier owns a 180-second workflow bound. The outer process owner leaves
+# The verifier gives each of the two isolated cases a 180-second workflow bound.
+VERIFIER_INTERNAL_TIMEOUT_SECONDS = 360
+# The outer process owner leaves
 # another 120 seconds for sequential browser, API, worker, Vite, and authenticated
 # private-runtime cleanup before it escalates against only the npm session group.
 OUTER_CLEANUP_MARGIN_SECONDS = 120
@@ -2196,6 +2198,100 @@ def test_package_exposes_the_closed_live_company_research_command() -> None:
     )
 
 
+def test_verifier_allows_the_bounded_cold_python_import() -> None:
+    source = (FRONTEND / "scripts" / "verify-live-company-research-ui.mjs").read_text(
+        encoding="utf-8"
+    )
+
+    assert "const PYTHON_PROBE_TIMEOUT_MS = 60_000;" in source
+    assert "timeout: PYTHON_PROBE_TIMEOUT_MS" in source
+
+
+def test_verifier_waits_for_pending_critical_input_state_before_decisions() -> None:
+    source = (FRONTEND / "scripts" / "verify-live-company-research-ui.mjs").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'locator(".ir-run-status").getByText("需要补充", { exact: true })' in source
+    assert source.index('locator(".ir-run-status").getByText("需要补充", { exact: true })') < source.index(
+        "const before = await authenticatedJson"
+    )
+    assert 'getByText("AI 初稿已完成", { exact: true })' not in source
+
+
+def test_verifier_source_is_data_driven_mainline_sequence() -> None:
+    source = (FRONTEND / "scripts" / "verify-live-company-research-ui.mjs").read_text(
+        encoding="utf-8"
+    )
+    support = (FRONTEND / "scripts" / "live-company-research-support.mjs").read_text(
+        encoding="utf-8"
+    )
+    for required in (
+        "LIVE_COMPANY_RESEARCH_CASES",
+        "for (const definition of caseDefinitions)",
+        "runLiveCase",
+        "createPrivateRuntime",
+        'company-research.sqlite',
+        'name: `company-research-worker:${definition.id}`',
+        'getByRole("button", { name: "开始 AI 研究" })',
+        'getByRole("region", { name: "研究阶段" })',
+        'getByRole("region", { name: "研究过程" })',
+        'getByRole("button", { name: "查看完整过程" })',
+        'getByRole("button", { name: /来源、事实与缺口/ })',
+        'getByRole("button", { name: "保存研究版本" })',
+        'getByRole("button", { name: "查看冻结版本" })',
+        'getByRole("button", { name: "导出 Markdown" })',
+        "assertLiveCaseOutcome",
+        "audit.assertNoMockAdapter()",
+        "pendingBefore",
+        "expected_artifact_id",
+        "expected_input_fingerprint",
+        "decisionResponse.status() === 409",
+        'audit.requestCount("POST", judgmentConfirmationPath) !== 0',
+        "assertCriticalInputSuccessor",
+        "assertCriticalInputFinalBinding",
+        "assessmentDirection: frozen.assessment.direction",
+        "const valueRange = frozen.value_range ?? wireRanges.valueRange",
+        "const returnRange = frozen.return_range ?? wireRanges.returnRange",
+        "sensitivityVariables:",
+        "strongestCounterevidenceCount:",
+        "nextVerificationEventCount:",
+        "let signalFinalizationPromise = null",
+        "COOPERATIVE_SHUTDOWN_TIMEOUT_MS",
+        "await signalFinalizationPromise",
+    ):
+        assert required in source
+    for required in (
+        "after.version !== current.version + 1",
+        "afterPending.length !== beforePending.length - 1",
+        "expectedRequest.expected_artifact_id !== current.artifact_id",
+        "expectedRequest.expected_input_fingerprint !== selected.input_fingerprint",
+        "expectedRequest.decision !== expectedDecision",
+        "!isDeepStrictEqual(afterByKey.get(key), before)",
+        'schema_version: "company-research-critical-input-decision.v1"',
+        "after.input_hash !== expectedInputHash",
+        "descriptor[0].content_hash !== critical.content_hash",
+    ):
+        assert required in support
+    assert 'id: "catl-answerable"' in support
+    assert 'id: "alphabet-not-answerable"' in support
+    for forbidden in (
+        "确认事实 ${factKey}",
+        "stopWorkerForReview",
+        "restartWorker",
+        'name: "确认当前判断"',
+    ):
+        assert forbidden not in source
+    assert 'VITE_RESEARCH_CLIENT: ""' in support
+    assert "browser-side ${label} shortcut" in support
+    assert "Bearer header may only target the local API" in support
+    assert source.count("signalFinalizationPromise ??= finalizeOnce()") == 1
+    assert "primary ??= new Error(`live verifier received ${name}`)" in source
+    assert source.index("await signalFinalizationPromise") < source.index(
+        "process.off(name, handler)"
+    )
+
+
 @pytest.mark.live_company_research
 @pytest.mark.skipif(
     not RUN_LIVE_COMPANY_RESEARCH,
@@ -2256,7 +2352,7 @@ def test_live_company_research_browser_closes_the_full_public_workflow() -> None
             )
         except OwnedProcessGroupTimeout as error:
             raise AssertionError(
-                "live company research verifier exceeded its 300-second outer bound; "
+                "live company research verifier exceeded its 480-second outer bound; "
                 "its exact owned process group was stopped"
             ) from error
 

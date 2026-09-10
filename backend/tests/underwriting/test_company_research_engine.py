@@ -33,6 +33,7 @@ from app.underwriting.domain.company_research import (
     ScenarioFinancialDriverForecast,
     ScenarioFinancialBridge,
     ScenarioSetArtifact,
+    SecurityValueRangeArtifact,
     SecurityValuationReference,
     SourceLineageReference,
     ValueRange,
@@ -84,7 +85,9 @@ def _overrides(**values: Decimal) -> tuple[ScenarioDriverOverride, ...]:
     )
 
 
-def _scenario_forecasts(source: SourceLineageReference) -> tuple[ScenarioFinancialDriverForecast, ...]:
+def _scenario_forecasts(
+    source: SourceLineageReference,
+) -> tuple[ScenarioFinancialDriverForecast, ...]:
     values = {
         "revenue": Decimal("200"),
         "operating_margin": Decimal("0.50"),
@@ -107,7 +110,9 @@ def _scenario_forecasts(source: SourceLineageReference) -> tuple[ScenarioFinanci
     )
 
 
-def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> CompanyResearchModelInput:
+def _input(
+    *, market: bool = True, gaps: tuple[ResearchGap, ...] = ()
+) -> CompanyResearchModelInput:
     source_by_key = {
         key: _source(key)
         for key in (
@@ -233,19 +238,45 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
         market_bridge=(
             MarketBridgeArtifact(
                 capital_structure=CapitalStructureReference(
-                    cash=Decimal("10"), debt=Decimal("5"), minority_interest=Decimal("0"),
-                    investments=Decimal("2"), pension_liabilities=Decimal("0"),
-                    other_adjustments=Decimal("0"), basic_shares=Decimal("11"),
-                    diluted_shares=Decimal("12"), source_ref=source_by_key["capital_structure_usd"],
+                    cash=Decimal("10"),
+                    debt=Decimal("5"),
+                    minority_interest=Decimal("0"),
+                    investments=Decimal("2"),
+                    pension_liabilities=Decimal("0"),
+                    other_adjustments=Decimal("0"),
+                    basic_shares=Decimal("11"),
+                    diluted_shares=Decimal("12"),
+                    source_ref=source_by_key["capital_structure_usd"],
                     capital_bridge_policy_version="synthetic-capital-bridge.v1",
                     policy_ref=source_by_key["capital_bridge_policy"],
                     policy_excluded_adjustments=("pension_liabilities",),
                 ),
                 securities=(
-                    SecurityValuationReference("NASDAQ:GOOGL", Decimal("6"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("100"), Decimal("7.20"), source_by_key["security_rights_nasdaq_googl"], source_by_key["market_price_usd_nasdaq_googl"]),
-                    SecurityValuationReference("NASDAQ:GOOG", Decimal("4"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("90"), Decimal("7.20"), source_by_key["security_rights_nasdaq_goog"], source_by_key["market_price_usd_nasdaq_goog"]),
+                    SecurityValuationReference(
+                        "NASDAQ:GOOGL",
+                        Decimal("6"),
+                        Decimal("1"),
+                        Decimal("1"),
+                        Decimal("1"),
+                        Decimal("100"),
+                        Decimal("7.20"),
+                        source_by_key["security_rights_nasdaq_googl"],
+                        source_by_key["market_price_usd_nasdaq_googl"],
+                    ),
+                    SecurityValuationReference(
+                        "NASDAQ:GOOG",
+                        Decimal("4"),
+                        Decimal("1"),
+                        Decimal("1"),
+                        Decimal("1"),
+                        Decimal("90"),
+                        Decimal("7.20"),
+                        source_by_key["security_rights_nasdaq_goog"],
+                        source_by_key["market_price_usd_nasdaq_goog"],
+                    ),
                 ),
-                usd_cny_rate=Decimal("7.20"), fx_ref=source_by_key["usd_cny_fx"],
+                usd_cny_rate=Decimal("7.20"),
+                fx_ref=source_by_key["usd_cny_fx"],
             )
             if market
             else None
@@ -259,12 +290,16 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
         ),
         equity_components=(
             MarketEquityComponentReference(
-                "class_a", Decimal("6"), "NASDAQ:GOOGL",
+                "class_a",
+                Decimal("6"),
+                "NASDAQ:GOOGL",
                 source_by_key["security_rights_nasdaq_googl"],
                 source_by_key["market_price_usd_nasdaq_googl"],
             ),
             MarketEquityComponentReference(
-                "class_b", Decimal("1"), "NASDAQ:GOOGL",
+                "class_b",
+                Decimal("1"),
+                "NASDAQ:GOOGL",
                 source_by_key["economic_units_class_b"],
                 source_by_key["market_price_usd_nasdaq_googl"],
                 votes_per_unit=Decimal("10"),
@@ -277,11 +312,15 @@ def _input(*, market: bool = True, gaps: tuple[ResearchGap, ...] = ()) -> Compan
                 price_proxy_policy_version="alphabet_class_b_googl_proxy.v1",
             ),
             MarketEquityComponentReference(
-                "class_c", Decimal("4"), "NASDAQ:GOOG",
+                "class_c",
+                Decimal("4"),
+                "NASDAQ:GOOG",
                 source_by_key["security_rights_nasdaq_goog"],
                 source_by_key["market_price_usd_nasdaq_goog"],
             ),
-        ) if market else (),
+        )
+        if market
+        else (),
     )
 
 
@@ -292,24 +331,38 @@ def test_engine_rejects_market_bridge_without_exact_abc_equity_components() -> N
         CompanyResearchEngine().compile(replace(_input(), equity_components=()))
 
 
-def test_compiles_exact_lineage_closed_financials_and_ordered_mechanism_value_ranges() -> None:
+def test_compiles_exact_lineage_closed_financials_and_ordered_mechanism_value_ranges() -> (
+    None
+):
     result = CompanyResearchEngine().compile(_input())
 
     assert result.assessment == CompanyResearchAssessment.answerable()
     assert set(result.scenario_enterprise_values) == {"base", "bull", "bear"}
     assert result.reverse_dcf is None
-    assert all(isinstance(item.value_range, ValueRange) for item in result.security_values)
-    assert [item.security_external_key for item in result.security_values] == ["NASDAQ:GOOG", "NASDAQ:GOOGL"]
-    assert all(item.value_range.minimum <= item.value_range.maximum for item in result.security_values)
+    assert all(
+        isinstance(item.value_range, ValueRange) for item in result.security_values
+    )
+    assert [item.security_external_key for item in result.security_values] == [
+        "NASDAQ:GOOG",
+        "NASDAQ:GOOGL",
+    ]
+    assert all(
+        item.value_range.minimum <= item.value_range.maximum
+        for item in result.security_values
+    )
     assert not hasattr(result.security_values[0].value_range, "probability")
 
 
-def test_rejects_market_references_reused_across_capital_rights_price_and_fx_roles() -> None:
+def test_rejects_market_references_reused_across_capital_rights_price_and_fx_roles() -> (
+    None
+):
     """Each market number must retain a distinct, role-specific source fact."""
     model = _input()
     market = model.market_bridge
     assert market is not None
-    with pytest.raises(CompanyResearchValidationError, match="market bridge references.*role"):
+    with pytest.raises(
+        CompanyResearchValidationError, match="market bridge references.*role"
+    ):
         MarketBridgeArtifact(
             capital_structure=market.capital_structure,
             securities=tuple(
@@ -321,17 +374,27 @@ def test_rejects_market_references_reused_across_capital_rights_price_and_fx_rol
         )
 
 
-def test_mechanism_scenarios_transmit_named_financial_drivers_into_distinct_dcf_values() -> None:
+def test_mechanism_scenarios_transmit_named_financial_drivers_into_distinct_dcf_values() -> (
+    None
+):
     result = CompanyResearchEngine().compile(_input())
 
     # The input forecast is common.  Each mechanism changes named financial
     # drivers (revenue, margin, capex, and working capital), which the engine
     # compiles into a separate closed FCFF bridge before discounting it.
-    assert result.scenario_enterprise_values["bull"] > result.scenario_enterprise_values["base"]
-    assert result.scenario_enterprise_values["bear"] < result.scenario_enterprise_values["base"]
+    assert (
+        result.scenario_enterprise_values["bull"]
+        > result.scenario_enterprise_values["base"]
+    )
+    assert (
+        result.scenario_enterprise_values["bear"]
+        < result.scenario_enterprise_values["base"]
+    )
 
 
-def test_derived_scenario_financial_bridges_close_each_year_without_generic_multiplier() -> None:
+def test_derived_scenario_financial_bridges_close_each_year_without_generic_multiplier() -> (
+    None
+):
     bridges = CompanyResearchEngine._validate_model_links(_input())
     base = bridges["base"].rows[0]
     bull = bridges["bull"].rows[0]
@@ -352,16 +415,30 @@ def test_derived_scenario_financial_bridges_close_each_year_without_generic_mult
             )
 
 
-def test_high_precision_scenario_and_dcf_results_ignore_caller_decimal_context() -> None:
+def test_high_precision_scenario_and_dcf_results_ignore_caller_decimal_context() -> (
+    None
+):
     """The audited calculation precision is fixed, not inherited from callers."""
     model = _input()
     precise_values = {
-        "revenue": Decimal("200.123456789012345678901234567890123456789012345678901234567890"),
-        "operating_margin": Decimal("0.501234567890123456789012345678901234567890123456789012345678"),
-        "cash_tax_rate": Decimal("0.201234567890123456789012345678901234567890123456789012345678"),
-        "depreciation": Decimal("20.123456789012345678901234567890123456789012345678901234567890"),
-        "capex": Decimal("10.123456789012345678901234567890123456789012345678901234567890"),
-        "working_capital_change": Decimal("10.123456789012345678901234567890123456789012345678901234567890"),
+        "revenue": Decimal(
+            "200.123456789012345678901234567890123456789012345678901234567890"
+        ),
+        "operating_margin": Decimal(
+            "0.501234567890123456789012345678901234567890123456789012345678"
+        ),
+        "cash_tax_rate": Decimal(
+            "0.201234567890123456789012345678901234567890123456789012345678"
+        ),
+        "depreciation": Decimal(
+            "20.123456789012345678901234567890123456789012345678901234567890"
+        ),
+        "capex": Decimal(
+            "10.123456789012345678901234567890123456789012345678901234567890"
+        ),
+        "working_capital_change": Decimal(
+            "10.123456789012345678901234567890123456789012345678901234567890"
+        ),
     }
     precise_bridges = tuple(
         replace(
@@ -396,7 +473,10 @@ def test_high_precision_scenario_and_dcf_results_ignore_caller_decimal_context()
         context.prec = 120
         high_precision = CompanyResearchEngine().compile(precise_model)
 
-    assert low_precision.scenario_enterprise_values == high_precision.scenario_enterprise_values
+    assert (
+        low_precision.scenario_enterprise_values
+        == high_precision.scenario_enterprise_values
+    )
     assert low_precision.valuation_set == high_precision.valuation_set
     assert getcontext().prec == global_context.prec
     assert getcontext().rounding == global_context.rounding
@@ -432,7 +512,9 @@ def test_rejects_a_non_base_scenario_with_a_no_op_override() -> None:
         )
     )
 
-    with pytest.raises(ValidationError, match="distinct mechanism-specific financial forecasts"):
+    with pytest.raises(
+        ValidationError, match="distinct mechanism-specific financial forecasts"
+    ):
         CompanyResearchEngine().compile(replace(model, scenario_set=scenario_set))
 
 
@@ -457,9 +539,24 @@ def test_rejects_same_financial_forecast_plus_generic_fcff_multiplier() -> None:
 
 def test_rejects_dropping_source_declared_evidence_gaps_from_model_input() -> None:
     source_declared_gaps = (
-        ResearchGap("market_price_missing", "corporate_capital_allocation", ResearchGapSeverity.CRITICAL, "price"),
-        ResearchGap("usd_cny_fx_missing", "corporate_capital_allocation", ResearchGapSeverity.CRITICAL, "FX"),
-        ResearchGap("forward_model_missing", "corporate_capital_allocation", ResearchGapSeverity.CRITICAL, "forecast"),
+        ResearchGap(
+            "market_price_missing",
+            "corporate_capital_allocation",
+            ResearchGapSeverity.CRITICAL,
+            "price",
+        ),
+        ResearchGap(
+            "usd_cny_fx_missing",
+            "corporate_capital_allocation",
+            ResearchGapSeverity.CRITICAL,
+            "FX",
+        ),
+        ResearchGap(
+            "forward_model_missing",
+            "corporate_capital_allocation",
+            ResearchGapSeverity.CRITICAL,
+            "forecast",
+        ),
     )
     model = _input(gaps=source_declared_gaps)
 
@@ -480,8 +577,12 @@ def test_rejects_source_reference_not_in_evidence_lineage() -> None:
         "f" * 64,
     )
     bad_module = BusinessModuleArtifact(
-        module_key="search_and_other_ads", revenue_sources=("query",), cost_structure=("tac",),
-        capital_needs=("servers",), fact_refs=(bad_ref,), gap_refs=(),
+        module_key="search_and_other_ads",
+        revenue_sources=("query",),
+        cost_structure=("tac",),
+        capital_needs=("servers",),
+        fact_refs=(bad_ref,),
+        gap_refs=(),
         classified_evidence=(
             ClassifiedBusinessEvidenceArtifact(
                 bad_ref,
@@ -502,15 +603,21 @@ def test_rejects_source_reference_not_in_evidence_lineage() -> None:
 
 
 def test_rejects_a_financial_bridge_that_does_not_close() -> None:
-    with pytest.raises(CompanyResearchValidationError, match="financial bridge does not close"):
+    with pytest.raises(
+        CompanyResearchValidationError, match="financial bridge does not close"
+    ):
         _row(2026, fcff=Decimal("79"))
 
 
-def test_rejects_non_distinct_alphabet_mechanisms_and_terminal_growth_boundary() -> None:
+def test_rejects_non_distinct_alphabet_mechanisms_and_terminal_growth_boundary() -> (
+    None
+):
     model = _input()
     duplicate = ScenarioSetArtifact(
         scenarios=tuple(
-            ScenarioArtifact(s.scenario_id, "search_cloud_resilience", s.driver_overrides)
+            ScenarioArtifact(
+                s.scenario_id, "search_cloud_resilience", s.driver_overrides
+            )
             for s in model.scenario_set.scenarios
         )
     )
@@ -523,10 +630,20 @@ def test_rejects_non_distinct_alphabet_mechanisms_and_terminal_growth_boundary()
 def test_reverse_dcf_uses_deterministic_bisection_and_reports_residual() -> None:
     model = _input()
     first = CompanyResearchEngine().compile(
-        replace(model, reverse_dcf=ReverseDcfRequest("fcff_multiplier", Decimal("1053"), Decimal("0.5"), Decimal("2.0"), 80))
+        replace(
+            model,
+            reverse_dcf=ReverseDcfRequest(
+                "fcff_multiplier", Decimal("1053"), Decimal("0.5"), Decimal("2.0"), 80
+            ),
+        )
     )
     second = CompanyResearchEngine().compile(
-        replace(model, reverse_dcf=ReverseDcfRequest("fcff_multiplier", Decimal("1053"), Decimal("0.5"), Decimal("2.0"), 80))
+        replace(
+            model,
+            reverse_dcf=ReverseDcfRequest(
+                "fcff_multiplier", Decimal("1053"), Decimal("0.5"), Decimal("2.0"), 80
+            ),
+        )
     )
     assert first.reverse_dcf == second.reverse_dcf
     assert first.reverse_dcf is not None
@@ -537,7 +654,11 @@ def test_reverse_dcf_uses_deterministic_bisection_and_reports_residual() -> None
 def test_reverse_dcf_rejects_non_integer_iteration_count_as_domain_validation() -> None:
     with pytest.raises(CompanyResearchValidationError, match="iteration count"):
         ReverseDcfRequest(
-            "fcff_multiplier", Decimal("500"), Decimal("0.5"), Decimal("2.0"), "80"  # type: ignore[arg-type]
+            "fcff_multiplier",
+            Decimal("500"),
+            Decimal("0.5"),
+            Decimal("2.0"),
+            "80",  # type: ignore[arg-type]
         )
 
 
@@ -602,7 +723,9 @@ def test_business_module_fact_refs_are_classified_exactly_once() -> None:
         replace(module, classified_evidence=(evidence, evidence))
 
 
-def test_rejects_scenario_baselines_with_equal_values_but_different_source_provenance() -> None:
+def test_rejects_scenario_baselines_with_equal_values_but_different_source_provenance() -> (
+    None
+):
     model = _input()
     alternate_source = _source("alternative_forecast_source")
     bull_bridge = next(
@@ -661,7 +784,9 @@ def test_rejects_forecast_provenance_that_disagrees_with_driver_state() -> None:
         )
 
 
-def test_valuation_output_exposes_required_return_comparisons_without_probabilities() -> None:
+def test_valuation_output_exposes_required_return_comparisons_without_probabilities() -> (
+    None
+):
     result = CompanyResearchEngine().compile(_input())
     valuation = result.valuation_set
     assert valuation is not None
@@ -677,11 +802,15 @@ def test_valuation_output_exposes_required_return_comparisons_without_probabilit
         <= comparison.achieved_return_range.maximum
         for comparison in comparisons
     )
-    assert all(type(comparison.meets_required_return) is bool for comparison in comparisons)
+    assert all(
+        type(comparison.meets_required_return) is bool for comparison in comparisons
+    )
     assert comparisons[0].canonical_payload() == {
         "security_external_key": "NASDAQ:GOOG",
         "required_return": "0.12",
-        "achieved_return_range": comparisons[0].achieved_return_range.canonical_payload(),
+        "achieved_return_range": comparisons[
+            0
+        ].achieved_return_range.canonical_payload(),
         "meets_required_return": comparisons[0].meets_required_return,
     }
     assert valuation.canonical_payload() == {
@@ -701,19 +830,32 @@ def test_valuation_output_exposes_required_return_comparisons_without_probabilit
     assert forbidden_probability_fields.isdisjoint(valuation.canonical_payload())
 
 
-def test_missing_market_or_critical_gap_is_not_answerable_without_direction_or_confidence() -> None:
+def test_missing_market_or_critical_gap_is_not_answerable_without_direction_or_confidence() -> (
+    None
+):
     result = CompanyResearchEngine().compile(_input(market=False))
     assert result.assessment.status == "not_answerable"
     assert result.assessment.direction is None
     assert result.assessment.confidence is None
 
     result = CompanyResearchEngine().compile(
-        _input(gaps=(ResearchGap("critical_gap", "business_map", ResearchGapSeverity.CRITICAL, "verify"),))
+        _input(
+            gaps=(
+                ResearchGap(
+                    "critical_gap",
+                    "business_map",
+                    ResearchGapSeverity.CRITICAL,
+                    "verify",
+                ),
+            )
+        )
     )
     assert result.assessment.status == "not_answerable"
 
 
-def test_missing_operating_baseline_is_not_answerable_even_when_market_is_present() -> None:
+def test_missing_operating_baseline_is_not_answerable_even_when_market_is_present() -> (
+    None
+):
     model = _input()
     result = CompanyResearchEngine().compile(
         replace(
@@ -728,7 +870,13 @@ def test_missing_operating_baseline_is_not_answerable_even_when_market_is_presen
 
 def test_noncritical_gap_makes_an_otherwise_closed_model_partially_answerable() -> None:
     result = CompanyResearchEngine().compile(
-        _input(gaps=(ResearchGap("review_gap", "business_map", ResearchGapSeverity.HIGH, "review"),))
+        _input(
+            gaps=(
+                ResearchGap(
+                    "review_gap", "business_map", ResearchGapSeverity.HIGH, "review"
+                ),
+            )
+        )
     )
     assert result.assessment.status == "partially_answerable"
     assert result.assessment.direction == "provisional_neutral"
@@ -739,11 +887,27 @@ def test_decimal_boundaries_are_decimal_only_and_serialize_canonically() -> None
     assert canonical_decimal_string(Decimal("-0.000000000001")) == "-0.000000000001"
     with pytest.raises(CompanyResearchValidationError, match="Decimal"):
         FinancialBridgeRow(
-            fiscal_year=2026, revenue=Decimal("1"), operating_income=1.0,
-            cash_tax_rate=Decimal("0"), depreciation=Decimal("0"), capex=Decimal("0"),
-            working_capital_change=Decimal("0"), fcff=Decimal("0"), fact_refs=(_source("a"),),
+            fiscal_year=2026,
+            revenue=Decimal("1"),
+            operating_income=1.0,
+            cash_tax_rate=Decimal("0"),
+            depreciation=Decimal("0"),
+            capex=Decimal("0"),
+            working_capital_change=Decimal("0"),
+            fcff=Decimal("0"),
+            fact_refs=(_source("a"),),
             assumption_refs=(),
             input_states=(ModelInputState.REPORTED,),
+        )
+
+
+def test_new_security_value_writes_reject_legacy_currency_field_names() -> None:
+    value_range = ValueRange(Decimal("1"), Decimal("2"))
+    with pytest.raises(TypeError):
+        SecurityValueRangeArtifact(
+            "NASDAQ:GOOG",
+            usd_per_share=value_range,
+            cny_return=value_range,
         )
 
 
@@ -759,7 +923,7 @@ def test_valuation_canonical_payload_and_hash_ignore_caller_decimal_context() ->
     valuation = replace(
         valuation,
         security_value_ranges=(
-            replace(first_range, cny_return=high_precision_return),
+            replace(first_range, base_currency_return=high_precision_return),
             *valuation.security_value_ranges[1:],
         ),
         required_return_comparisons=(
@@ -794,7 +958,9 @@ def test_canonical_decimal_serialization_ignores_restricted_caller_context(
 ) -> None:
     """Canonical artifacts retain every legal Decimal digit and exponent."""
     values = (
-        Decimal("1234567890123456789012345678901234567890123456789012345678901234567890"),
+        Decimal(
+            "1234567890123456789012345678901234567890123456789012345678901234567890"
+        ),
         Decimal("1.2300E+999999"),
         Decimal("-1.2300E-999999"),
     )
@@ -838,7 +1004,9 @@ def test_valuation_rejects_comparison_with_nonmatching_security_return_range() -
         meets_required_return=True,
     )
 
-    with pytest.raises(CompanyResearchValidationError, match="match security return ranges"):
+    with pytest.raises(
+        CompanyResearchValidationError, match="match security return ranges"
+    ):
         ValuationSetArtifact(
             scenario_dcf_values=valuation.scenario_dcf_values,
             reverse_dcf=valuation.reverse_dcf,
@@ -851,11 +1019,15 @@ def test_valuation_rejects_comparison_with_nonmatching_security_return_range() -
         )
 
 
-def test_valuation_rejects_duplicate_required_return_comparison_for_a_security() -> None:
+def test_valuation_rejects_duplicate_required_return_comparison_for_a_security() -> (
+    None
+):
     valuation = CompanyResearchEngine().compile(_input()).valuation_set
     assert valuation is not None
 
-    with pytest.raises(CompanyResearchValidationError, match="cover each security exactly once"):
+    with pytest.raises(
+        CompanyResearchValidationError, match="cover each security exactly once"
+    ):
         ValuationSetArtifact(
             scenario_dcf_values=valuation.scenario_dcf_values,
             reverse_dcf=valuation.reverse_dcf,
@@ -878,7 +1050,9 @@ def test_negative_cash_and_debt_adjustments_remain_exact_decimal_inputs() -> Non
             market_bridge=replace(
                 market,
                 capital_structure=replace(
-                    market.capital_structure, cash=Decimal("-1.25"), debt=Decimal("-2.50")
+                    market.capital_structure,
+                    cash=Decimal("-1.25"),
+                    debt=Decimal("-2.50"),
                 ),
             ),
         )
@@ -886,7 +1060,9 @@ def test_negative_cash_and_debt_adjustments_remain_exact_decimal_inputs() -> Non
     assert result.valuation_set is not None
 
 
-def test_equal_economic_rights_use_company_diluted_shares_not_listed_class_counts() -> None:
+def test_equal_economic_rights_use_company_diluted_shares_not_listed_class_counts() -> (
+    None
+):
     result = CompanyResearchEngine().compile(_input())
 
     googl, goog = result.security_values
@@ -900,5 +1076,7 @@ def test_rejects_zero_or_negative_security_shares(shares: Decimal) -> None:
     market = model.market_bridge
     assert market is not None
     first = market.securities[0]
-    with pytest.raises(CompanyResearchValidationError, match="listed_class_economic_units"):
+    with pytest.raises(
+        CompanyResearchValidationError, match="listed_class_economic_units"
+    ):
         replace(first, listed_class_economic_units=shares)

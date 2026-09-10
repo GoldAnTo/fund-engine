@@ -1,0 +1,12 @@
+{
+  "schema_version": "catl.answerable-case.business-map.v1",
+  "content_hash": "f8b53ca39cfc8ca6e6822382ad6ddb62a2339dd92ad402044dfde818b12f2831",
+  "company_external_key": "CN:300750:COMPANY",
+  "modules": [
+    {"key": "power_battery", "label": "Power Battery Systems"},
+    {"key": "energy_storage", "label": "Energy Storage Systems"},
+    {"key": "battery_materials_and_recycling", "label": "Battery Materials and Recycling"},
+    {"key": "mineral_resources", "label": "Mineral Resources"},
+    {"key": "corporate_capital_allocation", "label": "Corporate Capital Allocation"}
+  ]
+}

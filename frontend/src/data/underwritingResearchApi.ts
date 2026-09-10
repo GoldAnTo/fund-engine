@@ -70,7 +70,8 @@ async function requestError(response: Response): Promise<UnderwritingResearchReq
 }
 
 function defaultBaseUrl(): string {
-  return "/api/underwriting/v1";
+  return (import.meta.env.VITE_UNDERWRITING_API_URL || "/api/underwriting/v1")
+    .replace(/\/$/, "");
 }
 
 function archivePath(input: ResearchArchiveQuery | undefined): string {
@@ -85,9 +86,11 @@ function archivePath(input: ResearchArchiveQuery | undefined): string {
 
 function createHttpUnderwritingResearchApi(baseUrl = defaultBaseUrl()) {
   const request = async <T>(path: string): Promise<T> => {
+    const bearerToken = import.meta.env.VITE_RESEARCH_BEARER_TOKEN?.trim();
     const response = await fetch(`${baseUrl}${path}`, {
       method: "GET",
       credentials: "include",
+      headers: bearerToken ? { Authorization: `Bearer ${bearerToken}` } : undefined,
     });
     if (!response.ok) throw await requestError(response);
     return response.json() as Promise<T>;

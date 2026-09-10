@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import bindparam, create_engine, event, select, text, update
@@ -14,8 +16,27 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.ledger import Base, ConflictError, ImmutableLedgerError, ValidationError
 from app.models.operational import Job
+from app.underwriting.domain.company_research import (
+    DEFAULT_STRATEGY_VERSION,
+    SourceLineageReference,
+)
+from app.underwriting.domain.company_research_critical_inputs import (
+    CriticalInputCandidate,
+    CriticalInputDecision,
+    CriticalInputKind,
+    CriticalInputSet,
+    select_critical_inputs,
+)
+from app.underwriting.domain.company_research_provenance import (
+    canonical_source_refs,
+    critical_inputs_payload_source_refs,
+)
+from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
+from app.underwriting.domain.types import InvestmentMandateInput
 from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
+    COMPANY_RESEARCH_ARTIFACT_KINDS,
+    COMPANY_RESEARCH_ARTIFACT_ORDER,
     CompanyResearchArtifactVersion,
     CompanyResearchEvent,
     CompanyResearchPreparation,
@@ -25,7 +46,6 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchPersistedBundle,
     CompanyResearchRepository,
 )
-from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.persistence.models import (
     UnderwritingHistoricalBasis,
     UnderwritingMandateVersion,
@@ -36,19 +56,20 @@ from app.underwriting.persistence.product_models import (
     UnderwritingWorkspaceDraft,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
-from app.underwriting.domain.types import InvestmentMandateInput
+from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchModelBuilder,
+    EvidenceBuildMode,
 )
 from app.underwriting.services.product_project import ResearchProjectService
 from app.underwriting.services.workspace_draft import (
     WorkspaceDraftContent,
     WorkspaceDraftService,
 )
+from tests.underwriting.test_company_research_critical_inputs import _selection_graph
 from tests.underwriting.test_company_research_model_builder import _build_input
 
 NOW = datetime(2026, 8, 25, tzinfo=UTC)
@@ -288,6 +309,152 @@ def test_complete_model_bundle_locks_project_preparation_job_in_canonical_order(
     _complete_model_bundle(repository, preparation, bundle)
 
     assert calls[:3] == ["project", "preparation", "job"]
+
+
+def test_mainline_model_artifacts_exclude_quarantined_derived_source_refs(
+    session,
+) -> None:
+    repository, project, preparation, job = _repository_with_evidence_job(session)
+    preparation.strategy_version = DEFAULT_STRATEGY_VERSION
+    build_input = _build_input()
+    evidence_payload = deepcopy(build_input.evidence_payload)
+    gaps_payload = deepcopy(build_input.gap_payload)
+    evidence_payload["cutoff"] = NOW.isoformat()
+    evidence_payload["fixture_content_hash"] = EVIDENCE_SOURCE_MANIFEST_HASH
+    gaps_payload["fixture_content_hash"] = EVIDENCE_SOURCE_MANIFEST_HASH
+    unsupported = evidence_payload["facts"][-1]
+    unsupported.update(
+        {
+            "fact_key": "quarantined_derived_revenue",
+            "value": "987654321",
+            "value_kind": "derived",
+            "source_role": "quarantined_publisher",
+            "source_url": "https://quarantined.example/research",
+            "source_locator": "quarantined-derived",
+            "raw_hash": "f" * 64,
+        }
+    )
+    full_source_refs = canonical_source_refs(
+        tuple(
+            {
+                field: str(fact[field])
+                for field in (
+                    "source_role",
+                    "source_url",
+                    "source_locator",
+                    "raw_hash",
+                )
+            }
+            for fact in evidence_payload["facts"]
+        )
+    )
+    eligible_source_refs = tuple(
+        ref
+        for ref in full_source_refs
+        if ref["source_role"] != "quarantined_publisher"
+    )
+    evidence = repository.append_artifact(
+        project_id=project.id,
+        kind="evidence_index",
+        input_hash="2" * 64,
+        payload=evidence_payload,
+        source_refs=full_source_refs,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    gaps = repository.append_artifact(
+        project_id=project.id,
+        kind="research_gaps",
+        input_hash="3" * 64,
+        payload=gaps_payload,
+        source_refs=full_source_refs,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    preparation.status = "building_model"
+    preparation.current_step = "model_bundle"
+    preparation.progress = 25
+    job.status = "running"
+    job.step = "model_bundle"
+    job.progress = 25
+    job.claim_token = "model-claim"
+    session.flush([preparation, job])
+
+    build_input = replace(
+        build_input,
+        cutoff_at=NOW,
+        evidence_payload=evidence_payload,
+        evidence_content_hash=canonical_hash(evidence_payload),
+        gap_payload=gaps_payload,
+        source_refs=full_source_refs,
+        market_context=None,
+        evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+    )
+    result = CompanyResearchModelBuilder().build(build_input)
+    values: dict[str, object] = {
+        "business_map": result.business_map,
+        "driver_map": result.driver_map,
+        "financial_bridge": result.financial_bridge,
+        "scenario_set": result.scenario_set,
+        "judgment_context": result.judgment_context,
+        "research_gaps": result.gaps,
+        "memo": result.memo,
+        "critical_inputs": select_critical_inputs(
+            result.critical_input_dependency_graph
+        ),
+    }
+    payloads = {
+        kind: CompanyResearchArtifactCodec.encode(kind, value)
+        for kind, value in values.items()
+    }
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(project.id)
+    assert draft is not None and draft.content.historical_basis_id is not None
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
+    assert basis is not None
+    bundle = CompanyResearchPersistedBundle(
+        evidence_artifact_id=evidence.id,
+        evidence_content_hash=evidence.content_hash,
+        research_gaps_artifact_id=gaps.id,
+        research_gaps_content_hash=gaps.content_hash,
+        workspace_draft_id=draft.id,
+        workspace_draft_lock_version=draft.lock_version,
+        historical_basis_id=basis.id,
+        historical_basis_content_hash=basis.content_hash,
+        business_map=payloads["business_map"],
+        driver_map=payloads["driver_map"],
+        financial_bridge=payloads["financial_bridge"],
+        scenario_set=payloads["scenario_set"],
+        valuation_set=None,
+        judgment_context=payloads["judgment_context"],
+        research_gaps=payloads["research_gaps"],
+        memo=payloads["memo"],
+        critical_inputs=payloads["critical_inputs"],
+        source_refs=eligible_source_refs,
+        market_snapshot_bindings=(),
+    )
+
+    _completed, artifacts = repository.complete_model_bundle(
+        preparation.id,
+        bundle=bundle,
+        expected_claim_token="model-claim",
+        expected_request_hash=preparation.request_hash,
+        expected_strategy_version=preparation.strategy_version,
+        created_at=NOW,
+    )
+
+    model_artifacts = tuple(
+        artifact for artifact in artifacts if artifact.kind != "critical_inputs"
+    )
+    assert model_artifacts
+    assert all(
+        canonical_source_refs(artifact.source_refs) == eligible_source_refs
+        for artifact in model_artifacts
+    )
+    assert all(
+        ref["source_role"] != "quarantined_publisher"
+        for artifact in artifacts
+        for ref in artifact.source_refs
+    )
 
 
 def test_complete_evidence_preparation_locks_project_preparation_job_in_canonical_order(
@@ -1201,6 +1368,668 @@ def test_artifacts_are_immutable_and_replayed_from_a_strict_parent_chain(
     )
     with pytest.raises(CompanyResearchIntegrityError, match="parent content hash"):
         repository.artifact_chain(second.id)
+
+
+def test_critical_inputs_are_a_canonical_typed_artifact_kind(session) -> None:
+    assert "critical_inputs" in COMPANY_RESEARCH_ARTIFACT_KINDS
+    assert COMPANY_RESEARCH_ARTIFACT_ORDER[-2:] == ("memo", "critical_inputs")
+    repository, project, _ = _repository_with_preparation(session)
+    selected = select_critical_inputs(_selection_graph())
+    payload = CompanyResearchArtifactCodec.encode("critical_inputs", selected)
+    source_refs = critical_inputs_payload_source_refs(payload)
+
+    artifact = repository.append_artifact(
+        project_id=project.id,
+        kind="critical_inputs",
+        input_hash="1" * 64,
+        payload=payload,
+        source_refs=source_refs,
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+
+    assert artifact.version == 1
+    assert CompanyResearchArtifactCodec.decode(
+        "critical_inputs", artifact.payload
+    ) == selected
+    assert tuple(artifact.source_refs) == source_refs
+    assert repository.current_artifact(project.id, "critical_inputs").id == artifact.id
+
+
+def test_critical_inputs_reject_source_refs_not_present_in_the_payload(session) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    payload = CompanyResearchArtifactCodec.encode(
+        "critical_inputs", select_critical_inputs(_selection_graph())
+    )
+
+    with pytest.raises(ValidationError, match="source refs"):
+        repository.append_artifact(
+            project_id=project.id,
+            kind="critical_inputs",
+            input_hash="1" * 64,
+            payload=payload,
+            source_refs=(),
+            expected_parent_id=None,
+            created_at=NOW,
+        )
+
+
+def test_identical_critical_input_rebuild_is_rejected_without_a_new_head(session) -> (
+    None
+):
+    repository, project, _ = _repository_with_preparation(session)
+    root_set = select_critical_inputs(_selection_graph())
+    root_payload = CompanyResearchArtifactCodec.encode("critical_inputs", root_set)
+    root = repository.append_artifact(
+        project_id=project.id,
+        kind="critical_inputs",
+        input_hash="d" * 64,
+        payload=root_payload,
+        source_refs=critical_inputs_payload_source_refs(root_payload),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    with pytest.raises(ValidationError, match="must change"):
+        repository.append_critical_input_rebuild(
+            project_id=project.id,
+            payload=root_payload,
+            expected_parent_id=root.id,
+            created_at=NOW + timedelta(seconds=1),
+        )
+
+    assert repository.current_artifact(project.id, "critical_inputs").id == root.id
+    assert len(repository.artifact_chain(root.id)) == 1
+
+
+def test_complete_model_bundle_reuses_identical_critical_input_head(session) -> None:
+    repository, project, preparation, job, _evidence, _gaps, bundle = (
+        _repository_with_model_job(session)
+    )
+    preparation.strategy_version = DEFAULT_STRATEGY_VERSION
+    selected = select_critical_inputs(_selection_graph())
+    bundle = replace(
+        bundle,
+        critical_inputs=CompanyResearchArtifactCodec.encode(
+            "critical_inputs", selected
+        ),
+    )
+    _updated, first_rows = repository.complete_model_bundle(
+        preparation.id,
+        bundle=bundle,
+        expected_claim_token="model-claim",
+        expected_request_hash=preparation.request_hash,
+        expected_strategy_version=preparation.strategy_version,
+        created_at=NOW,
+    )
+    root = next(row for row in first_rows if row.kind == "critical_inputs")
+    preparation.status = "building_model"
+    preparation.current_step = "model_bundle"
+    preparation.progress = 25
+    job.status = "running"
+    job.step = "model_bundle"
+    job.progress = 25
+    job.claim_token = "model-claim-2"
+    session.flush([preparation, job])
+
+    _updated, second_rows = repository.complete_model_bundle(
+        preparation.id,
+        bundle=bundle,
+        expected_claim_token="model-claim-2",
+        expected_request_hash=preparation.request_hash,
+        expected_strategy_version=preparation.strategy_version,
+        created_at=NOW + timedelta(seconds=1),
+    )
+
+    reused = next(row for row in second_rows if row.kind == "critical_inputs")
+    assert reused.id == root.id
+    assert repository.current_artifact(project.id, "critical_inputs").id == root.id
+    assert len(repository.artifact_chain(root.id)) == 1
+
+
+def test_critical_input_rebuild_with_changed_source_refs_round_trips_and_detects_tamper(
+    session,
+) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    root_set = select_critical_inputs(_selection_graph())
+    root_payload = CompanyResearchArtifactCodec.encode("critical_inputs", root_set)
+    root = repository.append_artifact(
+        project_id=project.id,
+        kind="critical_inputs",
+        input_hash="e" * 64,
+        payload=root_payload,
+        source_refs=critical_inputs_payload_source_refs(root_payload),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    reported_confirmed = CriticalInputSet(
+        inputs=tuple(
+            replace(item, decision=CriticalInputDecision.CONFIRMED)
+            if item.key == "reported_revenue"
+            else item
+            for item in root_set.inputs
+        )
+    )
+    reported_decision = repository.append_critical_input_successor(
+        project_id=project.id,
+        payload=CompanyResearchArtifactCodec.encode(
+            "critical_inputs", reported_confirmed
+        ),
+        expected_parent_id=root.id,
+        created_at=NOW + timedelta(seconds=1),
+    )
+    both_confirmed = CriticalInputSet(
+        inputs=tuple(
+            replace(item, decision=CriticalInputDecision.CONFIRMED)
+            if item.key == "revenue_growth"
+            else item
+            for item in reported_confirmed.inputs
+        )
+    )
+    decision_head = repository.append_critical_input_successor(
+        project_id=project.id,
+        payload=CompanyResearchArtifactCodec.encode(
+            "critical_inputs", both_confirmed
+        ),
+        expected_parent_id=reported_decision.id,
+        created_at=NOW + timedelta(seconds=2),
+    )
+    changed_ref = SourceLineageReference(
+        fact_key="reported_revenue",
+        source_role="filing",
+        source_url="https://example.test/revised-filing",
+        source_locator="page:13",
+        raw_hash="f" * 64,
+    )
+    rebuilt_set = CriticalInputSet(
+        inputs=tuple(
+            replace(item, source_ref=changed_ref, input_fingerprint="")
+            if item.key == "reported_revenue"
+            else item
+            for item in root_set.inputs
+        )
+    )
+    rebuilt_payload = CompanyResearchArtifactCodec.encode(
+        "critical_inputs", rebuilt_set
+    )
+
+    rebuilt = repository.append_critical_input_rebuild(
+        project_id=project.id,
+        payload=rebuilt_payload,
+        expected_parent_id=decision_head.id,
+        created_at=NOW + timedelta(seconds=3),
+    )
+
+    assert tuple(rebuilt.source_refs) == critical_inputs_payload_source_refs(
+        rebuilt_payload
+    )
+    persisted = CompanyResearchArtifactCodec.decode(
+        "critical_inputs", rebuilt.payload
+    )
+    decisions = {item.key: item.decision for item in persisted.inputs}
+    assert decisions["reported_revenue"] is CriticalInputDecision.PENDING
+    assert decisions["revenue_growth"] is CriticalInputDecision.CONFIRMED
+    assert [row.id for row in repository.artifact_chain(rebuilt.id)] == [
+        root.id,
+        reported_decision.id,
+        decision_head.id,
+        rebuilt.id,
+    ]
+
+    tampered_refs = root.source_refs
+    tampered_hash = repository.artifact_content_hash(
+        project_id=rebuilt.project_id,
+        kind=rebuilt.kind,
+        version=rebuilt.version,
+        supersedes_id=rebuilt.supersedes_id,
+        parent_content_hash=rebuilt.parent_content_hash,
+        input_hash=rebuilt.input_hash,
+        payload=rebuilt.payload,
+        source_refs=tampered_refs,
+    )
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        rebuilt.id,
+        source_refs=tampered_refs,
+        content_hash=tampered_hash,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="source refs"):
+        repository.artifact(rebuilt.id, fresh=True)
+
+
+def test_legacy_v1_critical_input_rebuild_chain_remains_readable(session) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    root_set = select_critical_inputs(_selection_graph())
+    root_payload = CompanyResearchArtifactCodec.encode("critical_inputs", root_set)
+    root = repository.append_artifact(
+        project_id=project.id,
+        kind="critical_inputs",
+        input_hash="a" * 64,
+        payload=root_payload,
+        source_refs=critical_inputs_payload_source_refs(root_payload),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    rebuilt_set = CriticalInputSet(
+        inputs=tuple(
+            replace(item, value=Decimal("0.11"), input_fingerprint="")
+            if item.key == "revenue_growth"
+            else item
+            for item in root_set.inputs
+        )
+    )
+    rebuilt_payload = CompanyResearchArtifactCodec.encode(
+        "critical_inputs", rebuilt_set
+    )
+    legacy_input_hash = canonical_hash(
+        {
+            "schema_version": "company-research-critical-input-rebuild.v1",
+            "parent_content_hash": root.content_hash,
+            "selected_fingerprints": tuple(
+                item.input_fingerprint for item in rebuilt_set.inputs
+            ),
+            "payload": rebuilt_payload,
+        }
+    )
+    legacy_source_refs = list(root.source_refs)
+    legacy_content_hash = repository.artifact_content_hash(
+        project_id=project.id,
+        kind="critical_inputs",
+        version=2,
+        supersedes_id=root.id,
+        parent_content_hash=root.content_hash,
+        input_hash=legacy_input_hash,
+        payload=rebuilt_payload,
+        source_refs=legacy_source_refs,
+    )
+    legacy = CompanyResearchArtifactVersion(
+        project_id=project.id,
+        kind="critical_inputs",
+        version=2,
+        supersedes_id=root.id,
+        parent_content_hash=root.content_hash,
+        input_hash=legacy_input_hash,
+        payload=rebuilt_payload,
+        source_refs=legacy_source_refs,
+        content_hash=legacy_content_hash,
+        created_at=NOW + timedelta(seconds=1),
+    )
+    session.add(legacy)
+    session.flush()
+
+    assert [row.id for row in repository.artifact_chain(legacy.id)] == [
+        root.id,
+        legacy.id,
+    ]
+
+
+def test_legacy_v1_rebuild_rejects_duplicate_fingerprint_inputs() -> None:
+    base = select_critical_inputs(_selection_graph()).inputs[0]
+    first = replace(base, key="capital:a")
+    second = replace(
+        base,
+        key="capital:b",
+        decision=CriticalInputDecision.CONFIRMED,
+    )
+    parent_set = CriticalInputSet(inputs=(first, second))
+    candidate_set = CriticalInputSet(
+        inputs=(
+            first,
+            replace(second, decision=CriticalInputDecision.PENDING),
+        )
+    )
+    parent = SimpleNamespace(
+        payload=CompanyResearchArtifactCodec.encode("critical_inputs", parent_set),
+        content_hash="a" * 64,
+    )
+    candidate_payload = CompanyResearchArtifactCodec.encode(
+        "critical_inputs", candidate_set
+    )
+
+    with pytest.raises(ValidationError, match="legacy.*unique fingerprints"):
+        CompanyResearchRepository._legacy_critical_input_rebuild_binding(
+            parent=parent,  # type: ignore[arg-type]
+            payload=candidate_payload,
+        )
+
+
+def test_source_fact_replacement_appends_an_authenticated_user_assumption(
+    session,
+) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    evidence_payload = {
+        "facts": [
+            {
+                "fact_key": "reported_revenue",
+                "value": "100",
+                "raw_hash": "a" * 64,
+                "source_locator": "page:12",
+                "source_role": "filing",
+                "source_url": "https://example.test/filing",
+            }
+        ]
+    }
+    evidence = repository.append_artifact(
+        project_id=project.id,
+        kind="evidence_index",
+        input_hash="2" * 64,
+        payload=evidence_payload,
+        source_refs=[
+            {
+                "raw_hash": "a" * 64,
+                "source_locator": "page:12",
+                "source_role": "filing",
+                "source_url": "https://example.test/filing",
+            }
+        ],
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    frozen_evidence = (
+        deepcopy(evidence.payload),
+        deepcopy(evidence.source_refs),
+        evidence.input_hash,
+        evidence.content_hash,
+    )
+    root_set = select_critical_inputs(_selection_graph())
+    root_payload = CompanyResearchArtifactCodec.encode("critical_inputs", root_set)
+    root = repository.append_artifact(
+        project_id=project.id,
+        kind="critical_inputs",
+        input_hash="3" * 64,
+        payload=root_payload,
+        source_refs=critical_inputs_payload_source_refs(root_payload),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    original = next(
+        item for item in root_set.inputs if item.key == "reported_revenue"
+    )
+    replacement = CriticalInputCandidate(
+        key=original.key,
+        kind=CriticalInputKind.USER_ASSUMPTION,
+        value=Decimal(105),
+        period=original.period,
+        unit=original.unit,
+        currency=original.currency,
+        assumption_key="reported_revenue.v1:user_override",
+        rationale="User-selected normalized revenue",
+    )
+    successor_set = CriticalInputSet(
+        inputs=tuple(
+            replace(
+                item,
+                decision=CriticalInputDecision.REPLACED_WITH_USER_ASSUMPTION,
+                replacement=replacement,
+            )
+            if item.key == original.key
+            else item
+            for item in root_set.inputs
+        )
+    )
+
+    successor = repository.append_critical_input_successor(
+        project_id=project.id,
+        payload=CompanyResearchArtifactCodec.encode(
+            "critical_inputs", successor_set
+        ),
+        expected_parent_id=root.id,
+        created_at=NOW + timedelta(seconds=1),
+    )
+
+    assert successor.version == 2
+    assert successor.parent_content_hash == root.content_hash
+    assert successor.input_hash == repository.critical_input_successor_input_hash(
+        parent_content_hash=root.content_hash,
+        input_key=original.key,
+        input_fingerprint=original.input_fingerprint,
+        decision=CriticalInputDecision.REPLACED_WITH_USER_ASSUMPTION,
+        replacement=CompanyResearchArtifactCodec.encode(
+            "critical_inputs", successor_set
+        )["inputs"][0]["replacement"],
+    )
+    persisted = CompanyResearchArtifactCodec.decode(
+        "critical_inputs", successor.payload
+    )
+    persisted_original = next(
+        item for item in persisted.inputs if item.key == original.key
+    )
+    assert (
+        persisted_original.kind,
+        persisted_original.value,
+        persisted_original.source_ref,
+        persisted_original.input_fingerprint,
+    ) == (
+        original.kind,
+        original.value,
+        original.source_ref,
+        original.input_fingerprint,
+    )
+    assert persisted_original.replacement == replacement
+    current_evidence = repository.artifact(evidence.id)
+    assert current_evidence is not None
+    assert (
+        current_evidence.payload,
+        current_evidence.source_refs,
+        current_evidence.input_hash,
+        current_evidence.content_hash,
+    ) == frozen_evidence
+
+
+def test_critical_input_successor_changes_exactly_one_pending_decision(session) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    root_set = select_critical_inputs(_selection_graph())
+    root_payload = CompanyResearchArtifactCodec.encode("critical_inputs", root_set)
+    root = repository.append_artifact(
+        project_id=project.id,
+        kind="critical_inputs",
+        input_hash="4" * 64,
+        payload=root_payload,
+        source_refs=critical_inputs_payload_source_refs(root_payload),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    changed = CriticalInputSet(
+        inputs=tuple(
+            replace(item, decision=CriticalInputDecision.CONFIRMED)
+            if item.key in {"reported_revenue", "revenue_growth"}
+            else item
+            for item in root_set.inputs
+        )
+    )
+
+    with pytest.raises(ValidationError, match="exactly one"):
+        repository.append_artifact(
+            project_id=project.id,
+            kind="critical_inputs",
+            input_hash="5" * 64,
+            payload=CompanyResearchArtifactCodec.encode("critical_inputs", changed),
+            source_refs=critical_inputs_payload_source_refs(root_payload),
+            expected_parent_id=root.id,
+            created_at=NOW + timedelta(seconds=1),
+        )
+
+    single = CriticalInputSet(
+        inputs=tuple(
+            replace(item, decision=CriticalInputDecision.CONFIRMED)
+            if item.key == "reported_revenue"
+            else item
+            for item in root_set.inputs
+        )
+    )
+    with pytest.raises(ValidationError, match="input hash"):
+        repository.append_artifact(
+            project_id=project.id,
+            kind="critical_inputs",
+            input_hash="6" * 64,
+            payload=CompanyResearchArtifactCodec.encode("critical_inputs", single),
+            source_refs=critical_inputs_payload_source_refs(root_payload),
+            expected_parent_id=root.id,
+            created_at=NOW + timedelta(seconds=1),
+        )
+
+
+def test_critical_input_successor_read_rejects_forged_binding_and_stale_parent(
+    session,
+) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    root_set = select_critical_inputs(_selection_graph())
+    root_payload = CompanyResearchArtifactCodec.encode("critical_inputs", root_set)
+    root = repository.append_artifact(
+        project_id=project.id,
+        kind="critical_inputs",
+        input_hash="7" * 64,
+        payload=root_payload,
+        source_refs=critical_inputs_payload_source_refs(root_payload),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    successor_set = CriticalInputSet(
+        inputs=tuple(
+            replace(item, decision=CriticalInputDecision.CONFIRMED)
+            if item.key == "reported_revenue"
+            else item
+            for item in root_set.inputs
+        )
+    )
+    successor_payload = CompanyResearchArtifactCodec.encode(
+        "critical_inputs", successor_set
+    )
+    successor = repository.append_critical_input_successor(
+        project_id=project.id,
+        payload=successor_payload,
+        expected_parent_id=root.id,
+        created_at=NOW + timedelta(seconds=1),
+    )
+    with pytest.raises(StaleParentError, match="expected parent"):
+        repository.append_critical_input_successor(
+            project_id=project.id,
+            payload=successor_payload,
+            expected_parent_id=root.id,
+            created_at=NOW + timedelta(seconds=2),
+        )
+
+    forged_input_hash = "8" * 64
+    forged_content_hash = repository.artifact_content_hash(
+        project_id=successor.project_id,
+        kind=successor.kind,
+        version=successor.version,
+        supersedes_id=successor.supersedes_id,
+        parent_content_hash=successor.parent_content_hash,
+        input_hash=forged_input_hash,
+        payload=successor.payload,
+        source_refs=successor.source_refs,
+    )
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        successor.id,
+        input_hash=forged_input_hash,
+        content_hash=forged_content_hash,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="input hash"):
+        repository.artifact(successor.id)
+
+
+def test_single_artifact_read_authenticates_complete_critical_input_ancestry(
+    session,
+) -> None:
+    repository, project, _ = _repository_with_preparation(session)
+    root_set = select_critical_inputs(_selection_graph())
+    root_payload = CompanyResearchArtifactCodec.encode("critical_inputs", root_set)
+    root = repository.append_artifact(
+        project_id=project.id,
+        kind="critical_inputs",
+        input_hash="9" * 64,
+        payload=root_payload,
+        source_refs=critical_inputs_payload_source_refs(root_payload),
+        expected_parent_id=None,
+        created_at=NOW,
+    )
+    second_set = CriticalInputSet(
+        inputs=tuple(
+            replace(item, decision=CriticalInputDecision.CONFIRMED)
+            if item.key == "reported_revenue"
+            else item
+            for item in root_set.inputs
+        )
+    )
+    second = repository.append_critical_input_successor(
+        project_id=project.id,
+        payload=CompanyResearchArtifactCodec.encode("critical_inputs", second_set),
+        expected_parent_id=root.id,
+        created_at=NOW + timedelta(seconds=1),
+    )
+    third_set = CriticalInputSet(
+        inputs=tuple(
+            replace(item, decision=CriticalInputDecision.CONFIRMED)
+            if item.key == "revenue_growth"
+            else item
+            for item in second_set.inputs
+        )
+    )
+    third_payload = CompanyResearchArtifactCodec.encode(
+        "critical_inputs", third_set
+    )
+    third = repository.append_critical_input_successor(
+        project_id=project.id,
+        payload=third_payload,
+        expected_parent_id=second.id,
+        created_at=NOW + timedelta(seconds=2),
+    )
+
+    forged_second_parent_hash = "f" * 64
+    forged_second_content_hash = repository.artifact_content_hash(
+        project_id=second.project_id,
+        kind=second.kind,
+        version=second.version,
+        supersedes_id=second.supersedes_id,
+        parent_content_hash=forged_second_parent_hash,
+        input_hash=second.input_hash,
+        payload=second.payload,
+        source_refs=second.source_refs,
+    )
+    changed_third = next(
+        item for item in third_set.inputs if item.key == "revenue_growth"
+    )
+    forged_third_input_hash = repository.critical_input_successor_input_hash(
+        parent_content_hash=forged_second_content_hash,
+        input_key=changed_third.key,
+        input_fingerprint=changed_third.input_fingerprint,
+        decision=changed_third.decision,
+        replacement=None,
+    )
+    forged_third_content_hash = repository.artifact_content_hash(
+        project_id=third.project_id,
+        kind=third.kind,
+        version=third.version,
+        supersedes_id=third.supersedes_id,
+        parent_content_hash=forged_second_content_hash,
+        input_hash=forged_third_input_hash,
+        payload=third.payload,
+        source_refs=third.source_refs,
+    )
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        second.id,
+        expire=False,
+        parent_content_hash=forged_second_parent_hash,
+        content_hash=forged_second_content_hash,
+    )
+    _tamper_row(
+        session,
+        CompanyResearchArtifactVersion,
+        third.id,
+        parent_content_hash=forged_second_content_hash,
+        input_hash=forged_third_input_hash,
+        content_hash=forged_third_content_hash,
+    )
+
+    with pytest.raises(CompanyResearchIntegrityError, match="parent content hash"):
+        repository.artifact(third.id, fresh=True)
 
 
 def test_artifact_chain_rejects_an_admin_rewrite_of_parent_content(session) -> None:

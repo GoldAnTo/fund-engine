@@ -152,7 +152,7 @@ poll_runtime() {
   if [[ -z "$BASELINE_SNAPSHOT" ]]; then BASELINE_SNAPSHOT="$TMPDIR_EXACT/baseline.json"; cp "$snapshot" "$BASELINE_SNAPSHOT"; elif ! python3 "$STABILITY_HELPER" compare "$BASELINE_SNAPSHOT" "$snapshot"; then die 'container stability comparison failed'; fi
   http_checks "$bearer_token"
   connection_count="$(compose exec -T postgres psql -U "$database_user" -d "$database_name" -Atc 'SELECT count(*) FROM pg_stat_activity WHERE datname = current_database();')"; at_most "$connection_count" "$CONNECTION_CAP"
-  new_revision="$(compose exec -T postgres psql -U "$database_user" -d "$database_name" -Atc 'SELECT version_num FROM alembic_version;')"; require_revision "$new_revision" 0070
+  new_revision="$(compose exec -T postgres psql -U "$database_user" -d "$database_name" -Atc 'SELECT version_num FROM alembic_version;')"; require_revision "$new_revision" 0071
   legacy_checks
 }
 main() {
@@ -167,6 +167,6 @@ main() {
   database_user="$(runtime_environment_value ONE_CLICK_POSTGRES_USER)"; database_name="$(runtime_environment_value ONE_CLICK_POSTGRES_DB)"; bearer_token="$(runtime_environment_value RESEARCH_BEARER_TOKEN)"
   poll_runtime "$database_user" "$database_name" "$bearer_token"
   remaining="$STABILITY_SECONDS"; while (( remaining > 0 )); do sleep_seconds=5; (( remaining < sleep_seconds )) && sleep_seconds="$remaining"; sleep "$sleep_seconds" || die 'stability sleep failed'; poll_runtime "$database_user" "$database_name" "$bearer_token"; remaining=$((remaining - sleep_seconds)); done
-  printf 'One-click investment-research runtime is healthy; isolated database is at 0070 and legacy database remains at 0062.\n'
+  printf 'One-click investment-research runtime is healthy; isolated database is at 0071 and legacy database remains at 0062.\n'
 }
 main

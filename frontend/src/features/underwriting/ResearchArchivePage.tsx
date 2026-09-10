@@ -124,7 +124,7 @@ function canonicalArtifacts(value: unknown): value is Artifact[] {
 
 function sameArtifactList(expected: Artifact[], received: Artifact[]): boolean {
   return expected.length === received.length
-    && expected.every((artifact, index) => sameArtifact(artifact, received[index]!));
+    && expected.every((artifact, index) => sameArtifact(artifact, received[index]));
 }
 
 function isRevision(value: unknown): value is ResearchRevision {
@@ -513,11 +513,11 @@ function normalizedUtc(value: string): string {
 
 export function compareCodePointTuple(left: readonly string[], right: readonly string[]): number {
   for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
-    const leftPoints = Array.from(left[index]!);
-    const rightPoints = Array.from(right[index]!);
+    const leftPoints = Array.from(left[index]);
+    const rightPoints = Array.from(right[index]);
     for (let pointIndex = 0; pointIndex < Math.min(leftPoints.length, rightPoints.length); pointIndex += 1) {
-      const leftPoint = leftPoints[pointIndex]!.codePointAt(0) as number;
-      const rightPoint = rightPoints[pointIndex]!.codePointAt(0) as number;
+      const leftPoint = leftPoints[pointIndex].codePointAt(0) as number;
+      const rightPoint = rightPoints[pointIndex].codePointAt(0) as number;
       if (leftPoint < rightPoint) return -1;
       if (leftPoint > rightPoint) return 1;
     }

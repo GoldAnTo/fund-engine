@@ -167,24 +167,3 @@ class ResearchRunResponse(V1Model):
     review_tasks: list[ReviewTaskDTO]
     next_action: str
     tasks: list[ResearchTaskDTO]
-
-
-class AIUsageSummaryDTO(V1Model):
-    """Only persisted, explicitly attributed operations; not the full provider bill."""
-    coverage: str = "recorded_attributed_operations_only"
-    operation_count: int
-    reported_attempt_count: int
-    unavailable_attempt_count: int
-    unavailable_operation_count: int
-    reported_prompt_tokens: int
-    reported_completion_tokens: int
-    reported_total_tokens: int
-    recorded_total_tokens: int | None
-
-
-class RunAIUsageDTO(AIUsageSummaryDTO):
-    run_id: str
-
-
-class CaseAIUsageDTO(AIUsageSummaryDTO):
-    case_id: str

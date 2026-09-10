@@ -4,10 +4,12 @@ import { Link, useParams } from "react-router-dom";
 import {
   COMPANY_RESEARCH_MODULE_ARTIFACTS,
   investmentResearchApi,
+  type CompanyResearchCriticalInputSet,
   type CompanyResearchFrozenRevision,
   type CompanyResearchPublicationPreview,
+  type CompanyResearchRun,
   type CompanyResearchWorkspace,
-  type ProductProject,
+  type CriticalInputDecisionRequest,
 } from "../../data/investmentResearchApi";
 import {
   COMPANY_RESEARCH_MODULES,
@@ -16,12 +18,17 @@ import {
   type CompanyResearchModuleKey,
   type CompanyResearchPublicationAction,
   numericObservationView,
-  preparationIsActive,
   publicationAction,
+  researchRunIsActive,
+  researchRunSnapshotIsMonotonic,
   workspaceSnapshotIsMonotonic,
 } from "./companyResearchView";
+import CompanyResearchProgress, { CompanyResearchProcess, type FrozenVerificationState } from "./CompanyResearchProgress";
+import CompanyResearchResult from "./CompanyResearchResult";
+import CriticalInputDrawer from "./CriticalInputDrawer";
 
 type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
+type WorkspaceArtifactKind = WorkspaceArtifact["kind"];
 type EvidenceArtifact = Extract<WorkspaceArtifact, { kind: "evidence_index" }>;
 type NumericObservation = EvidenceArtifact["payload"]["facts"][number]["observation"];
 type EvidenceFact = EvidenceArtifact["payload"]["facts"][number];
@@ -38,14 +45,19 @@ type PublicationPreviewSession = {
   idempotencyKey: string;
 };
 type MemoEditor = { memoId: string; value: string };
+type CriticalInputDrawerSession = { artifactId: string; focusInputKey: string | null };
 
-const PREPARATION_LABELS: Record<CompanyResearchWorkspace["preparation"]["status"], string> = {
-  queued: "已排队", preparing_sources: "准备来源", awaiting_evidence_review: "等待证据审核", building_model: "构建模型",
-  awaiting_judgment_review: "等待判断审核", ready_to_freeze: "可冻结", recoverable_failure: "可重试失败", blocked: "已阻塞", completed: "已完成",
-};
 const MODULE_STATE_LABELS: Record<CompanyResearchWorkspace["modules"][number]["state"], string> = {
   not_started: "未开始", preparing: "准备中", needs_review: "待审核", ready: "可查看", blocked: "已阻塞",
 };
+const ARTIFACT_MODULE: Readonly<Record<WorkspaceArtifactKind, CompanyResearchModuleKey>> = {
+  evidence_index: "evidence_and_gaps", research_gaps: "evidence_and_gaps", business_map: "business_map",
+  driver_map: "operating_drivers", financial_bridge: "financials_cash_flow_capital_allocation",
+  scenario_set: "scenarios_valuation_implied_expectations", valuation_set: "scenarios_valuation_implied_expectations",
+  judgment_context: "counterevidence_risks_next_checks", memo: "versions_changes_memo",
+};
+const FROZEN_STRATEGY_VERSION = "company-research-mainline.v1";
+const FROZEN_MODEL_VERSION = "company-research-model.v1";
 const PUBLICATION_FOCUS_IDS: Record<CompanyResearchPublicationAction["kind"], string> = {
   confirm_judgment: "company-research-confirm",
   preview_freeze: "company-research-preview",
@@ -72,17 +84,70 @@ function focusById(id: string): void {
   requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(id)?.focus()));
 }
 
-function frozenRevisionMatchesWorkspace(workspace: CompanyResearchWorkspace, revision: CompanyResearchFrozenRevision): boolean {
+function frozenRevisionMatchesRunArtifacts(run: CompanyResearchRun, revision: CompanyResearchFrozenRevision): boolean {
+  const workspace = run.workspace;
+  const criticalInputs = run.critical_inputs;
   if (revision.project_id !== workspace.project_id || revision.id !== workspace.selected_revision
-    || revision.artifacts.length !== workspace.artifacts.length) return false;
+    || revision.artifacts.length !== workspace.artifacts.length + (criticalInputs === null ? 0 : 1)) return false;
   const workspaceArtifacts = new Map(workspace.artifacts.map((artifact) => [artifact.kind, artifact]));
   if (workspaceArtifacts.size !== workspace.artifacts.length
     || new Set(revision.artifacts.map((descriptor) => descriptor.kind)).size !== revision.artifacts.length) return false;
   return revision.artifacts.every((descriptor) => {
+    if (descriptor.kind === "critical_inputs") return criticalInputs !== null
+      && descriptor.id === criticalInputs.artifact_id && descriptor.version === criticalInputs.version
+      && descriptor.input_hash === criticalInputs.input_hash && descriptor.content_hash === criticalInputs.content_hash;
     const artifact = workspaceArtifacts.get(descriptor.kind);
     return artifact !== undefined && artifact.id === descriptor.id && artifact.version === descriptor.version
       && artifact.input_hash === descriptor.input_hash && artifact.content_hash === descriptor.content_hash;
   });
+}
+
+function frozenRevisionMatchesRunIdentity(run: CompanyResearchRun, revision: CompanyResearchFrozenRevision): boolean {
+  const cutoff = workspaceCutoff(run.workspace);
+  if (revision.project_id !== run.project_id || revision.id !== run.selected_revision || cutoff === null
+    || revision.cutoff_at !== cutoff
+    || revision.strategy_version !== FROZEN_STRATEGY_VERSION || revision.model_version !== FROZEN_MODEL_VERSION
+    || revision.company.schema_version !== run.company.schema_version
+    || revision.company.object_id !== run.company.object_id || revision.company.external_key !== run.company.external_key
+    || revision.company.canonical_name !== run.company.canonical_name
+    || revision.securities.length !== run.securities.length) return false;
+  return revision.securities.every((security, index) => {
+    const current = run.securities[index];
+    return current !== undefined && security.schema_version === current.schema_version
+      && security.object_id === current.object_id && security.external_key === current.external_key
+      && security.canonical_name === current.canonical_name && security.symbol === current.symbol
+      && security.exchange === current.exchange && security.share_class === current.share_class
+      && security.trading_currency === current.trading_currency;
+  });
+}
+
+function frozenRevisionMatchesRun(run: CompanyResearchRun, revision: CompanyResearchFrozenRevision): boolean {
+  return frozenRevisionMatchesRunArtifacts(run, revision) && frozenRevisionMatchesRunIdentity(run, revision);
+}
+
+function criticalDecisionRunIsTrusted(current: CompanyResearchRun, next: CompanyResearchRun): boolean {
+  if (!researchRunSnapshotIsMonotonic(current, next)) return false;
+  if (workspaceSnapshotIsMonotonic(current.workspace, next.workspace)) return true;
+  const currentInputs = current.critical_inputs;
+  const nextInputs = next.critical_inputs;
+  if (current.status !== "needs_input" || next.status !== "analyzing_company" || next.progress !== 25
+    || currentInputs === null || nextInputs === null || nextInputs.version <= currentInputs.version
+    || nextInputs.artifact_id === currentInputs.artifact_id
+    || !nextInputs.inputs.some((input) => input.decision === "replaced_with_user_assumption" || input.decision === "marked_unknown")) return false;
+  const currentWorkspace = current.workspace;
+  const nextWorkspace = next.workspace;
+  return nextWorkspace.project_id === currentWorkspace.project_id
+    && nextWorkspace.company.id === currentWorkspace.company.id
+    && nextWorkspace.preparation.id === currentWorkspace.preparation.id
+    && nextWorkspace.preparation.status === "building_model"
+    && nextWorkspace.preparation.current_step === "model_bundle"
+    && nextWorkspace.preparation.progress === 25
+    && nextWorkspace.draft.id === currentWorkspace.draft.id
+    && nextWorkspace.draft.lock_version >= currentWorkspace.draft.lock_version
+    && nextWorkspace.selected_revision === currentWorkspace.selected_revision
+    && nextWorkspace.change_summary.artifact_versions.critical_inputs === nextInputs.version
+    && Object.entries(currentWorkspace.change_summary.artifact_versions).every(([kind, version]) =>
+      (nextWorkspace.change_summary.artifact_versions[kind] ?? 0) >= version);
 }
 
 function machineMemoMarkdown(workspace: CompanyResearchWorkspace): string {
@@ -171,7 +236,7 @@ function OverviewPanel({ workspace }: { workspace: CompanyResearchWorkspace }) {
     {answerability.blockers.length > 0 ? <section><h3>阻塞项</h3><ul>{answerability.blockers.map((item) => <li key={item}>{item}</li>)}</ul></section> : null}
     {answerability.status === "partially_answerable" && answerability.blockers.length === 0 ? <p>未提供阻塞项。</p> : null}
     {answerability.status === "preparing" && judgment ? <section><h3>已建立的判断上下文</h3>{judgment.payload.strongest_counterevidence.length > 0 ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>最强反证未提供。</p>}{judgment.payload.next_verification_events.length > 0 ? <ul>{judgment.payload.next_verification_events.map((item) => <li key={item}>{item}</li>)}</ul> : <p>下一验证事件未提供。</p>}</section> : null}
-    {answerability.status === "answerable" && valuation && valuation.payload.security_value_ranges.length > 0 ? <section><h3>价值与回报范围</h3><div className="ir-numeric-grid">{valuation.payload.security_value_ranges.flatMap((range) => [<NumericCard artifact={valuation} key={`${range.security_external_key}-value-min`} label={`${range.security_external_key} 价值下限`} observation={range.usd_per_share.minimum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-value-max`} label={`${range.security_external_key} 价值上限`} observation={range.usd_per_share.maximum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-return-min`} label={`${range.security_external_key} 回报下限`} observation={range.cny_return.minimum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-return-max`} label={`${range.security_external_key} 回报上限`} observation={range.cny_return.maximum} cutoff={cutoff} />])}</div></section> : answerability.status === "answerable" ? <p>价值与回报范围未提供或不一致。</p> : null}
+    {answerability.status === "answerable" && valuation && valuation.payload.security_value_ranges.length > 0 ? <section><h3>价值与回报范围</h3><div className="ir-numeric-grid">{valuation.payload.security_value_ranges.flatMap((range) => [<NumericCard artifact={valuation} key={`${range.security_external_key}-value-min`} label={`${range.security_external_key} 价值下限 (${range.value_currency})`} observation={range.value_per_share.minimum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-value-max`} label={`${range.security_external_key} 价值上限 (${range.value_currency})`} observation={range.value_per_share.maximum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-return-min`} label={`${range.security_external_key} 回报下限`} observation={range.base_currency_return.minimum} cutoff={cutoff} />, <NumericCard artifact={valuation} key={`${range.security_external_key}-return-max`} label={`${range.security_external_key} 回报上限`} observation={range.base_currency_return.maximum} cutoff={cutoff} />])}</div></section> : answerability.status === "answerable" ? <p>价值与回报范围未提供或不一致。</p> : null}
     {answerability.status === "answerable" ? <section><h3>最强反证与下一验证</h3>{judgment && judgment.payload.strongest_counterevidence.length > 0 ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>最强反证未提供。</p>}{judgment && judgment.payload.next_verification_events.length > 0 ? <ul>{judgment.payload.next_verification_events.map((item) => <li key={item}>{item}</li>)}</ul> : <p>下一验证事件未提供。</p>}</section> : null}
   </div>;
 }
@@ -220,7 +285,7 @@ function ScenarioPanel({ workspace, valuationState }: { workspace: CompanyResear
   return <div className="ir-scenario-view"><section><h3>情景机制与驱动变化</h3><div className="ir-research-list">{scenarios.payload.scenarios.map((scenario) => {
     const dcf = valuation?.payload.scenario_dcf_values.find((item) => item.scenario_id === scenario.scenario_id) ?? null;
     return <article key={scenario.scenario_id}><h4>{scenario.scenario_id}</h4><p><b>机制</b> {scenario.mechanism_id}</p>{scenario.driver_overrides.map((override) => <div key={override.driver_key}><p><b>变化驱动</b> {override.driver_key}</p>{override.rationale ? <p>{override.rationale}</p> : null}<NumericCard artifact={scenarios} label={override.driver_key} observation={override.observation} cutoff={cutoff} /></div>)}<p>逐情景财务效果：接口未提供（不可推断）</p>{valuationState === "ready" ? <><h5>DCF 估值</h5><NumericCard artifact={valuation ?? scenarios} label={`${scenario.scenario_id} DCF 企业价值`} observation={dcf?.enterprise_value ?? null} cutoff={cutoff} /></> : null}</article>;
-  })}</div></section>{valuation ? <><section><h3>DCF 情景值</h3><div className="ir-numeric-grid">{valuation.payload.scenario_dcf_values.map((item) => <NumericCard artifact={valuation} key={item.scenario_id} label={`${item.scenario_id} DCF`} observation={item.enterprise_value} cutoff={cutoff} />)}</div></section><section><h3>反向 DCF</h3>{valuation.payload.reverse_dcf ? <div className="ir-numeric-grid"><NumericCard artifact={valuation} label="当前价格隐含 FCFF 倍数" observation={valuation.payload.reverse_dcf.implied_value} cutoff={cutoff} /><NumericCard artifact={valuation} label="求解残差" observation={valuation.payload.reverse_dcf.achieved_residual} cutoff={cutoff} /><NumericCard artifact={valuation} label="迭代次数" observation={valuation.payload.reverse_dcf.iteration_count} cutoff={cutoff} /></div> : <p>当前无法建立反向 DCF。</p>}</section><section><h3>证券价值范围</h3>{valuation.payload.security_value_ranges.map((range) => <article className="ir-security-range" key={range.security_external_key}><h4>{range.security_external_key}</h4><div className="ir-numeric-grid"><NumericCard artifact={valuation} label="每股价值下限" observation={range.usd_per_share.minimum} cutoff={cutoff} /><NumericCard artifact={valuation} label="每股价值上限" observation={range.usd_per_share.maximum} cutoff={cutoff} /><NumericCard artifact={valuation} label="回报下限" observation={range.cny_return.minimum} cutoff={cutoff} /><NumericCard artifact={valuation} label="回报上限" observation={range.cny_return.maximum} cutoff={cutoff} /></div></article>)}</section></> : <section><h3>估值</h3><p>{valuationState === "pending" ? "估值仍在准备（服务器状态：pending）" : valuationState === "blocked" ? "估值已阻塞（服务器状态：blocked）" : valuationState === "ready" ? "估值标记为可查看，但估值制品缺失；接口响应不一致。" : "估值不适用于当前模块。"}</p></section>}<section><h3>反证</h3>{judgment ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>反证清单仍在准备。</p>}</section></div>;
+  })}</div></section>{valuation ? <><section><h3>DCF 情景值</h3><div className="ir-numeric-grid">{valuation.payload.scenario_dcf_values.map((item) => <NumericCard artifact={valuation} key={item.scenario_id} label={`${item.scenario_id} DCF`} observation={item.enterprise_value} cutoff={cutoff} />)}</div></section><section><h3>反向 DCF</h3>{valuation.payload.reverse_dcf ? <div className="ir-numeric-grid"><NumericCard artifact={valuation} label="当前价格隐含 FCFF 倍数" observation={valuation.payload.reverse_dcf.implied_value} cutoff={cutoff} /><NumericCard artifact={valuation} label="求解残差" observation={valuation.payload.reverse_dcf.achieved_residual} cutoff={cutoff} /><NumericCard artifact={valuation} label="迭代次数" observation={valuation.payload.reverse_dcf.iteration_count} cutoff={cutoff} /></div> : <p>当前无法建立反向 DCF。</p>}</section><section><h3>证券价值范围</h3>{valuation.payload.security_value_ranges.map((range) => <article className="ir-security-range" key={range.security_external_key}><h4>{range.security_external_key}</h4><div className="ir-numeric-grid"><NumericCard artifact={valuation} label={`每股价值下限 (${range.value_currency})`} observation={range.value_per_share.minimum} cutoff={cutoff} /><NumericCard artifact={valuation} label={`每股价值上限 (${range.value_currency})`} observation={range.value_per_share.maximum} cutoff={cutoff} /><NumericCard artifact={valuation} label="回报下限" observation={range.base_currency_return.minimum} cutoff={cutoff} /><NumericCard artifact={valuation} label="回报上限" observation={range.base_currency_return.maximum} cutoff={cutoff} /></div></article>)}</section></> : <section><h3>估值</h3><p>{valuationState === "pending" ? "估值仍在准备（服务器状态：pending）" : valuationState === "blocked" ? "估值已阻塞（服务器状态：blocked）" : valuationState === "ready" ? "估值标记为可查看，但估值制品缺失；接口响应不一致。" : "估值不适用于当前模块。"}</p></section>}<section><h3>反证</h3>{judgment ? <SourceRefList refs={judgment.payload.strongest_counterevidence} /> : <p>反证清单仍在准备。</p>}</section></div>;
 }
 
 function RisksPanel({ workspace }: { workspace: CompanyResearchWorkspace }) {
@@ -332,12 +397,14 @@ function PublicationPanel({
   mutation,
   onClosePreview,
   onConfirm,
+  onOpenCriticalInputs,
   onExport,
   onMemoChange,
   onPreview,
   onPublish,
   onReplay,
   preview,
+  criticalInputs,
   workspace,
 }: {
   action: CompanyResearchPublicationAction;
@@ -347,15 +414,24 @@ function PublicationPanel({
   mutation: PublicationMutation | null;
   onClosePreview: () => void;
   onConfirm: (button: HTMLButtonElement) => void;
+  onOpenCriticalInputs: (button: HTMLButtonElement) => void;
   onExport: (button: HTMLButtonElement) => void;
   onMemoChange: (value: string) => void;
   onPreview: (button: HTMLButtonElement) => void;
   onPublish: (button: HTMLButtonElement) => void;
   onReplay: (button: HTMLButtonElement) => void;
   preview: CompanyResearchPublicationPreview | null;
+  criticalInputs: CompanyResearchCriticalInputSet | null;
   workspace: CompanyResearchWorkspace;
 }) {
   if (action.kind === "confirm_judgment") {
+    const pendingCriticalInputs = criticalInputs?.inputs.filter((input) => input.decision === "pending") ?? [];
+    if (pendingCriticalInputs.length > 0) return <section className="ir-version-summary" aria-labelledby="publication-critical-input-title">
+      <h2 id="publication-critical-input-title">保存研究版本</h2>
+      <p>保存前只确认会显著改变预测、估值或判断的关键输入，普通证据不会逐条阻塞。</p>
+      <p>{pendingCriticalInputs.length} 项关键输入待处理。</p>
+      <button className="ir-button ir-button--primary" disabled={busy} id="company-research-save" onClick={(event) => onOpenCriticalInputs(event.currentTarget)} type="button">保存研究版本</button>
+    </section>;
     return <section className="ir-version-summary" aria-labelledby="publication-judgment-title">
       <h2 id="publication-judgment-title">确认研究判断</h2>
       <p>请保留诚实的证据边界。确认会追加人工备忘录，不会补造估值、方向或置信度。</p>
@@ -406,8 +482,8 @@ function PublicationPanel({
 
 export default function ResearchWorkbenchPage() {
   const { projectId = "" } = useParams();
-  const [project, setProject] = useState<ProductProject | null>(null);
-  const [workspace, setWorkspace] = useState<CompanyResearchWorkspace | null>(null);
+  const [run, setRun] = useState<CompanyResearchRun | null>(null);
+  const workspace = run?.workspace ?? null;
   const [activeModule, setActiveModule] = useState<CompanyResearchModuleKey>("overview");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -422,27 +498,41 @@ export default function ResearchWorkbenchPage() {
   const [memoEditor, setMemoEditor] = useState<MemoEditor | null>(null);
   const [reloadAttempt, setReloadAttempt] = useState(0);
   const [pollTick, setPollTick] = useState(0);
+  const [processExpanded, setProcessExpanded] = useState(false);
+  const [processLoading, setProcessLoading] = useState(false);
+  const [criticalInputDrawer, setCriticalInputDrawer] = useState<CriticalInputDrawerSession | null>(null);
+  const [criticalInputMutation, setCriticalInputMutation] = useState<string | null>(null);
+  const [criticalInputError, setCriticalInputError] = useState<string | null>(null);
   const [browserVisible, setBrowserVisible] = useState(() => document.visibilityState !== "hidden");
   const lifecycleRef = useRef(0);
   const pollGenerationRef = useRef(0);
   const mutationGenerationRef = useRef(0);
   const mutationActiveRef = useRef(false);
+  const runRef = useRef<CompanyResearchRun | null>(null);
   const workspaceRef = useRef<CompanyResearchWorkspace | null>(null);
   const pollAttemptRef = useRef(0);
   const previewTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const criticalInputTriggerRef = useRef<HTMLButtonElement | null>(null);
   const pendingPublicationFocusRef = useRef<string | null>(null);
   const attemptedAutomaticRevisionRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (publicationMutation !== null || pendingPublicationFocusRef.current === null) return;
+    if (publicationMutation !== null || criticalInputMutation !== null || pendingPublicationFocusRef.current === null) return;
     const targetId = pendingPublicationFocusRef.current;
     pendingPublicationFocusRef.current = null;
     focusById(targetId);
-  }, [publicationMutation, workspace?.selected_revision]);
+  }, [criticalInputMutation, publicationMutation, workspace?.preparation.status, workspace?.selected_revision]);
 
-  function commitWorkspace(nextWorkspace: CompanyResearchWorkspace) {
-    workspaceRef.current = nextWorkspace;
-    setWorkspace(nextWorkspace);
+  function commitRun(nextRun: CompanyResearchRun) {
+    runRef.current = nextRun;
+    workspaceRef.current = nextRun.workspace;
+    setRun(nextRun);
+  }
+
+  function readRun(includeProcess: boolean): Promise<CompanyResearchRun> {
+    return includeProcess
+      ? investmentResearchApi.companyResearchRun(projectId, true)
+      : investmentResearchApi.companyResearchRun(projectId);
   }
 
   useEffect(() => {
@@ -456,38 +546,40 @@ export default function ResearchWorkbenchPage() {
   }, []);
   useEffect(() => {
     const lifecycle = ++lifecycleRef.current; pollGenerationRef.current += 1; mutationGenerationRef.current += 1; mutationActiveRef.current = false; let active = true;
-    setLoading(true); setLoadError(null); setActionError(null); setLastSuccess(null); setProject(null); workspaceRef.current = null; previewTriggerRef.current = null; pendingPublicationFocusRef.current = null; attemptedAutomaticRevisionRef.current = null; setWorkspace(null); setActiveModule("overview"); setReviewingFact(null); setCommittedReview(null); setRetrying(false); setPublicationMutation(null); setPublicationPreview(null); setFrozenRevision(null); setMemoEditor(null); pollAttemptRef.current = 0;
-    void Promise.all([investmentResearchApi.project(projectId), investmentResearchApi.companyResearchWorkspace(projectId)]).then(([nextProject, nextWorkspace]) => {
+    setLoading(true); setLoadError(null); setActionError(null); setLastSuccess(null); runRef.current = null; workspaceRef.current = null; previewTriggerRef.current = null; criticalInputTriggerRef.current = null; pendingPublicationFocusRef.current = null; attemptedAutomaticRevisionRef.current = null; setRun(null); setProcessExpanded(false); setProcessLoading(false); setCriticalInputDrawer(null); setCriticalInputMutation(null); setCriticalInputError(null); setActiveModule("overview"); setReviewingFact(null); setCommittedReview(null); setRetrying(false); setPublicationMutation(null); setPublicationPreview(null); setFrozenRevision(null); setMemoEditor(null); pollAttemptRef.current = 0;
+    void investmentResearchApi.companyResearchRun(projectId).then((nextRun) => {
       if (!active || lifecycleRef.current !== lifecycle) return;
-      if (nextWorkspace.project_id !== projectId || nextProject.id !== projectId) throw new Error("工作区项目身份与研究项目不一致");
-      if (nextWorkspace.company.id !== nextProject.primary_company_id) throw new Error("工作区公司身份与研究项目不一致");
-      setProject(nextProject); commitWorkspace(nextWorkspace);
+      if (nextRun.project_id !== projectId || nextRun.workspace.project_id !== projectId) throw new Error("研究运行项目身份不一致");
+      if (nextRun.workspace.company.id !== nextRun.company.object_id) throw new Error("研究运行公司身份不一致");
+      commitRun(nextRun);
     }).catch((error: unknown) => { if (active && lifecycleRef.current === lifecycle) setLoadError(errorMessage(error, "研究工作区无法读取")); }).finally(() => { if (active && lifecycleRef.current === lifecycle) setLoading(false); });
     return () => { active = false; if (lifecycleRef.current === lifecycle) lifecycleRef.current += 1; pollGenerationRef.current += 1; mutationGenerationRef.current += 1; mutationActiveRef.current = false; };
   }, [projectId, reloadAttempt]);
   useEffect(() => {
-    if (!workspace || !browserVisible || reviewingFact !== null || committedReview !== null || retrying || mutationActiveRef.current || !preparationIsActive(workspace.preparation.status)) return;
+    if (!run || !browserVisible || processLoading || reviewingFact !== null || committedReview !== null || retrying || mutationActiveRef.current || !researchRunIsActive(run)) return;
     const lifecycle = lifecycleRef.current; const delay = Math.min(1000 * 2 ** pollAttemptRef.current, 8000); let active = true;
     const timer = window.setTimeout(() => {
       if (!active || document.visibilityState === "hidden" || mutationActiveRef.current) return;
       const pollGeneration = ++pollGenerationRef.current;
-      void investmentResearchApi.companyResearchWorkspace(projectId).then((nextWorkspace) => {
-        if (!active || lifecycleRef.current !== lifecycle || pollGenerationRef.current !== pollGeneration || document.visibilityState === "hidden" || mutationActiveRef.current || nextWorkspace.project_id !== projectId) return;
+      void readRun(processExpanded).then((nextRun) => {
+        if (!active || lifecycleRef.current !== lifecycle || pollGenerationRef.current !== pollGeneration || document.visibilityState === "hidden" || mutationActiveRef.current || nextRun.project_id !== projectId) return;
         pollAttemptRef.current += 1;
-        if (workspaceRef.current !== null && nextWorkspace.company.id !== workspaceRef.current.company.id) {
-          setActionError("工作区同步失败：公司身份不一致；已保留当前工作区。");
+        if (runRef.current !== null && nextRun.company.object_id !== runRef.current.company.object_id) {
+          setActionError("研究运行同步失败：公司身份不一致；已保留当前结果。");
           setPollTick((value) => value + 1);
-        } else if (workspaceRef.current === null || workspaceSnapshotIsMonotonic(workspaceRef.current, nextWorkspace)) commitWorkspace(nextWorkspace); else setPollTick((value) => value + 1);
+        } else if (runRef.current === null || researchRunSnapshotIsMonotonic(runRef.current, nextRun)
+          && workspaceSnapshotIsMonotonic(workspaceRef.current!, nextRun.workspace)) commitRun(nextRun); else setPollTick((value) => value + 1);
       }).catch(() => {
         if (active && lifecycleRef.current === lifecycle && pollGenerationRef.current === pollGeneration && document.visibilityState !== "hidden" && !mutationActiveRef.current) { pollAttemptRef.current += 1; setPollTick((value) => value + 1); }
       });
     }, delay);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [browserVisible, committedReview, pollTick, projectId, publicationMutation, retrying, reviewingFact, workspace]);
+  }, [browserVisible, committedReview, pollTick, processExpanded, processLoading, projectId, publicationMutation, retrying, reviewingFact, run]);
 
   async function synchronizeCommittedReview(pending: CommittedReview, lifecycle: number, mutation: number): Promise<void> {
     try {
-      const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId);
+      const refreshedRun = await readRun(processExpanded);
+      const refreshed = refreshedRun.workspace;
       if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
       const refreshedEvidence = artifactByKind(refreshed, "evidence_index");
       if (!reviewSuccessorIsExact(projectId, pending.previousEvidence, pending.successor, pending.factKey, pending.decision)
@@ -497,7 +589,7 @@ export default function ResearchWorkbenchPage() {
         || (workspaceRef.current !== null && !workspaceSnapshotIsMonotonic(workspaceRef.current, refreshed))) {
         throw new Error("后继工作区与已提交审核版本不一致");
       }
-      commitWorkspace(refreshed);
+      commitRun(refreshedRun);
       setCommittedReview(null);
       setActionError(null);
       setLastSuccess(`事实 ${pending.factKey} 已${pending.decision === "confirmed" ? "确认" : "驳回"}，证据版本 ${pending.successor.version}`);
@@ -533,17 +625,18 @@ export default function ResearchWorkbenchPage() {
   async function retryPreparation() {
     if (!workspace?.preparation.error?.retryable || mutationActiveRef.current) return;
     mutationActiveRef.current = true; pollGenerationRef.current += 1; const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current; setRetrying(true); setActionError(null);
-    try { await investmentResearchApi.retryCompanyResearchProject(projectId); const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId); if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { if (workspaceRef.current !== null && refreshed.company.id !== workspaceRef.current.company.id) throw new Error("重试已提交，但工作区公司身份不一致"); if (refreshed.project_id !== projectId || workspaceRef.current === null || !workspaceSnapshotIsMonotonic(workspaceRef.current, refreshed, { allowRecovery: true })) throw new Error("重试已提交，但工作区同步响应无效"); pollAttemptRef.current = 0; commitWorkspace(refreshed); } }
+    try { await investmentResearchApi.retryCompanyResearchProject(projectId); const refreshedRun = await readRun(processExpanded); const refreshed = refreshedRun.workspace; if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { if (workspaceRef.current !== null && refreshed.company.id !== workspaceRef.current.company.id) throw new Error("重试已提交，但工作区公司身份不一致"); if (refreshed.project_id !== projectId || workspaceRef.current === null || !workspaceSnapshotIsMonotonic(workspaceRef.current, refreshed, { allowRecovery: true })) throw new Error("重试已提交，但工作区同步响应无效"); pollAttemptRef.current = 0; commitRun(refreshedRun); } }
     catch (error) { if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) setActionError(errorMessage(error, "准备阶段无法重试")); }
     finally { if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { mutationActiveRef.current = false; setRetrying(false); } }
   }
 
   async function refreshPublicationConflict(current: CompanyResearchWorkspace, lifecycle: number, mutation: number): Promise<CompanyResearchWorkspace | null> {
-    const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId);
+    const refreshedRun = await readRun(processExpanded);
+    const refreshed = refreshedRun.workspace;
     if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return null;
     if (refreshed.project_id !== projectId || refreshed.company.id !== current.company.id
       || !workspaceSnapshotIsMonotonic(current, refreshed)) throw new Error("最新工作区响应无效");
-    commitWorkspace(refreshed);
+    commitRun(refreshedRun);
     return refreshed;
   }
 
@@ -552,7 +645,10 @@ export default function ResearchWorkbenchPage() {
     if (revisionId === null) throw new Error("冻结版本尚未选择");
     const replayed = await investmentResearchApi.companyResearchRevision(projectId, revisionId);
     if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) throw new Error("冻结版本请求已失效");
-    if (!frozenRevisionMatchesWorkspace(nextWorkspace, replayed)) throw new Error("冻结版本与工作区制品不一致");
+    const currentRun = runRef.current;
+    if (currentRun === null || currentRun.workspace !== nextWorkspace) throw new Error("冻结版本与研究运行身份或制品不一致");
+    if (!frozenRevisionMatchesRunArtifacts(currentRun, replayed)) throw new Error("冻结版本与工作区制品不一致");
+    if (!frozenRevisionMatchesRunIdentity(currentRun, replayed)) throw new Error("冻结版本与研究运行身份或制品不一致");
     setFrozenRevision(replayed);
     return replayed;
   }
@@ -577,7 +673,7 @@ export default function ResearchWorkbenchPage() {
     const revisionId = workspace?.selected_revision;
     if (workspace?.preparation.status !== "completed" || revisionId === null || revisionId === undefined
       || frozenRevision?.id === revisionId || attemptedAutomaticRevisionRef.current === revisionId
-      || publicationMutation !== null || mutationActiveRef.current) return;
+      || publicationMutation !== null || processLoading || mutationActiveRef.current) return;
     attemptedAutomaticRevisionRef.current = revisionId;
     mutationActiveRef.current = true; pollGenerationRef.current += 1;
     const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
@@ -592,7 +688,87 @@ export default function ResearchWorkbenchPage() {
         setPublicationMutation(null);
       }
     });
-  }, [frozenRevision?.id, projectId, publicationMutation, workspace?.preparation.status, workspace?.selected_revision]);
+  }, [frozenRevision?.id, processLoading, projectId, publicationMutation, workspace?.preparation.status, workspace?.selected_revision]);
+
+  function openCriticalInputs(button: HTMLButtonElement) {
+    const criticalInputs = runRef.current?.critical_inputs;
+    if (criticalInputs === null || criticalInputs === undefined
+      || !criticalInputs.inputs.some((input) => input.decision === "pending")
+      || mutationActiveRef.current) return;
+    criticalInputTriggerRef.current = button;
+    setCriticalInputError(null);
+    setCriticalInputDrawer({ artifactId: criticalInputs.artifact_id, focusInputKey: null });
+  }
+
+  async function decideCriticalInput(request: CriticalInputDecisionRequest) {
+    const currentRun = runRef.current;
+    const currentInputs = currentRun?.critical_inputs;
+    const currentInput = currentInputs?.inputs.find((input) => input.key === request.critical_input_key);
+    if (currentRun === null || currentInputs === null || currentInputs === undefined || currentInput === undefined
+      || currentInputs.artifact_id !== request.expected_artifact_id
+      || currentInput.input_fingerprint !== request.expected_input_fingerprint
+      || currentInput.decision !== "pending" || mutationActiveRef.current) return;
+    mutationActiveRef.current = true; pollGenerationRef.current += 1;
+    const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
+    setCriticalInputMutation(currentInput.key); setCriticalInputError(null); setActionError(null); setLastSuccess(null);
+    try {
+      const nextRun = await investmentResearchApi.decideCompanyResearchCriticalInput(projectId, request);
+      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+      const nextInputs = nextRun.critical_inputs;
+      const decided = nextInputs?.inputs.find((input) => input.key === currentInput.key);
+      if (nextRun.project_id !== projectId || nextRun.company.object_id !== currentRun.company.object_id
+        || nextInputs === null || nextInputs.version <= currentInputs.version
+        || nextInputs.artifact_id === currentInputs.artifact_id || decided === undefined
+        || decided.input_fingerprint !== currentInput.input_fingerprint || decided.decision !== request.decision
+        || !criticalDecisionRunIsTrusted(currentRun, nextRun)) {
+        throw new Error("关键输入已提交，但后继研究运行响应无效");
+      }
+      commitRun(nextRun); setMemoEditor(null); setPublicationPreview(null); setFrozenRevision(null);
+      const nextPending = nextInputs.inputs.find((input) => input.decision === "pending");
+      if (nextPending) {
+        setCriticalInputDrawer({ artifactId: nextInputs.artifact_id, focusInputKey: nextPending.key });
+        setLastSuccess(`关键输入 ${currentInput.key} 已处理，请继续确认下一项。`);
+      } else {
+        setCriticalInputDrawer(null);
+        const nextAction = publicationAction(nextRun.workspace);
+        if (nextAction) applyPublicationConflictFocus(nextAction);
+        setLastSuccess(nextAction?.kind === "preview_freeze"
+          ? "关键输入已全部处理，可以预览冻结版本。"
+          : "关键输入决定已保存，研究模型将基于新边界继续计算。");
+      }
+    } catch (error) {
+      if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+      if (publicationFailureIsConflict(error)) {
+        try {
+          const freshRun = await readRun(processExpanded);
+          if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
+          if (freshRun.project_id !== projectId || freshRun.company.object_id !== currentRun.company.object_id
+            || !criticalDecisionRunIsTrusted(currentRun, freshRun)) {
+            throw new Error("关键输入冲突后的最新研究运行响应无效");
+          }
+          commitRun(freshRun); setMemoEditor(null); setPublicationPreview(null); setFrozenRevision(null);
+          const changed = freshRun.critical_inputs?.inputs.find((input) => input.key === currentInput.key && input.decision === "pending");
+          if (freshRun.critical_inputs && changed) {
+            setCriticalInputDrawer({ artifactId: freshRun.critical_inputs.artifact_id, focusInputKey: changed.key });
+            setCriticalInputError("关键输入已更新，请基于新值重新确认。");
+          } else {
+            setCriticalInputDrawer(null);
+            const nextAction = publicationAction(freshRun.workspace);
+            if (nextAction) applyPublicationConflictFocus(nextAction);
+            setActionError("该关键输入已由其他请求处理，已载入最新研究状态。");
+          }
+        } catch (refreshError) {
+          setCriticalInputDrawer(null);
+          setActionError(errorMessage(refreshError, "关键输入冲突后无法读取最新研究状态"));
+        }
+      } else setCriticalInputError(errorMessage(error, "关键输入决定无法保存"));
+    } finally {
+      if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) {
+        mutationActiveRef.current = false;
+        setCriticalInputMutation(null);
+      }
+    }
+  }
 
   async function confirmJudgment(button: HTMLButtonElement) {
     const current = workspaceRef.current;
@@ -611,12 +787,13 @@ export default function ResearchWorkbenchPage() {
         expected_memo_content_hash: memo.content_hash,
         markdown,
       });
-      const refreshed = await investmentResearchApi.companyResearchWorkspace(projectId);
+      const refreshedRun = await readRun(processExpanded);
+      const refreshed = refreshedRun.workspace;
       if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
       if (refreshed.project_id !== projectId || refreshed.company.id !== current.company.id
         || !workspaceSnapshotIsMonotonic(current, refreshed)
         || publicationAction(refreshed)?.kind !== "preview_freeze") throw new Error("确认已提交，但后继工作区响应无效");
-      commitWorkspace(refreshed); setMemoEditor(null); setPublicationPreview(null); setFrozenRevision(null);
+      commitRun(refreshedRun); setMemoEditor(null); setPublicationPreview(null); setFrozenRevision(null);
       setLastSuccess("判断已确认，可以冻结版本。");
     } catch (error) {
       if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) {
@@ -697,18 +874,19 @@ export default function ResearchWorkbenchPage() {
         expected_lock_version: session.data.expected_lock_version,
         expected_manifest_hash: session.data.manifest_hash,
       }, session.idempotencyKey);
-      const [refreshed, replayed] = await Promise.all([
-        investmentResearchApi.companyResearchWorkspace(projectId),
+      const [refreshedRun, replayed] = await Promise.all([
+        readRun(processExpanded),
         investmentResearchApi.companyResearchRevision(projectId, published.id),
       ]);
+      const refreshed = refreshedRun.workspace;
       if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
       if (refreshed.project_id !== projectId || refreshed.company.id !== current.company.id
         || refreshed.selected_revision !== published.id || replayed.id !== published.id
         || replayed.manifest_hash !== published.manifest_hash
-        || !frozenRevisionMatchesWorkspace(refreshed, replayed)
+        || !frozenRevisionMatchesRunArtifacts(refreshedRun, replayed) || !frozenRevisionMatchesRunIdentity(refreshedRun, replayed)
         || !workspaceSnapshotIsMonotonic(current, refreshed)
         || publicationAction(refreshed)?.kind !== "replay_export") throw new Error("版本已发布，但冻结回放响应无效");
-      commitWorkspace(refreshed); setFrozenRevision(replayed); setPublicationPreview(null);
+      commitRun(refreshedRun); setFrozenRevision(replayed); setPublicationPreview(null);
       setLastSuccess("冻结版本已发布，可以回放或导出。");
       pendingPublicationFocusRef.current = "company-research-replay";
     } catch (error) {
@@ -743,7 +921,8 @@ export default function ResearchWorkbenchPage() {
       if (lifecycleRef.current !== lifecycle || mutationGenerationRef.current !== mutation) return;
       const latest = workspaceRef.current;
       if (latest === null || latest.selected_revision !== replayed.id) throw new Error("冻结版本选择已变化，请重新查看");
-      if (!frozenRevisionMatchesWorkspace(latest, replayed)) throw new Error("冻结版本与工作区制品不一致");
+      if (runRef.current === null || !frozenRevisionMatchesRunArtifacts(runRef.current, replayed)) throw new Error("冻结版本与工作区制品不一致");
+      if (runRef.current === null || !frozenRevisionMatchesRunIdentity(runRef.current, replayed)) throw new Error("冻结版本与研究运行身份或制品不一致");
       setFrozenRevision(replayed); setLastSuccess("冻结版本已载入。");
     } catch (error) {
       if (lifecycleRef.current === lifecycle && mutationGenerationRef.current === mutation) { setActionError(errorMessage(error, "冻结版本无法读取")); restoreFocus(button); }
@@ -755,7 +934,7 @@ export default function ResearchWorkbenchPage() {
   async function exportRevision(button: HTMLButtonElement) {
     const current = workspaceRef.current; const revisionId = frozenRevision?.id;
     if (current === null || frozenRevision === null || revisionId === undefined || current.selected_revision !== revisionId
-      || !frozenRevisionMatchesWorkspace(current, frozenRevision) || mutationActiveRef.current) return;
+      || runRef.current === null || !frozenRevisionMatchesRun(runRef.current, frozenRevision) || mutationActiveRef.current) return;
     mutationActiveRef.current = true; pollGenerationRef.current += 1;
     const lifecycle = lifecycleRef.current; const mutation = ++mutationGenerationRef.current;
     setPublicationMutation("export"); setActionError(null);
@@ -775,8 +954,45 @@ export default function ResearchWorkbenchPage() {
     }
   }
 
+  async function toggleProcess() {
+    if (processLoading || mutationActiveRef.current) return;
+    if (processExpanded) {
+      setProcessExpanded(false);
+      return;
+    }
+    const lifecycle = lifecycleRef.current;
+    const pollGeneration = ++pollGenerationRef.current;
+    mutationActiveRef.current = true;
+    setProcessLoading(true);
+    setActionError(null);
+    try {
+      const expandedRun = await investmentResearchApi.companyResearchRun(projectId, true);
+      if (lifecycleRef.current !== lifecycle || pollGenerationRef.current !== pollGeneration) return;
+      if (runRef.current === null || expandedRun.project_id !== projectId
+        || !researchRunSnapshotIsMonotonic(runRef.current, expandedRun)
+        || !workspaceSnapshotIsMonotonic(workspaceRef.current!, expandedRun.workspace)) throw new Error("完整研究过程响应无效");
+      commitRun(expandedRun);
+      setProcessExpanded(true);
+    } catch (error) {
+      if (lifecycleRef.current === lifecycle && pollGenerationRef.current === pollGeneration) setActionError(errorMessage(error, "完整研究过程无法读取"));
+    } finally {
+      if (lifecycleRef.current === lifecycle) {
+        mutationActiveRef.current = false;
+        setProcessLoading(false);
+      }
+    }
+  }
+
+  function openResearchArtifact(kind: WorkspaceArtifactKind) {
+    const module = ARTIFACT_MODULE[kind];
+    setActiveModule(module);
+    const basis = document.getElementById("company-research-basis") as HTMLDetailsElement | null;
+    if (basis) basis.open = true;
+    requestAnimationFrame(() => document.getElementById(`research-module-${module}`)?.focus());
+  }
+
   if (loading) return <main className="ir-page ir-workbench" aria-busy="true"><div className="ir-workbench-skeleton"><span /><span /><span /></div></main>;
-  if (loadError || !project || !workspace) return <main className="ir-page ir-workbench"><div className="ir-alert" role="alert"><h1>研究项目无法读取</h1><p>{loadError ?? "工作区响应不完整"}</p><button className="ir-button" onClick={() => setReloadAttempt((value) => value + 1)} type="button">重试读取研究项目</button><Link to="/research">返回研究目录</Link></div></main>;
+  if (loadError || !run || !workspace) return <main className="ir-page ir-workbench"><div className="ir-alert" role="alert"><h1>研究项目无法读取</h1><p>{loadError ?? "研究运行响应不完整"}</p><button className="ir-button" onClick={() => setReloadAttempt((value) => value + 1)} type="button">重试读取研究项目</button><Link to="/research">返回研究目录</Link></div></main>;
   let currentPublicationAction: CompanyResearchPublicationAction | null;
   try { currentPublicationAction = publicationAction(workspace); }
   catch (error) { return <main className="ir-page ir-workbench"><div className="ir-alert" role="alert"><h1>研究发布状态无法读取</h1><p>{errorMessage(error, "研究发布状态不一致")}</p></div></main>; }
@@ -787,19 +1003,43 @@ export default function ResearchWorkbenchPage() {
     && publicationPreview.memoId === currentMemo.id
     && publicationPreview.memoContentHash === currentMemo.content_hash
     ? publicationPreview.data : null;
-  const activeFrozenRevision = frozenRevision !== null && frozenRevisionMatchesWorkspace(workspace, frozenRevision) ? frozenRevision : null;
+  const activeFrozenRevision = frozenRevision !== null && frozenRevisionMatchesRun(run, frozenRevision) ? frozenRevision : null;
   const frozenWorkspaceIsBound = currentPublicationAction?.kind !== "replay_export" || activeFrozenRevision !== null;
-  const mutationBusy = reviewingFact !== null || committedReview !== null || retrying || publicationMutation !== null;
+  const mutationBusy = processLoading || reviewingFact !== null || committedReview !== null || retrying || publicationMutation !== null || criticalInputMutation !== null;
+  const activeCriticalInputs = criticalInputDrawer !== null && run.critical_inputs?.artifact_id === criticalInputDrawer.artifactId
+    && run.critical_inputs.inputs.some((input) => input.decision === "pending")
+    ? run.critical_inputs
+    : null;
   const activeDefinition = COMPANY_RESEARCH_MODULES.find((item) => item.key === activeModule) ?? COMPANY_RESEARCH_MODULES[0];
   const activeServerModule = workspace.modules.find((item) => item.key === activeModule);
-  const preparationError = workspace.preparation.error;
+  const frozenVerification: FrozenVerificationState = run.selected_revision === null
+    ? "draft"
+    : activeFrozenRevision !== null
+      ? "verified"
+      : publicationMutation === "replay" || attemptedAutomaticRevisionRef.current !== run.selected_revision
+        ? "verifying"
+        : "failed";
+  const primaryResultVerified = run.selected_revision === null || activeFrozenRevision !== null;
   return <main className="ir-page ir-workbench" aria-busy={mutationBusy}>
-    <header className="ir-workbench-head"><div><p className="ir-eyebrow">Independent company research</p><h1>研究工作台</h1><h2>{workspace.company.canonical_name}</h2><p>{project.security_identities.map((security) => `${security.symbol} · ${security.share_class} · ${security.exchange}`).join("；")}</p></div><span className="ir-draft-state">草稿版本 {workspace.draft.lock_version}</span></header>
-    <section className="ir-preparation" aria-live="polite"><div><strong>{PREPARATION_LABELS[workspace.preparation.status]}</strong><span>{workspace.preparation.progress}% · {workspace.preparation.current_step ?? "全部阶段"}</span></div><progress aria-label="研究准备进度" aria-valuemax={100} aria-valuemin={0} aria-valuenow={workspace.preparation.progress} max="100" value={workspace.preparation.progress}>{workspace.preparation.progress}%</progress>{preparationError ? <div className="ir-stage-error"><p>{preparationError.code}</p>{preparationError.retryable ? <button className="ir-button" disabled={mutationBusy} onClick={() => void retryPreparation()} type="button">重试 {preparationError.failed_step}</button> : null}</div> : null}</section>
+    <header className="ir-workbench-head"><div><p className="ir-eyebrow">Company research</p><h1>{run.company.canonical_name}</h1><p>{run.securities.map((security) => `${security.symbol} · ${security.share_class} · ${security.exchange}`).join("；")}</p></div><span className="ir-draft-state">资料截止 {workspaceCutoff(workspace) ? new Date(workspaceCutoff(workspace)!).toLocaleDateString("zh-CN") : "待确认"}</span></header>
+    <CompanyResearchProgress
+      frozenVerification={frozenVerification}
+      run={run}
+    />
     {actionError ? <div className="ir-alert" role="alert"><p>{actionError}</p>{committedReview ? <button className="ir-button" disabled={reviewingFact !== null} onClick={() => void retryCommittedReviewSync()} type="button">重试同步已提交审核</button> : null}</div> : null}{lastSuccess ? <p className="ir-confirmed" role="status">{lastSuccess}</p> : null}
+    {primaryResultVerified ? <CompanyResearchResult onOpenArtifact={openResearchArtifact} run={run} verifiedRevision={activeFrozenRevision} /> : <section className="ir-result-gate" role="status"><h2>{frozenVerification === "failed" ? "冻结版本验证失败" : "正在验证冻结版本"}</h2><p>{frozenVerification === "failed" ? "未验证的当前工作区结果已隐藏，请重新查看冻结版本。" : "正在核对不可变版本与全部制品哈希，完成前不会展示结果。"}</p></section>}
+    <CompanyResearchProcess
+      onProcessToggle={() => void toggleProcess()}
+      onRetry={() => void retryPreparation()}
+      processExpanded={processExpanded}
+      processLoading={processLoading}
+      retrying={retrying}
+      run={run}
+    />
     {currentPublicationAction ? <PublicationPanel
       action={currentPublicationAction}
       busy={mutationBusy}
+      criticalInputs={run.critical_inputs}
       frozenRevision={activeFrozenRevision}
       memoMarkdown={memoMarkdown}
       mutation={publicationMutation}
@@ -807,15 +1047,31 @@ export default function ResearchWorkbenchPage() {
       onConfirm={(button) => void confirmJudgment(button)}
       onExport={(button) => void exportRevision(button)}
       onMemoChange={(value) => currentMemo && setMemoEditor({ memoId: currentMemo.id, value })}
+      onOpenCriticalInputs={openCriticalInputs}
       onPreview={(button) => void previewPublication(button)}
       onPublish={(button) => void publishRevision(button)}
       onReplay={(button) => void replayRevision(button)}
       preview={activePreview}
       workspace={workspace}
     /> : null}
-    <div className="ir-workbench-grid"><nav className="ir-module-nav" aria-label="研究模块">{COMPANY_RESEARCH_MODULES.map((definition) => { const module = workspace.modules.find((item) => item.key === definition.key); return <button aria-current={activeModule === definition.key ? "page" : undefined} className={activeModule === definition.key ? "is-active" : ""} key={definition.key} onClick={() => setActiveModule(definition.key)} type="button"><span>{definition.label}</span><small>{module ? MODULE_STATE_LABELS[module.state] : "未开始"}</small></button>; })}</nav>
-      <section className="ir-module-content" aria-live="polite"><header><p className="ir-eyebrow">Company research module</p><h2>{activeDefinition.label}</h2></header>{frozenWorkspaceIsBound ? <>{activeFrozenRevision ? <p>冻结版本 {activeFrozenRevision.id}</p> : null}<ModulePanel activeModule={activeModule} moduleState={activeServerModule?.state ?? "not_started"} valuationState={activeServerModule?.valuation_state ?? "not_applicable"} workspace={workspace} reviewLocked={mutationBusy} onReview={reviewFact} lastSuccess={lastSuccess} /></> : <EmptyModule message="冻结版本尚未验证；当前工作区模块内容已隐藏。" />}</section>
-      <aside className="ir-boundary" aria-label="研究状态摘要"><p className="ir-eyebrow">Research state</p><h2>准备状态</h2><dl><div><dt>来源</dt><dd>{workspace.source_count}</dd></div><div><dt>缺口</dt><dd>{workspace.gap_count}</dd></div><div><dt>已审核事实</dt><dd>{workspace.change_summary.reviewed_fact_count}</dd></div></dl><details id="audit-details"><summary>审计详情</summary><dl><div><dt>Project</dt><dd>{workspace.project_id}</dd></div><div><dt>Preparation</dt><dd>{workspace.preparation.id}</dd></div><div><dt>Draft</dt><dd>{workspace.draft.id}</dd></div><div><dt>Selected revision</dt><dd>{workspace.selected_revision ?? "尚未选择冻结版本"}</dd></div></dl>{Object.entries(workspace.change_summary.artifact_versions).map(([kind, version]) => <span id={`audit-${encodeURIComponent(kind)}`} key={kind}>{kind} v{version}</span>)}</details></aside>
-    </div>
+    {activeCriticalInputs ? <CriticalInputDrawer
+      busy={criticalInputMutation !== null}
+      criticalInputs={activeCriticalInputs}
+      error={criticalInputError}
+      focusInputKey={criticalInputDrawer?.focusInputKey}
+      key={activeCriticalInputs.artifact_id}
+      onClose={() => { if (criticalInputMutation === null) { setCriticalInputDrawer(null); setCriticalInputError(null); } }}
+      onDecide={(request) => void decideCriticalInput(request)}
+      returnFocusTo={criticalInputTriggerRef.current}
+    /> : null}
+    <details className="ir-research-basis" id="company-research-basis" open>
+      <summary>研究依据</summary>
+      <div aria-label="研究依据" role="group">
+        <div className="ir-workbench-grid"><div className="ir-module-nav" aria-label="详细研究模块">{COMPANY_RESEARCH_MODULES.map((definition) => { const module = workspace.modules.find((item) => item.key === definition.key); return <button aria-current={activeModule === definition.key ? "page" : undefined} className={activeModule === definition.key ? "is-active" : ""} id={`research-module-${definition.key}`} key={definition.key} onClick={() => setActiveModule(definition.key)} type="button"><span>{definition.label}</span><small>{module ? MODULE_STATE_LABELS[module.state] : "未开始"}</small></button>; })}</div>
+          <section className="ir-module-content" aria-live="polite"><header><p className="ir-eyebrow">Company research module</p><h2>{activeDefinition.label}</h2></header>{frozenWorkspaceIsBound ? <>{activeFrozenRevision ? <p>冻结版本 {activeFrozenRevision.id}</p> : null}<ModulePanel activeModule={activeModule} moduleState={activeServerModule?.state ?? "not_started"} valuationState={activeServerModule?.valuation_state ?? "not_applicable"} workspace={workspace} reviewLocked={mutationBusy} onReview={reviewFact} lastSuccess={lastSuccess} /></> : <EmptyModule message="冻结版本尚未验证；当前工作区模块内容已隐藏。" />}</section>
+          <aside className="ir-boundary" aria-label="研究状态摘要"><p className="ir-eyebrow">Research state</p><h2>准备状态</h2><dl><div><dt>来源</dt><dd>{workspace.source_count}</dd></div><div><dt>缺口</dt><dd>{workspace.gap_count}</dd></div><div><dt>已审核事实</dt><dd>{workspace.change_summary.reviewed_fact_count}</dd></div></dl><details id="audit-details"><summary>审计详情</summary><dl><div><dt>Project</dt><dd>{workspace.project_id}</dd></div><div><dt>Preparation</dt><dd>{workspace.preparation.id}</dd></div><div><dt>Draft</dt><dd>{workspace.draft.id}</dd></div><div><dt>Selected revision</dt><dd>{workspace.selected_revision ?? "尚未选择冻结版本"}</dd></div></dl>{Object.entries(workspace.change_summary.artifact_versions).map(([kind, version]) => <span id={`audit-${encodeURIComponent(kind)}`} key={kind}>{kind} v{version}</span>)}</details></aside>
+        </div>
+      </div>
+    </details>
   </main>;
 }

@@ -5,12 +5,11 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
-from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import bindparam, select, text
-
+from app.models.operational import Job
+from app.underwriting.api.company_research_router import _workspace_response
 from app.underwriting.api.company_research_schemas import (
     CompanyResearchArtifactResponse,
     CompanyResearchFrozenRevisionResponse,
@@ -19,25 +18,32 @@ from app.underwriting.api.company_research_schemas import (
     CompanyResearchNumericObservationResponse,
     CompanyResearchPreparationResponse,
     CompanyResearchPublicationPreviewResponse,
+    CompanyResearchRunResponse,
     CompanyResearchWorkbenchModuleResponse,
     CompanyResearchWorkspaceCompanyResponse,
     CompanyResearchWorkspaceDraftResponse,
     CompanyResearchWorkspacePreparationResponse,
     CompanyResearchWorkspaceResponse,
 )
-from app.underwriting.api.company_research_router import _workspace_response
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
-from app.models.operational import Job
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchPreparation,
 )
-from app.underwriting.persistence.product_models import UnderwritingRevisionManifest
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
 )
+from app.underwriting.persistence.product_models import (
+    UnderwritingResearchAgendaVersion,
+    UnderwritingResearchScopeVersion,
+    UnderwritingRevisionManifest,
+)
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
+)
+from app.underwriting.services.company_research_publication import (
+    CompanyResearchPublicationService,
 )
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
@@ -46,9 +52,19 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
-from app.underwriting.hashing import canonical_hash
-from tests.underwriting.test_company_research_workbench import _model_workspace
+from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import bindparam, select, text
+
+from tests.underwriting.test_company_research_critical_input_confirmation import (
+    _ready_small_mainline_with_terminal_inputs,
+)
 from tests.underwriting.test_company_research_persistence import _tamper_row
+from tests.underwriting.test_company_research_publication import (
+    FROZEN_AT,
+    _ready_to_freeze_workspace,
+)
+from tests.underwriting.test_company_research_workbench import _model_workspace
+from tests.underwriting.test_company_research_worker import _mainline_initialized
 
 BASE = "/api/underwriting/v1/product/company-research"
 NOW = datetime(2026, 8, 28, tzinfo=UTC)
@@ -69,6 +85,328 @@ EXPECTED_MODULES = (
     "versions_changes_memo",
 )
 REJECTED_PUBLICATION_FACT_KEY = "fy2025_other_bets_revenue"
+
+
+def test_company_research_run_api_exposes_the_closed_mainline_read_model(
+    api_client, session
+) -> None:
+    initialized = _mainline_initialized(
+        session, idempotency_key="company-run-api-mainline"
+    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "building_model"
+    model_claim = worker.claim_next()
+    assert model_claim is not None
+    assert worker.run_claim(model_claim) == "awaiting_judgment_review"
+
+    response = api_client.get(
+        f"{BASE}/projects/{initialized.project.id}/run"
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == {
+        "project_id",
+        "company",
+        "securities",
+        "status",
+        "progress",
+        "started_at",
+        "updated_at",
+        "stages",
+        "recent_process",
+        "workspace",
+        "critical_inputs",
+        "selected_revision",
+    }
+    assert body["project_id"] == str(initialized.project.id)
+    assert body["status"] == "needs_input"
+    assert body["progress"] == 85
+    assert [stage["key"] for stage in body["stages"]] == [
+        "identity",
+        "sources",
+        "analysis",
+        "forecast",
+        "report",
+    ]
+    assert len(body["recent_process"]) <= 3
+    assert body["workspace"]["project_id"] == body["project_id"]
+    assert body["workspace"]["company"]["object_id"] == body["company"][
+        "object_id"
+    ]
+    assert body["critical_inputs"]["artifact_id"]
+    assert body["critical_inputs"]["inputs"]
+    assert body["selected_revision"] is None
+
+    foreign_company = deepcopy(body)
+    foreign_company["company"]["external_key"] = "FOREIGN:COMPANY"
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchRunResponse.model_validate(foreign_company)
+
+    impossible_critical_decision = deepcopy(body)
+    impossible_input = impossible_critical_decision["critical_inputs"]["inputs"][0]
+    impossible_input["decision"] = "confirmed"
+    impossible_input["replacement"] = {
+        key: value
+        for key, value in impossible_input.items()
+        if key not in {"impact", "decision", "replacement", "input_fingerprint"}
+    }
+    with pytest.raises(PydanticValidationError):
+        CompanyResearchRunResponse.model_validate(impossible_critical_decision)
+
+    full_response = api_client.get(
+        f"{BASE}/projects/{initialized.project.id}/run?include_process=true"
+    )
+    assert full_response.status_code == 200, full_response.text
+    full_process = full_response.json()["recent_process"]
+    assert 3 < len(full_process) <= 100
+    assert body["recent_process"] == full_process[-3:]
+    assert all(
+        set(item) == {
+            "schema_version",
+            "code",
+            "message",
+            "occurred_at",
+            "retry",
+        }
+        for item in full_process
+    )
+
+
+def test_company_research_critical_input_decision_api_returns_a_complete_fresh_run(
+    api_client, session
+) -> None:
+    initialized = _mainline_initialized(
+        session, idempotency_key="company-critical-input-api"
+    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "building_model"
+    model_claim = worker.claim_next()
+    assert model_claim is not None
+    assert worker.run_claim(model_claim) == "awaiting_judgment_review"
+    before = api_client.get(f"{BASE}/projects/{initialized.project.id}/run").json()
+    selected = before["critical_inputs"]["inputs"][0]
+
+    response = api_client.post(
+        f"{BASE}/projects/{initialized.project.id}/critical-input-decisions",
+        json={
+            "critical_input_key": selected["key"],
+            "expected_artifact_id": before["critical_inputs"]["artifact_id"],
+            "expected_input_fingerprint": selected["input_fingerprint"],
+            "decision": "confirmed",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    after = response.json()
+    assert set(after) == set(before)
+    assert after["project_id"] == before["project_id"]
+    assert after["critical_inputs"]["artifact_id"] != (
+        before["critical_inputs"]["artifact_id"]
+    )
+    decided = next(
+        item
+        for item in after["critical_inputs"]["inputs"]
+        if item["key"] == selected["key"]
+    )
+    assert decided["decision"] == "confirmed"
+
+    missing_replacement = api_client.post(
+        f"{BASE}/projects/{initialized.project.id}/critical-input-decisions",
+        json={
+            "critical_input_key": after["critical_inputs"]["inputs"][1]["key"],
+            "expected_artifact_id": after["critical_inputs"]["artifact_id"],
+            "expected_input_fingerprint": after["critical_inputs"]["inputs"][1][
+                "input_fingerprint"
+            ],
+            "decision": "replaced_with_user_assumption",
+            "replacement_value": "1",
+        },
+    )
+    assert missing_replacement.status_code == 422
+
+
+def test_mainline_publication_preview_api_exposes_frozen_critical_inputs(
+    api_client, session
+) -> None:
+    initialized, run = _ready_small_mainline_with_terminal_inputs(session)
+
+    response = api_client.post(
+        f"{BASE}/projects/{initialized.project.id}/publication-preview",
+        json={"expected_lock_version": run.workspace.draft.lock_version},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    critical = next(
+        item for item in body["artifacts"] if item["kind"] == "critical_inputs"
+    )
+    assert critical["id"] == str(run.critical_inputs.artifact_id)
+    assert critical["content_hash"] == run.critical_inputs.content_hash
+
+    published = api_client.post(
+        f"{BASE}/projects/{initialized.project.id}/publish",
+        headers={"Idempotency-Key": "mainline-critical-input-api-publication"},
+        json={
+            "expected_lock_version": body["expected_lock_version"],
+            "expected_manifest_hash": body["manifest_hash"],
+        },
+    )
+
+    assert published.status_code == 201, published.text
+    frozen = published.json()
+    assert next(
+        item for item in frozen["artifacts"] if item["kind"] == "critical_inputs"
+    ) == critical
+
+
+def test_company_research_run_api_reads_a_real_selected_published_revision(
+    api_client, session
+) -> None:
+    initialized, *_unused, confirmation = _ready_to_freeze_workspace(session)
+    service = CompanyResearchPublicationService(session, now=lambda: FROZEN_AT)
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=confirmation.draft_lock_version,
+    )
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="company-run-api-selected-revision",
+    )
+    session.commit()
+
+    response = api_client.get(f"{BASE}/projects/{initialized.project.id}/run")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["selected_revision"] == str(revision.id)
+    assert body["workspace"]["selected_revision"] == str(revision.id)
+    assert body["company"]["object_id"] == str(revision.company.object_id)
+    assert [item["object_id"] for item in body["securities"]] == [
+        str(item.object_id) for item in revision.securities
+    ]
+
+
+@pytest.mark.parametrize("value", ("1", "0", "TRUE", "yes"))
+def test_company_research_run_api_rejects_non_literal_boolean_query(
+    api_client, value: str
+) -> None:
+    response = api_client.get(
+        f"{BASE}/projects/{uuid4()}/run?include_process={value}"
+    )
+
+    assert response.status_code == 422
+
+
+def test_company_research_run_api_returns_not_found_for_unknown_project(
+    api_client,
+) -> None:
+    response = api_client.get(f"{BASE}/projects/{uuid4()}/run")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+def test_company_research_run_api_exposes_typed_retry_without_raw_error(
+    api_client, session
+) -> None:
+    initialized = _mainline_initialized(
+        session, idempotency_key="company-run-api-retry"
+    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    claim = worker.claim_next()
+    assert claim is not None
+    preparation = session.get(CompanyResearchPreparation, claim.preparation_id)
+    assert preparation is not None
+    retry_at = NOW + timedelta(minutes=5)
+    preparation.status = "recoverable_failure"
+    preparation.current_step = "evidence_index"
+    preparation.progress = 30
+    preparation.next_attempt_at = retry_at
+    preparation.last_error_code = "provider_unavailable"
+    preparation.updated_at = NOW
+    CompanyResearchRepository(session).append_event(
+        preparation_id=preparation.id,
+        event_type="source_provider_failed",
+        payload={"raw_error": "provider token super-secret"},
+        created_at=NOW,
+    )
+    session.commit()
+
+    response = api_client.get(f"{BASE}/projects/{initialized.project.id}/run")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["recent_process"][-1]["retry"] == {
+        "schema_version": "underwriting.v1",
+        "retryable": True,
+        "next_attempt_at": retry_at.isoformat().replace("+00:00", "Z"),
+    }
+    assert body["workspace"]["preparation"]["error"] == {
+        "schema_version": "underwriting.v1",
+        "code": "provider_unavailable",
+        "failed_step": "evidence_index",
+        "retryable": True,
+        "next_attempt_at": retry_at.isoformat().replace("+00:00", "Z"),
+    }
+    assert "super-secret" not in response.text
+
+
+def test_company_research_run_api_never_exposes_authenticated_raw_event_payload(
+    api_client, session
+) -> None:
+    initialized = _mainline_initialized(
+        session, idempotency_key="company-run-api-safe-process"
+    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "building_model"
+    model_claim = worker.claim_next()
+    assert model_claim is not None
+    assert worker.run_claim(model_claim) == "awaiting_judgment_review"
+    repository = CompanyResearchRepository(session)
+    event = repository.events(initialized.preparation.id)[-1]
+    raw_payload = {
+        "raw_error": "Authorization: Bearer super-secret",
+        "provider_request": {"query": "private company request"},
+        "filesystem_path": "/Users/analyst/private/company-source.pdf",
+    }
+    content_hash = repository.event_content_hash_v2(
+        preparation_id=event.preparation_id,
+        sequence=event.sequence,
+        previous_event_hash=event.previous_event_hash,
+        event_type=event.event_type,
+        payload=raw_payload,
+        created_at=event.created_at,
+    )
+    _tamper_row(
+        session,
+        type(event),
+        event.id,
+        payload=raw_payload,
+        content_hash=content_hash,
+    )
+
+    response = api_client.get(
+        f"{BASE}/projects/{initialized.project.id}/run?include_process=true"
+    )
+
+    assert response.status_code == 200, response.text
+    serialized = response.text
+    assert "super-secret" not in serialized
+    assert "private company request" not in serialized
+    assert "/Users/analyst" not in serialized
+    assert response.json()["recent_process"][-1]["message"] == (
+        "AI narrative unavailable; deterministic report retained"
+    )
 
 
 def _evidence_artifact_payload() -> dict:
@@ -538,6 +876,17 @@ def _preview(api_client, company_id, *, cutoff_at: datetime = NOW):
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def _focus_preview(api_client, company_id, focus_question: str):
+    return api_client.post(
+        f"{BASE}/preview",
+        json={
+            "company_id": str(company_id),
+            "cutoff_at": NOW.isoformat(),
+            "focus_question": focus_question,
+        },
+    )
 
 
 def _initialize(
@@ -1912,6 +2261,7 @@ def test_preview_initialization_and_status_expose_only_the_high_level_company_fl
         "required_return",
         "permanent_loss_limit",
         "cutoff_at",
+        "focus_question",
         "agenda",
         "preview_hash",
     }
@@ -1931,6 +2281,89 @@ def test_preview_initialization_and_status_expose_only_the_high_level_company_fl
     status = api_client.get(f"{BASE}/projects/{body['project_id']}")
     assert status.status_code == 200, status.text
     assert status.json() == body
+
+
+def test_focus_question_is_trimmed_echoed_and_bound_by_the_api(
+    api_client, session
+) -> None:
+    company_id = _alphabet_id(session)
+    baseline = _preview(api_client, company_id)
+    response = _focus_preview(
+        api_client,
+        company_id,
+        "\u3000云业务增长能否抵消搜索广告放缓？\u00a0",
+    )
+
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["focus_question"] == "云业务增长能否抵消搜索广告放缓？"
+    assert preview["preview_hash"] != baseline["preview_hash"]
+    for fixed in (
+        "strategy_version",
+        "horizon_years",
+        "base_currency",
+        "required_return",
+        "permanent_loss_limit",
+        "cutoff_at",
+        "agenda",
+    ):
+        assert preview[fixed] == baseline[fixed]
+
+    initialized = api_client.post(
+        f"{BASE}/initializations",
+        headers={"Idempotency-Key": "alphabet-api-focus-question"},
+        json={
+            "company_id": str(company_id),
+            "cutoff_at": NOW.isoformat(),
+            "focus_question": "\u3000云业务增长能否抵消搜索广告放缓？\u00a0",
+            "preview_hash": preview["preview_hash"],
+        },
+    )
+    assert initialized.status_code == 201, initialized.text
+    assert initialized.json()["preparation"]["request_hash"] == preview["preview_hash"]
+    scope = session.scalar(select(UnderwritingResearchScopeVersion))
+    agenda = session.scalar(select(UnderwritingResearchAgendaVersion))
+    assert scope is not None and agenda is not None
+    assert scope.payload["user_focus"] == preview["focus_question"]
+    assert agenda.generator_provenance["input_summary_hash"] == preview["preview_hash"]
+
+
+@pytest.mark.parametrize("focus_question", ["\u3000\u00a0", "问" * 501])
+def test_focus_question_rejects_blank_or_more_than_500_characters(
+    api_client, session, focus_question: str
+) -> None:
+    company_id = _alphabet_id(session)
+
+    response = _focus_preview(api_client, company_id, focus_question)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source_policy", "web_only"),
+        ("model_strategy", "user_override"),
+        ("required_return", "0.01"),
+        ("permanent_loss_limit", "0.99"),
+    ],
+)
+def test_focus_question_cannot_override_governed_research_defaults(
+    api_client, session, field: str, value: str
+) -> None:
+    company_id = _alphabet_id(session)
+
+    response = api_client.post(
+        f"{BASE}/preview",
+        json={
+            "company_id": str(company_id),
+            "cutoff_at": NOW.isoformat(),
+            "focus_question": "关注云业务利润率",
+            field: value,
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_initialize_requires_idempotency_and_binds_the_returned_preparation_to_preview(

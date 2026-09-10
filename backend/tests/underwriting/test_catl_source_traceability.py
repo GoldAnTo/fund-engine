@@ -3,28 +3,40 @@
 These are deliberately fixture-level tests: they protect the historical
 research input from quietly becoming a current-data snapshot.
 """
+
 from __future__ import annotations
 
-from decimal import Decimal
 import hashlib
+from decimal import Decimal
 
 import pytest
 
 from app.models.ledger import ValidationError
-from app.underwriting.fixtures.catl_baseline import load_catl_fixture, verify_source_bytes
+from app.underwriting.fixtures.catl_answerable_case import (
+    REQUIRED_INPUT_KEYS,
+    load_catl_answerable_case_fixture,
+)
+from app.underwriting.fixtures.catl_baseline import (
+    load_catl_fixture,
+    verify_source_bytes,
+)
 
 
 def test_catl_fixture_uses_fixed_cutoff_and_real_source_anchors() -> None:
     frozen = load_catl_fixture()
 
     assert frozen.cutoff.isoformat() == "2025-05-15T15:59:59+00:00"
-    assert frozen.observation("company.revenue").value == Decimal("362012554000")
-    assert frozen.observation("company.operating_cash_flow").value == Decimal("96990345000")
-    assert frozen.observation("segment.power_battery.volume_gwh").value == Decimal("381")
-    assert frozen.observation("segment.energy_storage.volume_gwh").value == Decimal("93")
+    assert frozen.observation("company.revenue").value == Decimal(362012554000)
+    assert frozen.observation("company.operating_cash_flow").value == Decimal(
+        96990345000
+    )
+    assert frozen.observation("segment.power_battery.volume_gwh").value == Decimal(381)
+    assert frozen.observation("segment.energy_storage.volume_gwh").value == Decimal(93)
 
 
-def test_every_observation_traces_to_source_and_locator_without_future_leakage() -> None:
+def test_every_observation_traces_to_source_and_locator_without_future_leakage() -> (
+    None
+):
     frozen = load_catl_fixture()
 
     for observation in frozen.observations:
@@ -33,7 +45,9 @@ def test_every_observation_traces_to_source_and_locator_without_future_leakage()
         assert observation.available_at <= frozen.cutoff
 
 
-def test_fixture_keeps_four_authoritative_sources_and_verified_annual_report_digest() -> None:
+def test_fixture_keeps_four_authoritative_sources_and_verified_annual_report_digest() -> (
+    None
+):
     frozen = load_catl_fixture()
 
     assert set(frozen.sources) == {
@@ -85,7 +99,7 @@ def test_other_business_cost_is_a_replayable_derived_residual() -> None:
     frozen = load_catl_fixture()
 
     observation = frozen.observation("segment.other.cost")
-    assert observation.value == Decimal("8436147000")
+    assert observation.value == Decimal(8436147000)
     assert observation.source_role == "derived"
     assert observation.observation_status == "derived"
     assert observation.derivation_formula == (
@@ -99,7 +113,9 @@ def test_other_business_cost_is_a_replayable_derived_residual() -> None:
         "segment.mineral_resources.cost",
     )
     frozen_value = next(
-        item for item in frozen.frozen_observations if item.definition_key == "segment.other.cost"
+        item
+        for item in frozen.frozen_observations
+        if item.definition_key == "segment.other.cost"
     )
     frozen_dimensions = dict(frozen_value.dimensions)
     assert frozen_dimensions["_derivation_formula"] == observation.derivation_formula
@@ -116,3 +132,77 @@ def test_source_digest_verification_accepts_only_matching_nonempty_bytes() -> No
         verify_source_bytes(payload, expected_sha256="0" * 64)
     with pytest.raises(ValidationError, match="must not be empty"):
         verify_source_bytes(b"", expected_sha256=digest)
+
+
+def test_required_answerable_inputs_are_present_and_unknown_is_never_zero() -> None:
+    fixture = load_catl_answerable_case_fixture()
+    facts = {item.fact_key: item for item in fixture.facts}
+
+    assert REQUIRED_INPUT_KEYS.issubset(facts)
+    for key in REQUIRED_INPUT_KEYS:
+        fact = facts[key]
+        assert type(fact.value) is Decimal
+        assert fact.value != Decimal(0)
+        assert fact.unit
+        assert fact.currency == (None if key == "basic_shares_2024" else "CNY")
+        assert fact.source_locator
+        assert fact.available_at <= fixture.cutoff
+
+
+def test_answerable_source_lineage_uses_only_frozen_issuer_and_exchange_records() -> (
+    None
+):
+    fixture = load_catl_answerable_case_fixture()
+
+    assert {item.source_role for item in fixture.facts} == {"regulatory_filing"}
+    assert all(
+        item.source_url.startswith("https://static.cninfo.com.cn/")
+        for item in fixture.facts
+    )
+    price = fixture.market_inputs.price
+    assert price.source_role == "official_exchange"
+    assert price.source_url.startswith("https://www.szse.cn/")
+    assert price.source_locator == (
+        "picupdata row 2025-11-06; fields date/open/close/low/high/change/pct/volume/turnover"
+    )
+    assert price.value == Decimal("394.68")
+    assert price.available_at <= fixture.cutoff
+
+
+def test_all_answerable_numeric_inputs_have_hash_locator_unit_and_availability() -> (
+    None
+):
+    fixture = load_catl_answerable_case_fixture()
+
+    for item in fixture.facts:
+        assert len(item.raw_hash) == 64
+        assert item.source_locator
+        assert item.unit
+        assert item.available_at <= fixture.cutoff
+    price = fixture.market_inputs.price
+    assert len(price.raw_hash) == 64
+    assert price.unit == "per_share"
+    assert price.available_at <= fixture.cutoff
+
+
+def test_answerable_working_capital_binds_equation_and_all_parent_facts() -> None:
+    fixture = load_catl_answerable_case_fixture()
+    working_capital = next(
+        item for item in fixture.facts if item.fact_key == "working_capital_change_2024"
+    )
+
+    assert working_capital.value_kind == "derived"
+    assert working_capital.equation_id == "catl.change-in-net-working-capital.v1"
+    assert working_capital.parent_fact_keys == (
+        "inventory_cash_flow_effect_2024",
+        "operating_payables_cash_flow_effect_2024",
+        "operating_receivables_cash_flow_effect_2024",
+    )
+
+
+def test_exchange_capture_hash_authenticates_the_retained_normalized_row() -> None:
+    fixture = load_catl_answerable_case_fixture()
+
+    assert fixture.market_inputs.verify_price_record_hash() == (
+        fixture.market_inputs.price.raw_hash
+    )

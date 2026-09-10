@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, status
@@ -12,12 +12,14 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.errors import (
     ConflictError as HttpConflictError,
+)
+from app.errors import (
     NotFoundError,
     ValidationFailedError,
 )
-from app.models.ledger import ConflictError as DomainConflictError, ValidationError
+from app.models.ledger import ConflictError as DomainConflictError
+from app.models.ledger import ValidationError
 from app.underwriting.api.company_research_schemas import (
-    ConfirmCompanyResearchJudgmentRequest,
     CompanyResearchAgendaModuleResponse,
     CompanyResearchArtifactResponse,
     CompanyResearchEvidenceReviewResponse,
@@ -29,20 +31,23 @@ from app.underwriting.api.company_research_schemas import (
     CompanyResearchIdentityResponse,
     CompanyResearchJudgmentConfirmationResponse,
     CompanyResearchMarkdownExportResponse,
-    CompanyResearchPublicationDraftResponse,
-    CompanyResearchPublicationPreparationResponse,
-    CompanyResearchPublicationPreviewResponse,
+    CompanyResearchPreparationErrorResponse,
     CompanyResearchPreparationResponse,
     CompanyResearchPreviewRequest,
     CompanyResearchPreviewResponse,
     CompanyResearchProjectResponse,
+    CompanyResearchPublicationDraftResponse,
+    CompanyResearchPublicationPreparationResponse,
+    CompanyResearchPublicationPreviewResponse,
+    CompanyResearchRunResponse,
     CompanyResearchSecurityIdentityResponse,
     CompanyResearchWorkbenchModuleResponse,
     CompanyResearchWorkspaceCompanyResponse,
     CompanyResearchWorkspaceDraftResponse,
     CompanyResearchWorkspacePreparationResponse,
-    CompanyResearchPreparationErrorResponse,
     CompanyResearchWorkspaceResponse,
+    ConfirmCompanyResearchJudgmentRequest,
+    DecideCompanyResearchCriticalInputRequest,
     InitializeCompanyResearchRequest,
     PreviewCompanyResearchPublicationRequest,
     PublishCompanyResearchRequest,
@@ -51,6 +56,15 @@ from app.underwriting.api.company_research_schemas import (
 from app.underwriting.api.schemas import UnderwritingErrorEnvelope
 from app.underwriting.api.transactions import commit_write
 from app.underwriting.domain.company_research import CompanyResearchPreview
+from app.underwriting.domain.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
+from app.underwriting.domain.company_research_critical_inputs import (
+    CriticalInputDecision,
+)
+from app.underwriting.services.company_research_critical_input_confirmation import (
+    CompanyResearchCriticalInputConfirmationService,
+)
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchInitialization,
     CompanyResearchInitializer,
@@ -64,9 +78,14 @@ from app.underwriting.services.company_research_publication import (
     CompanyResearchPublicationPreview,
     CompanyResearchPublicationService,
 )
+from app.underwriting.services.company_research_run import (
+    CompanyResearchRun,
+    CompanyResearchRunService,
+    authenticated_company_research_workspace,
+)
 from app.underwriting.services.company_research_workbench import (
-    CompanyResearchWorkspace,
     CompanyResearchWorkbench,
+    CompanyResearchWorkspace,
     WorkbenchArtifact,
 )
 
@@ -112,6 +131,7 @@ def _preview_response(value: CompanyResearchPreview) -> CompanyResearchPreviewRe
         required_return=value.required_return,
         permanent_loss_limit=value.permanent_loss_limit,
         cutoff_at=value.cutoff_at,
+        focus_question=value.focus_question,
         agenda=tuple(
             CompanyResearchAgendaModuleResponse(**module.canonical_payload())
             for module in value.generic_modules
@@ -160,6 +180,40 @@ def _external_source(ref: dict) -> dict:
     return {"kind": "external", **ref}
 
 
+def _evidence_source(fact: dict) -> dict:
+    if fact["value_kind"] == "derived":
+        return {
+            "kind": "evidence_derivation",
+            "equation_id": fact["equation_id"],
+            "parent_fact_keys": fact["parent_fact_keys"],
+        }
+    return _external_source(
+        {
+            "fact_key": fact["fact_key"],
+            "source_role": fact["source_role"],
+            "source_url": fact["source_url"],
+            "source_locator": fact["source_locator"],
+            "raw_hash": fact["raw_hash"],
+        }
+    )
+
+
+def _exact_evidence_fact(evidence_facts: dict, ref: dict) -> dict:
+    fact = evidence_facts.get(ref["fact_key"])
+    if not isinstance(fact, dict) or any(
+        fact.get(key) != ref.get(key)
+        for key in (
+            "fact_key",
+            "source_role",
+            "source_url",
+            "source_locator",
+            "raw_hash",
+        )
+    ):
+        raise ValidationError("reported model fact provenance is ambiguous")
+    return fact
+
+
 def _computation_source(payload: dict, equation_id: str) -> dict:
     lineage = payload.get("_lineage") or {}
     return {
@@ -175,7 +229,7 @@ def _observation(
     key: str,
     value,
     unit: str,
-    currency: str,
+    currency: str | None,
     period: str,
     state: str,
     source_ref: dict | None = None,
@@ -195,15 +249,15 @@ def _observation(
     }
 
 
-def _metric_metadata(key: str) -> tuple[str, str]:
+def _metric_metadata(key: str, value_currency: str) -> tuple[str, str]:
     lowered = key.lower()
     if "rate" in lowered or "margin" in lowered or "return" in lowered:
         return "ratio", "N/A"
     if "multiplier" in lowered or "multiple" in lowered:
         return "multiplier", "N/A"
     if "per_share" in lowered:
-        return "USD_per_share", "USD"
-    return "USD_million", "USD"
+        return f"{value_currency}_per_share", value_currency
+    return f"{value_currency}_million", value_currency
 
 
 def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
@@ -223,14 +277,9 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                     "value_kind",
                     "currency",
                     "unit",
+                    "equation_id",
+                    "parent_fact_keys",
                 }
-            }
-            source = {
-                "fact_key": fact["fact_key"],
-                "source_role": fact["source_role"],
-                "source_url": fact["source_url"],
-                "source_locator": fact["source_locator"],
-                "raw_hash": fact["raw_hash"],
             }
             projected["observation"] = _observation(
                 key=fact["metric_key"],
@@ -239,11 +288,12 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                 currency=fact["currency"],
                 period=f"{fact['period_start']}/{fact['period_end']}",
                 state=fact["value_kind"],
-                source_ref=_external_source(source),
+                source_ref=_evidence_source(fact),
             )
             facts.append(projected)
         return {**payload, "facts": facts}
     if kind == "business_map" and "_lineage" in payload:
+        evidence_facts = context.get("evidence_facts", {})
         modules = []
         for module in payload["modules"]:
             classified = []
@@ -253,14 +303,15 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                     for key, entry in item.items()
                     if key not in {"value", "currency", "unit"}
                 }
+                fact = _exact_evidence_fact(evidence_facts, item["fact_ref"])
                 projected["observation"] = _observation(
                     key=item["metric_key"],
                     value=item["value"],
                     unit=item["unit"],
                     currency=item["currency"],
                     period=f"{item['period_start']}/{item['period_end']}",
-                    state="reported",
-                    source_ref=_external_source(item["fact_ref"]),
+                    state=fact["value_kind"],
+                    source_ref=_evidence_source(fact),
                 )
                 classified.append(projected)
             modules.append({**module, "classified_evidence": classified})
@@ -280,20 +331,7 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                 for item, source in zip(
                     driver["values"], driver["fact_refs"], strict=True
                 ):
-                    fact = evidence_facts.get(source["fact_key"])
-                    if not isinstance(fact, dict) or any(
-                        fact.get(key) != source.get(key)
-                        for key in (
-                            "fact_key",
-                            "source_role",
-                            "source_url",
-                            "source_locator",
-                            "raw_hash",
-                        )
-                    ):
-                        raise ValidationError(
-                            "reported driver fact provenance is ambiguous"
-                        )
+                    fact = _exact_evidence_fact(evidence_facts, source)
                     values.append(
                         _observation(
                             key=driver["output_metric"],
@@ -301,8 +339,8 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                             unit=fact["unit"],
                             currency=fact["currency"],
                             period=f"{fact['period_start']}/{fact['period_end']}",
-                            state=state,
-                            source_ref=_external_source(source),
+                            state=fact["value_kind"],
+                            source_ref=_evidence_source(fact),
                         )
                     )
             elif state == "derived":
@@ -318,7 +356,10 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                     raise ValidationError(
                         "model driver periods cannot be mapped exactly"
                     )
-                unit, currency = _metric_metadata(driver["output_metric"])
+                unit, currency = _metric_metadata(
+                    driver["output_metric"],
+                    context.get("financial_currency", "N/A"),
+                )
                 values = [
                     _observation(
                         key=driver["output_metric"],
@@ -356,7 +397,9 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                 "working_capital_change",
                 "fcff",
             ):
-                unit, currency = _metric_metadata(metric)
+                unit, currency = _metric_metadata(
+                    metric, context.get("financial_currency", "N/A")
+                )
                 if metric in {"operating_income", "fcff"}:
                     state = "derived"
                     provenance = {"source_ref": computation}
@@ -449,13 +492,16 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
     if kind == "valuation_set":
         period = f"as_of:{context.get('cutoff', 'unknown')}"
         computation = _computation_source(payload, "valuation_set.v1")
+        financial_currency = context.get("financial_currency", "N/A")
+        base_currency = context.get("base_currency", "CNY")
 
-        def derived(key, item, unit="USD_million", currency="USD"):
+        def derived(key, item, unit=None, currency=None):
+            resolved_currency = currency or financial_currency
             return _observation(
                 key=key,
                 value=item,
-                unit=unit,
-                currency=currency,
+                unit=unit or f"{resolved_currency}_million",
+                currency=resolved_currency,
                 period=period,
                 state="derived",
                 source_ref=computation,
@@ -503,14 +549,22 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
             }
         ranges = []
         for item in payload["security_value_ranges"]:
+            value_currency = item["value_currency"]
             ranges.append(
                 {
                     "security_external_key": item["security_external_key"],
-                    "usd_per_share": value_range(
-                        item["usd_per_share"], "usd_per_share", "USD_per_share", "USD"
+                    "value_per_share": value_range(
+                        item["value_per_share"],
+                        "value_per_share",
+                        f"{value_currency}_per_share",
+                        value_currency,
                     ),
-                    "cny_return": value_range(
-                        item["cny_return"], "cny_return", "ratio", "CNY"
+                    "value_currency": value_currency,
+                    "base_currency_return": value_range(
+                        item["base_currency_return"],
+                        "base_currency_return",
+                        "ratio",
+                        base_currency,
                     ),
                 }
             )
@@ -523,15 +577,65 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                         key="required_return",
                         value=item["required_return"],
                         unit="ratio",
-                        currency="CNY",
+                        currency=base_currency,
                         period=period,
                         state="assumption",
                         assumption_key=f"{context['strategy_version']}:required_return",
                     ),
                     "achieved_return_range": value_range(
-                        item["achieved_return_range"], "achieved_return", "ratio", "CNY"
+                        item["achieved_return_range"],
+                        "achieved_return",
+                        "ratio",
+                        base_currency,
                     ),
                     "meets_required_return": item["meets_required_return"],
+                }
+            )
+        sensitivities = []
+        for item in payload.get("sensitivity_analyses", ()):
+            value_currency = item["value_currency"]
+            sensitivity_values = [
+                {
+                    "security_external_key": value["security_external_key"],
+                    "low_input_value_per_share": derived(
+                        f"{item['variable_key']}_low_value_per_share",
+                        value["low_input_value_per_share"],
+                        f"{value_currency}_per_share",
+                        value_currency,
+                    ),
+                    "high_input_value_per_share": derived(
+                        f"{item['variable_key']}_high_value_per_share",
+                        value["high_input_value_per_share"],
+                        f"{value_currency}_per_share",
+                        value_currency,
+                    ),
+                }
+                for value in item["security_values"]
+            ]
+            sensitivities.append(
+                {
+                    "variable_key": item["variable_key"],
+                    "low_input": _observation(
+                        key=f"{item['variable_key']}_low_input",
+                        value=item["low_input"],
+                        unit="ratio",
+                        currency="N/A",
+                        period=period,
+                        state="assumption",
+                        assumption_key=item["low_assumption_key"],
+                    ),
+                    "high_input": _observation(
+                        key=f"{item['variable_key']}_high_input",
+                        value=item["high_input"],
+                        unit="ratio",
+                        currency="N/A",
+                        period=period,
+                        state="assumption",
+                        assumption_key=item["high_assumption_key"],
+                    ),
+                    "security_values": sensitivity_values,
+                    "value_currency": value_currency,
+                    "equation_id": item["equation_id"],
                 }
             )
         return {
@@ -543,12 +647,13 @@ def _project_payload(value: WorkbenchArtifact, context: dict) -> dict:
                 key="required_return",
                 value=payload["required_return"],
                 unit="ratio",
-                currency="CNY",
+                currency=base_currency,
                 period=period,
                 state="assumption",
                 assumption_key=f"{context['strategy_version']}:required_return",
             ),
             "required_return_comparisons": comparisons,
+            "sensitivity_analyses": sensitivities,
         }
     return payload
 
@@ -583,9 +688,29 @@ def _workspace_response(
     evidence = raw_by_kind.get("evidence_index")
     financial = raw_by_kind.get("financial_bridge")
     driver_map = raw_by_kind.get("driver_map")
+    valuation = raw_by_kind.get("valuation_set")
+    valuation_ranges = (
+        valuation.payload.get("security_value_ranges", ()) if valuation else ()
+    )
+    evidence_currencies = (
+        {
+            fact.get("currency")
+            for fact in evidence.payload.get("facts", ())
+            if isinstance(fact, dict) and isinstance(fact.get("currency"), str)
+        }
+        if evidence
+        else set()
+    )
+    financial_currency = (
+        valuation_ranges[0].get("value_currency")
+        if valuation_ranges and isinstance(valuation_ranges[0], dict)
+        else next(iter(evidence_currencies), "N/A")
+    )
     context = {
         "cutoff": evidence.payload.get("cutoff") if evidence else None,
         "strategy_version": value.preparation.strategy_version,
+        "financial_currency": financial_currency,
+        "base_currency": "CNY",
         "forecast_years": tuple(
             row["fiscal_year"] for row in financial.payload.get("rows", ())
         )
@@ -835,41 +960,70 @@ def _require_company_research_revision(
 def _authenticated_workspace(
     db: Session, *, project_id: UUID
 ) -> CompanyResearchWorkspace:
-    value = CompanyResearchWorkbench(db, now=_now).workspace(
-        project_id=project_id,
-        allow_current_heads_after_revision=True,
-    )
-    if value.selected_revision is None:
-        return value
-    frozen = CompanyResearchPublicationService(db, now=_now).revision(
-        project_id, value.selected_revision
-    )
-    current_descriptors = tuple(
-        (item.kind, item.id, item.version, item.input_hash, item.content_hash)
-        for item in value.artifacts
-    )
-    frozen_descriptors = tuple(
-        (item.kind, item.id, item.version, item.input_hash, item.content_hash)
-        for item in frozen.artifacts
-    )
-    if (
-        value.selected_revision != frozen.id
-        or current_descriptors != frozen_descriptors
-        or (
-            value.company.id,
-            value.company.external_key,
-            value.company.canonical_name,
+    return authenticated_company_research_workspace(
+        db, project_id=project_id, now=_now
+    ).workspace
+
+
+def _run_response(value: CompanyResearchRun) -> CompanyResearchRunResponse:
+    critical_inputs = None
+    if value.critical_inputs is not None:
+        payload = CompanyResearchArtifactCodec.encode(
+            "critical_inputs", value.critical_inputs.value
         )
-        != (
-            frozen.company.object_id,
-            frozen.company.external_key,
-            frozen.company.canonical_name,
-        )
-    ):
-        raise ValidationError(
-            "company research workspace differs from its selected frozen revision"
-        )
-    return value
+        critical_inputs = {
+            "artifact_id": value.critical_inputs.artifact_id,
+            "version": value.critical_inputs.version,
+            "input_hash": value.critical_inputs.input_hash,
+            "content_hash": value.critical_inputs.content_hash,
+            "inputs": payload["inputs"],
+        }
+    return CompanyResearchRunResponse.model_validate(
+        {
+            "project_id": value.project_id,
+            "company": value.company.canonical_payload(),
+            "securities": tuple(
+                {
+                    "object_id": item.object_id,
+                    "external_key": item.external_key,
+                    "canonical_name": item.canonical_name,
+                    "symbol": item.symbol,
+                    "exchange": item.exchange,
+                    "share_class": item.share_class,
+                    "trading_currency": item.trading_currency,
+                }
+                for item in value.securities
+            ),
+            "status": value.status.value,
+            "progress": value.progress,
+            "started_at": value.started_at,
+            "updated_at": value.updated_at,
+            "stages": tuple(
+                {"key": item.key, "status": item.status.value} for item in value.stages
+            ),
+            "recent_process": tuple(
+                {
+                    "code": item.code,
+                    "message": item.message,
+                    "occurred_at": item.occurred_at,
+                    "retry": (
+                        {
+                            "retryable": item.retry.retryable,
+                            "next_attempt_at": item.retry.next_attempt_at,
+                        }
+                        if item.retry is not None
+                        else None
+                    ),
+                }
+                for item in value.recent_process
+            ),
+            "workspace": _workspace_response(
+                value.workspace, expected_project_id=value.project_id
+            ),
+            "critical_inputs": critical_inputs,
+            "selected_revision": value.selected_revision,
+        }
+    )
 
 
 @router.post(
@@ -883,7 +1037,9 @@ def preview_company_research(
     return _preview_response(
         _read(
             lambda: CompanyResearchInitializer(db, now=_now).preview(
-                company_id=payload.company_id, cutoff_at=payload.cutoff_at
+                company_id=payload.company_id,
+                cutoff_at=payload.cutoff_at,
+                focus_question=payload.focus_question,
             )
         )
     )
@@ -909,6 +1065,7 @@ def initialize_company_research(
                 preview_hash=payload.preview_hash,
                 company_id=payload.company_id,
                 cutoff_at=payload.cutoff_at,
+                focus_question=payload.focus_question,
                 idempotency_key=idempotency_key,
             ),
         )
@@ -951,6 +1108,55 @@ def retry_company_research_project(
             ),
         )
     )
+
+
+@router.get(
+    "/projects/{project_id}/run",
+    response_model=CompanyResearchRunResponse,
+    responses=READ_ERROR_RESPONSES,
+)
+def get_company_research_run(
+    project_id: UUID,
+    db: DbSession,
+    include_process: Literal["true", "false"] = "false",
+) -> CompanyResearchRunResponse:
+    return _run_response(
+        _read(
+            lambda: CompanyResearchRunService(db, now=_now).read(
+                project_id, include_process=include_process == "true"
+            )
+        )
+    )
+
+
+@router.post(
+    "/projects/{project_id}/critical-input-decisions",
+    response_model=CompanyResearchRunResponse,
+    responses={**READ_ERROR_RESPONSES, **WRITE_ERROR_RESPONSES},
+)
+def decide_company_research_critical_input(
+    project_id: UUID,
+    payload: DecideCompanyResearchCriticalInputRequest,
+    db: DbSession,
+) -> CompanyResearchRunResponse:
+    value = commit_write(
+        db,
+        lambda: _read(
+            lambda: CompanyResearchCriticalInputConfirmationService(
+                db, now=_now
+            ).decide(
+                project_id=project_id,
+                critical_input_key=payload.critical_input_key,
+                expected_artifact_id=payload.expected_artifact_id,
+                expected_input_fingerprint=payload.expected_input_fingerprint,
+                decision=CriticalInputDecision(payload.decision),
+                replacement_value=payload.replacement_value,
+                replacement_unit=payload.replacement_unit,
+                replacement_rationale=payload.replacement_rationale,
+            )
+        ),
+    )
+    return _run_response(value)
 
 
 @router.get(

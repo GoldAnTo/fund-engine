@@ -32,10 +32,21 @@ export type ProductFxSnapshot = Schemas["FXSnapshotResponse"];
 export type ProductCapitalStructure = Schemas["CapitalStructureSnapshotResponse"];
 export type ProductSecurityRights = Schemas["SecurityRightsResponse"];
 export type EffectiveSecurityRights = Schemas["EffectiveSecurityRightsResponse"];
-export type CompanyResearchPreview = Schemas["CompanyResearchPreviewResponse"];
-export type CompanyResearchProject = Schemas["CompanyResearchProjectResponse"];
-export type CompanyResearchPreviewRequest = Schemas["CompanyResearchPreviewRequest"];
-export type InitializeCompanyResearchRequest = Schemas["InitializeCompanyResearchRequest"];
+export type CompanyResearchPreview = Omit<Schemas["CompanyResearchPreviewResponse"], "strategy_version"> & {
+  strategy_version: "company-research-mainline.v1";
+  focus_question: string | null;
+};
+export type CompanyResearchProject = Omit<Schemas["CompanyResearchProjectResponse"], "preparation"> & {
+  preparation: Omit<Schemas["CompanyResearchPreparationResponse"], "strategy_version"> & {
+    strategy_version: "company-research-mainline.v1" | "company-research-default.v1";
+  };
+};
+export type CompanyResearchPreviewRequest = Schemas["CompanyResearchPreviewRequest"] & {
+  focus_question?: string | null;
+};
+export type InitializeCompanyResearchRequest = Schemas["InitializeCompanyResearchRequest"] & {
+  focus_question?: string | null;
+};
 export type CompanyResearchWorkspace = Schemas["CompanyResearchWorkspaceResponse"];
 export type ReviewCompanyEvidenceRequest = Schemas["ReviewCompanyEvidenceRequest"];
 export type CompanyResearchEvidenceReview = Schemas["CompanyResearchEvidenceReviewResponse"];
@@ -43,9 +54,174 @@ export type ConfirmCompanyResearchJudgmentRequest = Schemas["ConfirmCompanyResea
 export type PreviewCompanyResearchPublicationRequest = Schemas["PreviewCompanyResearchPublicationRequest"];
 export type PublishCompanyResearchRequest = Schemas["PublishCompanyResearchRequest"];
 export type CompanyResearchJudgmentConfirmation = Schemas["CompanyResearchJudgmentConfirmationResponse"];
-export type CompanyResearchPublicationPreview = Schemas["CompanyResearchPublicationPreviewResponse"];
-export type CompanyResearchFrozenRevision = Schemas["CompanyResearchFrozenRevisionResponse"];
+type GeneratedFrozenArtifactDescriptor = Schemas["CompanyResearchFrozenArtifactDescriptorResponse"];
+export type CompanyResearchFrozenArtifactDescriptor = Omit<GeneratedFrozenArtifactDescriptor, "kind"> & {
+  kind: GeneratedFrozenArtifactDescriptor["kind"] | "critical_inputs";
+};
+export type CompanyResearchPublicationPreview = Omit<Schemas["CompanyResearchPublicationPreviewResponse"], "artifacts"> & {
+  artifacts: CompanyResearchFrozenArtifactDescriptor[];
+};
+export type CompanyResearchFrozenRevision = Omit<Schemas["CompanyResearchFrozenRevisionResponse"], "artifacts"> & {
+  artifacts: CompanyResearchFrozenArtifactDescriptor[];
+};
 export type CompanyResearchMarkdownExport = Schemas["CompanyResearchMarkdownExportResponse"];
+
+export type CompanyResearchRunStatus =
+  | "queued"
+  | "collecting_sources"
+  | "analyzing_company"
+  | "building_forecast"
+  | "generating_report"
+  | "completed"
+  | "needs_input"
+  | "failed";
+export type CompanyResearchRunStageKey = "identity" | "sources" | "analysis" | "forecast" | "report";
+export type CompanyResearchRunStageStatus = "pending" | "active" | "completed" | "needs_input" | "failed";
+export type CompanyResearchCriticalInputKind =
+  | "source_fact"
+  | "management_guidance"
+  | "consensus"
+  | "ai_assumption"
+  | "user_assumption"
+  | "derived_calculation"
+  | "unknown";
+export type CompanyResearchCriticalInputDecision =
+  | "pending"
+  | "confirmed"
+  | "replaced_with_user_assumption"
+  | "marked_unknown"
+  | "accepted_gap";
+export type CompanyResearchCriticalSurface =
+  | "revenue"
+  | "operating_profit"
+  | "fcff"
+  | "capital_structure"
+  | "discount_terminal"
+  | "scenario"
+  | "security_value"
+  | "security_return"
+  | "answerability"
+  | "direction"
+  | "strongest_counterevidence";
+
+export interface CompanyResearchStage {
+  schema_version: "underwriting.v1";
+  key: CompanyResearchRunStageKey;
+  status: CompanyResearchRunStageStatus;
+}
+
+export interface CompanyResearchProcessEntry {
+  schema_version: "underwriting.v1";
+  code: string;
+  message: string;
+  occurred_at: string;
+  retry: null | {
+    schema_version: "underwriting.v1";
+    retryable: boolean;
+    next_attempt_at: string | null;
+  };
+}
+
+export interface CompanyResearchCriticalInputCandidate {
+  key: string;
+  kind: CompanyResearchCriticalInputKind;
+  value: string | null;
+  value_type: "decimal" | "text" | "none";
+  period: string | null;
+  unit: string | null;
+  currency: string | null;
+  source_ref: null | {
+    fact_key: string;
+    raw_hash: string;
+    source_locator: string;
+    source_role: string;
+    source_url: string;
+  };
+  provider: string | null;
+  available_at: string | null;
+  coverage: string | null;
+  rationale: string | null;
+  assumption_key: string | null;
+  equation_id: string | null;
+  parent_input_keys: string[];
+  unknown_reason: string | null;
+  gap_key: string | null;
+}
+
+export interface CompanyResearchCriticalInput extends CompanyResearchCriticalInputCandidate {
+  impact: {
+    surfaces: CompanyResearchCriticalSurface[];
+    dependency_paths: string[][];
+  };
+  decision: CompanyResearchCriticalInputDecision;
+  replacement: CompanyResearchCriticalInputCandidate | null;
+  input_fingerprint: string;
+}
+
+export interface CompanyResearchCriticalInputSet {
+  schema_version: "underwriting.v1";
+  artifact_id: string;
+  version: number;
+  input_hash: string;
+  content_hash: string;
+  inputs: CompanyResearchCriticalInput[];
+}
+
+export interface CompanyResearchNarrativeClaim {
+  text: string;
+  citations: string[];
+}
+
+export interface CompanyResearchMemoNarrative {
+  schema_version: "company-research-memo-narrative.v1" | "company-research-memo-narrative.v2";
+  summary: CompanyResearchNarrativeClaim;
+  business_explanation: CompanyResearchNarrativeClaim;
+  driver_explanations: Array<CompanyResearchNarrativeClaim & { driver_key: string }>;
+  counterevidence: CompanyResearchNarrativeClaim[];
+  gaps: CompanyResearchNarrativeClaim[];
+  next_checks: CompanyResearchNarrativeClaim[];
+  generator_kind: "authenticated_ai" | "deterministic_fallback";
+  prompt_version: string;
+  input_hash: string;
+  output_hash: string;
+  provider: string | null;
+  model: string | null;
+  prompt_hash: string | null;
+  provider_model_identifier: string | null;
+}
+
+type WithCompanyResearchNarrative<Artifact> = Artifact extends { kind: "memo"; payload: infer Payload }
+  ? Omit<Artifact, "payload"> & { payload: Payload & { narrative?: CompanyResearchMemoNarrative | null } }
+  : Artifact;
+export type CompanyResearchRunWorkspace = Omit<CompanyResearchWorkspace, "artifacts"> & {
+  artifacts: Array<WithCompanyResearchNarrative<CompanyResearchWorkspace["artifacts"][number]>>;
+};
+
+export interface CompanyResearchRun {
+  project_id: string;
+  company: CompanyResearchPreview["company"];
+  securities: CompanyResearchPreview["securities"];
+  status: CompanyResearchRunStatus;
+  progress: number;
+  started_at: string;
+  updated_at: string;
+  stages: CompanyResearchStage[];
+  recent_process: CompanyResearchProcessEntry[];
+  workspace: CompanyResearchRunWorkspace;
+  critical_inputs: CompanyResearchCriticalInputSet | null;
+  selected_revision: string | null;
+}
+
+export interface CriticalInputDecisionRequest {
+  schema_version: "underwriting.v1";
+  critical_input_key: string;
+  expected_artifact_id: string;
+  expected_input_fingerprint: string;
+  decision: Exclude<CompanyResearchCriticalInputDecision, "pending">;
+  replacement_value?: string | null;
+  replacement_unit?: string | null;
+  replacement_rationale?: string | null;
+}
 
 type ErrorDetails = NonNullable<Schemas["UnderwritingErrorBody"]["details"]>;
 
@@ -120,7 +296,7 @@ function isNullableDateTime(value: unknown): value is string | null {
 function canonicalDecimal(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const match = /^([+-]?)(\d+)(?:\.(\d*))?$/.exec(value.trim());
-  if (!match || match[2] === undefined) return null;
+  if (!match) return null;
   const integer = match[2].replace(/^0+(?=\d)/, "");
   const fraction = (match[3] ?? "").replace(/0+$/, "");
   const zero = integer === "0" && fraction === "";
@@ -153,8 +329,8 @@ function compareNonNegativeDecimals(left: unknown, right: unknown): number {
   const leftValue = canonicalDecimal(left);
   const rightValue = canonicalDecimal(right);
   if (leftValue === null || rightValue === null || leftValue.startsWith("-") || rightValue.startsWith("-")) return -1;
-  const [leftInteger = "", leftFraction = ""] = leftValue.split(".");
-  const [rightInteger = "", rightFraction = ""] = rightValue.split(".");
+  const [leftInteger, leftFraction = ""] = leftValue.split(".");
+  const [rightInteger, rightFraction = ""] = rightValue.split(".");
   if (leftInteger.length !== rightInteger.length) return leftInteger.length > rightInteger.length ? 1 : -1;
   if (leftInteger !== rightInteger) return leftInteger > rightInteger ? 1 : -1;
   const length = Math.max(leftFraction.length, rightFraction.length);
@@ -685,6 +861,16 @@ const COMPANY_RESEARCH_STEPS = [
   "memo",
 ] as const;
 const COMPANY_RESEARCH_PREPARATION_STEPS = [...COMPANY_RESEARCH_STEPS, "model_bundle"] as const;
+const COMPANY_RESEARCH_STRATEGY_VERSIONS = new Set([
+  "company-research-mainline.v1",
+  "company-research-default.v1",
+]);
+const PYTHON_UNICODE_WHITESPACE = /^[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu;
+
+export function normalizeFocusQuestion(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  return value.replace(PYTHON_UNICODE_WHITESPACE, "").normalize("NFC");
+}
 
 function isCompanyResearchIdentity(value: unknown): boolean {
   return isProductDto(value)
@@ -705,17 +891,23 @@ function isCompanyResearchSecurity(value: unknown): boolean {
 
 function isCompanyResearchPreview(value: unknown): value is CompanyResearchPreview {
   if (!isProductDto(value)
-    || !hasExactKeys(value, ["schema_version", "company", "securities", "strategy_version", "horizon_years", "base_currency", "required_return", "permanent_loss_limit", "cutoff_at", "agenda", "preview_hash"])
+    || !hasExactKeys(value, ["schema_version", "company", "securities", "strategy_version", "horizon_years", "base_currency", "required_return", "permanent_loss_limit", "cutoff_at", "focus_question", "agenda", "preview_hash"])
     || !isCompanyResearchIdentity(value.company)
     || !Array.isArray(value.securities) || value.securities.length === 0
     || !value.securities.every(isCompanyResearchSecurity)
     || new Set(value.securities.map((security) => security.object_id)).size !== value.securities.length
     || new Set(value.securities.map((security) => security.external_key)).size !== value.securities.length
-    || value.strategy_version !== "company-research-default.v1"
+    || value.strategy_version !== "company-research-mainline.v1"
     || value.horizon_years !== 5 || value.base_currency !== "CNY"
     || !sameDecimal(value.required_return, "0.12")
     || !sameDecimal(value.permanent_loss_limit, "0.25")
-    || !isDateTime(value.cutoff_at) || !isHash(value.preview_hash)
+    || !isDateTime(value.cutoff_at)
+    || !(value.focus_question === null
+      || (typeof value.focus_question === "string"
+        && value.focus_question.length > 0
+        && normalizeFocusQuestion(value.focus_question) === value.focus_question
+        && Array.from(value.focus_question).length <= 500))
+    || !isHash(value.preview_hash)
     || !Array.isArray(value.agenda) || value.agenda.length !== COMPANY_RESEARCH_AGENDA_KEYS.length) return false;
   if (!value.agenda.every((module) => isProductDto(module)
     && hasExactKeys(module, ["schema_version", "key", "label"])
@@ -761,7 +953,8 @@ function isCompanyResearchProject(value: unknown): value is CompanyResearchProje
     || !hasExactKeys(value.preparation, ["schema_version", "id", "project_id", "request_hash", "strategy_version", "status", "current_step", "progress", "attempt", "next_attempt_at", "last_error_code"])
     || !isUuid(value.preparation.id) || value.preparation.project_id !== value.project_id
     || !isHash(value.preparation.request_hash)
-    || value.preparation.strategy_version !== "company-research-default.v1"
+    || typeof value.preparation.strategy_version !== "string"
+    || !COMPANY_RESEARCH_STRATEGY_VERSIONS.has(value.preparation.strategy_version)
     || !isNonNegativeInteger(value.preparation.progress)
     || value.preparation.progress > 100 || !isPositiveInteger(value.preparation.attempt)
     || !isNullableDateTime(value.preparation.next_attempt_at)
@@ -843,6 +1036,34 @@ function isNumericObservation(value: unknown): boolean {
   return isNonEmptyString(value.gap_key);
 }
 
+function isEvidenceDerivationSource(value: unknown): boolean {
+  return isRecord(value)
+    && value.kind === "evidence_derivation"
+    && hasExactKeys(value, ["kind", "equation_id", "parent_fact_keys"])
+    && isNonEmptyString(value.equation_id)
+    && isNonEmptyStrings(value.parent_fact_keys)
+    && new Set(value.parent_fact_keys).size === value.parent_fact_keys.length;
+}
+
+function isModelInputObservation(value: unknown): boolean {
+  if (!isRecord(value)
+    || !hasExactKeys(value, ["key", "value", "unit", "currency", "period", "state", "source_ref", "gap_key", "assumption_key"])
+    || !isNonEmptyString(value.key) || !isCanonicalDecimal(value.value)
+    || !isNonEmptyString(value.unit)
+    || !(value.currency === null || isNonEmptyString(value.currency))
+    || !isNonEmptyString(value.period)
+    || !["reported", "derived", "assumption", "gap"].includes(String(value.state))) return false;
+  const paths = [value.source_ref, value.gap_key, value.assumption_key]
+    .filter((item) => item !== null).length;
+  if (paths !== 1) return false;
+  if (value.state === "reported") return isRecord(value.source_ref)
+    && value.source_ref.kind === "external" && isNumericSource(value.source_ref);
+  if (value.state === "derived") return isNumericSource(value.source_ref)
+    || isEvidenceDerivationSource(value.source_ref);
+  if (value.state === "assumption") return isNonEmptyString(value.assumption_key);
+  return isNonEmptyString(value.gap_key);
+}
+
 function isCompanyResearchLineage(
   value: unknown,
   expectedParents: readonly string[],
@@ -880,7 +1101,7 @@ function isCompanyResearchLineage(
   if (!requiresMarket) return true;
   const roles = new Set(bindings.map((binding) => isRecord(binding) ? binding.snapshot_kind : null));
   return snapshotIds.length > 0
-    && ["price", "fx", "capital_structure", "security_rights"].every((role) => roles.has(role));
+    && ["price", "capital_structure", "security_rights"].every((role) => roles.has(role));
 }
 
 function isEvidenceFact(value: unknown): value is Record<string, unknown> {
@@ -899,18 +1120,70 @@ function isEvidenceFact(value: unknown): value is Record<string, unknown> {
     && (!("review_decision" in value) || value.review_decision === "confirmed" || value.review_decision === "rejected");
 }
 
-function isEvidencePayload(value: unknown, sourceRefs: Record<string, unknown>[]): boolean {
+function isGovernedEvidenceObservation(value: unknown): boolean {
   if (!isRecord(value)
-    || !hasExactKeys(value, ["fixture_content_hash", "cutoff", "company_external_key", "security_external_keys", "facts"])
+    || !hasExactKeys(value, ["key", "value", "unit", "currency", "period", "state", "source_ref", "gap_key", "assumption_key"])
+    || !isNonEmptyString(value.key) || !isCanonicalDecimal(value.value)
+    || !isNonEmptyString(value.unit)
+    || !(value.currency === null || isNonEmptyString(value.currency))
+    || !isNonEmptyString(value.period)
+    || !["reported", "derived"].includes(String(value.state))
+    || value.gap_key !== null || value.assumption_key !== null
+    || !isRecord(value.source_ref)) return false;
+  if (value.state === "reported") {
+    return value.source_ref.kind === "external" && isNumericSource(value.source_ref);
+  }
+  return value.source_ref.kind === "evidence_derivation"
+    && hasExactKeys(value.source_ref, ["kind", "equation_id", "parent_fact_keys"])
+    && isNonEmptyString(value.source_ref.equation_id)
+    && isNonEmptyStrings(value.source_ref.parent_fact_keys)
+    && new Set(value.source_ref.parent_fact_keys).size === value.source_ref.parent_fact_keys.length;
+}
+
+function isGovernedEvidenceFact(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const keys = ["fact_key", "company_external_key", "business_module", "metric_key", "observation", "period_start", "period_end", "published_at", "available_at", "source_role", "source_url", "source_locator", "raw_hash"];
+  return (hasExactKeys(value, keys) || hasExactKeys(value, [...keys, "review_decision"]))
+    && isNonEmptyString(value.fact_key) && isNonEmptyString(value.company_external_key)
+    && isNonEmptyString(value.business_module) && isNonEmptyString(value.metric_key)
+    && isGovernedEvidenceObservation(value.observation)
+    && isDateOnly(value.period_start) && isDateOnly(value.period_end)
+    && value.period_start <= value.period_end
+    && isDateTime(value.published_at) && isDateTime(value.available_at)
+    && Date.parse(value.published_at) <= Date.parse(value.available_at)
+    && isNonEmptyString(value.source_role) && isNonEmptyString(value.source_url)
+    && isNonEmptyString(value.source_locator) && isHash(value.raw_hash)
+    && (!("review_decision" in value) || value.review_decision === "confirmed" || value.review_decision === "rejected");
+}
+
+function isEvidencePayload(value: unknown, sourceRefs: Record<string, unknown>[]): boolean {
+  const baseKeys = ["fixture_content_hash", "cutoff", "company_external_key", "security_external_keys", "facts"];
+  const governedKeys = [...baseKeys, "counterevidence_fact_keys", "next_verification_events"];
+  const governed = isRecord(value) && hasExactKeys(value, governedKeys);
+  if (!isRecord(value)
+    || !(hasExactKeys(value, baseKeys) || hasExactKeys(value, governedKeys))
     || !isHash(value.fixture_content_hash) || !isDateTime(value.cutoff)
     || !isNonEmptyString(value.company_external_key) || !isNonEmptyStrings(value.security_external_keys)
     || new Set(value.security_external_keys).size !== value.security_external_keys.length
-    || !Array.isArray(value.facts) || value.facts.length === 0 || !value.facts.every(isEvidenceFact)) return false;
+    || !Array.isArray(value.facts) || value.facts.length === 0
+    || !value.facts.every(governed ? isGovernedEvidenceFact : isEvidenceFact)) return false;
   const keys = value.facts.map((fact) => isRecord(fact) ? fact.fact_key : null);
   if (new Set(keys).size !== value.facts.length) return false;
+  if (hasExactKeys(value, governedKeys)
+    && (!isNonEmptyStrings(value.counterevidence_fact_keys)
+      || new Set(value.counterevidence_fact_keys).size !== value.counterevidence_fact_keys.length
+      || !value.counterevidence_fact_keys.every((key) => keys.includes(key))
+      || !isNonEmptyStrings(value.next_verification_events)
+      || new Set(value.next_verification_events).size !== value.next_verification_events.length)) return false;
   const parents = new Set(sourceRefs.map(sourceRefIdentity));
   return value.facts.every((fact) => {
     if (!isRecord(fact) || !isRecord(fact.observation) || !isRecord(fact.observation.source_ref)) return false;
+    if (governed && fact.observation.source_ref.kind === "evidence_derivation") {
+      const parentKeys = fact.observation.source_ref.parent_fact_keys;
+      return Array.isArray(parentKeys)
+        && !parentKeys.includes(fact.fact_key)
+        && parentKeys.every((key) => keys.includes(key));
+    }
     const external = { ...fact.observation.source_ref };
     delete external.kind;
     return parents.has(sourceRefIdentity(external));
@@ -959,7 +1232,7 @@ function isBusinessMapPayload(value: unknown): boolean {
         && hasExactKeys(observation, ["fact_ref", "metric_key", "category", "observation", "period_start", "period_end"])
         && isCompanyResearchSourceRef(observation.fact_ref, true) && isNonEmptyString(observation.metric_key)
         && ["revenue", "cost", "capital"].includes(String(observation.category))
-        && isNumericObservation(observation.observation) && isDateOnly(observation.period_start)
+        && isModelInputObservation(observation.observation) && isDateOnly(observation.period_start)
         && isDateOnly(observation.period_end) && observation.period_start <= observation.period_end));
 }
 
@@ -974,7 +1247,7 @@ function isDriverMapPayload(value: unknown): boolean {
       && Array.isArray(driver.assumption_refs) && driver.assumption_refs.every((ref) => isCompanyResearchSourceRef(ref, true))
       && isNonEmptyString(driver.equation) && isNonEmptyString(driver.output_metric)
       && (driver.equation_id === null || isNonEmptyString(driver.equation_id))
-      && Array.isArray(driver.values) && driver.values.length > 0 && driver.values.every(isNumericObservation)
+      && Array.isArray(driver.values) && driver.values.length > 0 && driver.values.every(isModelInputObservation)
       && (driver.assumption_rationale === null || isNonEmptyString(driver.assumption_rationale))
       && (driver.assumption_equation === null || isNonEmptyString(driver.assumption_equation)));
 }
@@ -1017,9 +1290,25 @@ function isValueRange(value: unknown): boolean {
     && isNumericObservation(value.minimum) && isNumericObservation(value.maximum);
 }
 
-function isValuationSetPayload(value: unknown): boolean {
+export function isValuationSetPayload(value: unknown): boolean {
+  if (isRecord(value) && Array.isArray(value.security_value_ranges)) {
+    let legacyV1 = false;
+    value.security_value_ranges.forEach((item) => {
+      if (!isRecord(item)
+        || !hasExactKeys(item, ["security_external_key", "usd_per_share", "cny_return"])) return;
+      item.value_per_share = item.usd_per_share;
+      item.value_currency = "USD";
+      item.base_currency_return = item.cny_return;
+      delete item.usd_per_share;
+      delete item.cny_return;
+      legacyV1 = true;
+    });
+    if (legacyV1 && !Object.prototype.hasOwnProperty.call(value, "sensitivity_analyses")) {
+      value.sensitivity_analyses = [];
+    }
+  }
   if (!isRecord(value)
-    || !hasExactKeys(value, ["scenario_dcf_values", "reverse_dcf", "security_value_ranges", "required_return", "required_return_comparisons", "_lineage"])
+    || !hasExactKeys(value, ["scenario_dcf_values", "reverse_dcf", "security_value_ranges", "required_return", "required_return_comparisons", "sensitivity_analyses", "_lineage"])
     || !isCompanyResearchLineage(value._lineage, ["scenario_set", "financial_bridge"], true)
     || !Array.isArray(value.scenario_dcf_values) || value.scenario_dcf_values.length !== 3
     || !value.scenario_dcf_values.every((item) => isRecord(item)
@@ -1032,17 +1321,36 @@ function isValuationSetPayload(value: unknown): boolean {
       && isNumericObservation(value.reverse_dcf.iteration_count))
     || !Array.isArray(value.security_value_ranges) || value.security_value_ranges.length === 0
     || !value.security_value_ranges.every((item) => isRecord(item)
-      && hasExactKeys(item, ["security_external_key", "usd_per_share", "cny_return"])
-      && isNonEmptyString(item.security_external_key) && isValueRange(item.usd_per_share) && isValueRange(item.cny_return))
+      && hasExactKeys(item, ["security_external_key", "value_per_share", "value_currency", "base_currency_return"])
+      && isNonEmptyString(item.security_external_key) && isNonEmptyString(item.value_currency)
+      && isValueRange(item.value_per_share) && isValueRange(item.base_currency_return))
     || !isNumericObservation(value.required_return)
     || !Array.isArray(value.required_return_comparisons) || value.required_return_comparisons.length === 0
     || !value.required_return_comparisons.every((item) => isRecord(item)
       && hasExactKeys(item, ["security_external_key", "required_return", "achieved_return_range", "meets_required_return"])
       && isNonEmptyString(item.security_external_key) && isNumericObservation(item.required_return)
       && isValueRange(item.achieved_return_range) && typeof item.meets_required_return === "boolean")) return false;
+  if (!Array.isArray(value.sensitivity_analyses)
+    || !value.sensitivity_analyses.every((item) => isRecord(item)
+      && hasExactKeys(item, ["variable_key", "low_input", "high_input", "security_values", "value_currency", "equation_id"])
+      && ["required_return", "terminal_growth"].includes(String(item.variable_key))
+      && isNumericObservation(item.low_input) && isNumericObservation(item.high_input)
+      && isNonEmptyString(item.value_currency) && item.equation_id === "dcf_sensitivity.v1"
+      && Array.isArray(item.security_values) && item.security_values.length > 0
+      && item.security_values.every((security) => isRecord(security)
+        && hasExactKeys(security, ["security_external_key", "low_input_value_per_share", "high_input_value_per_share"])
+        && isNonEmptyString(security.security_external_key)
+        && isNumericObservation(security.low_input_value_per_share)
+        && isNumericObservation(security.high_input_value_per_share)))) return false;
   const values = value.security_value_ranges.map((item) => isRecord(item) ? item.security_external_key : null);
   const comparisons = value.required_return_comparisons.map((item) => isRecord(item) ? item.security_external_key : null);
-  return sameStringSets(values.filter(isNonEmptyString), comparisons.filter(isNonEmptyString));
+  const currenciesNeedFx = value.security_value_ranges.some((item) => isRecord(item)
+    && isRecord(item.base_currency_return) && isRecord(item.base_currency_return.minimum)
+    && item.value_currency !== item.base_currency_return.minimum.currency);
+  const bindings = isRecord(value._lineage) && Array.isArray(value._lineage.market_snapshot_bindings)
+    ? value._lineage.market_snapshot_bindings : [];
+  return sameStringSets(values.filter(isNonEmptyString), comparisons.filter(isNonEmptyString))
+    && (!currenciesNeedFx || bindings.some((binding) => isRecord(binding) && binding.snapshot_kind === "fx"));
 }
 
 function isJudgmentContextPayload(value: unknown): boolean {
@@ -1061,16 +1369,60 @@ function isJudgmentContextPayload(value: unknown): boolean {
     && isStringArray(value.next_verification_events);
 }
 
+const COMPANY_RESEARCH_NARRATIVE_KEY_PATTERN = /^[a-z][a-z0-9_.:-]*$/;
+
+function isCompanyResearchNarrativeClaim(value: unknown, driver = false): boolean {
+  const keys = driver ? ["text", "citations", "driver_key"] : ["text", "citations"];
+  if (!isRecord(value) || !hasExactKeys(value, keys)
+    || !isCanonicalText(value.text)
+    || !Array.isArray(value.citations) || value.citations.length === 0
+    || !value.citations.every((citation) => isCanonicalText(citation) && COMPANY_RESEARCH_NARRATIVE_KEY_PATTERN.test(citation))
+    || new Set(value.citations).size !== value.citations.length
+    || !sameOrderedStrings(value.citations, [...value.citations].sort())) return false;
+  return !driver || isCanonicalText(value.driver_key) && CRITICAL_INPUT_KEY_PATTERN.test(value.driver_key);
+}
+
+function isCompanyResearchMemoNarrative(value: unknown): value is CompanyResearchMemoNarrative {
+  if (!isRecord(value)
+    || !hasExactKeys(value, [
+      "schema_version", "summary", "business_explanation", "driver_explanations",
+      "counterevidence", "gaps", "next_checks", "generator_kind", "prompt_version",
+      "input_hash", "output_hash", "provider", "model", "prompt_hash", "provider_model_identifier",
+    ])
+    || !["company-research-memo-narrative.v1", "company-research-memo-narrative.v2"].includes(String(value.schema_version))
+    || !isCompanyResearchNarrativeClaim(value.summary) || !isCompanyResearchNarrativeClaim(value.business_explanation)
+    || !Array.isArray(value.driver_explanations) || value.driver_explanations.length !== 3
+    || !value.driver_explanations.every((item) => isCompanyResearchNarrativeClaim(item, true))
+    || new Set(value.driver_explanations.map((item) => isRecord(item) ? item.driver_key : null)).size !== 3
+    || !Array.isArray(value.counterevidence) || !value.counterevidence.every((item) => isCompanyResearchNarrativeClaim(item))
+    || !Array.isArray(value.gaps) || !value.gaps.every((item) => isCompanyResearchNarrativeClaim(item))
+    || !Array.isArray(value.next_checks) || !value.next_checks.every((item) => isCompanyResearchNarrativeClaim(item))
+    || !["authenticated_ai", "deterministic_fallback"].includes(String(value.generator_kind))
+    || !isCanonicalText(value.prompt_version) || !isHash(value.input_hash) || !isHash(value.output_hash)
+    || !isNullableCanonicalText(value.provider) || !isNullableCanonicalText(value.model)
+    || !(value.prompt_hash === null || isHash(value.prompt_hash))
+    || !isNullableCanonicalText(value.provider_model_identifier)) return false;
+  if (value.schema_version === "company-research-memo-narrative.v1") {
+    return isCanonicalText(value.provider_model_identifier)
+      && value.provider === null && value.model === null && value.prompt_hash === null;
+  }
+  return isCanonicalText(value.provider) && isCanonicalText(value.model)
+    && isHash(value.prompt_hash) && value.provider_model_identifier === null;
+}
+
 function isMemoPayload(value: unknown): boolean {
   const commonKeys = ["assessment_status", "business_map_ref", "driver_map_ref", "financial_bridge_ref", "scenario_set_ref", "valuation_set_ref", "gap_keys", "strongest_counterevidence", "next_verification_events", "candidate_status", "_lineage"];
+  const payloadKeys = isRecord(value) && Object.prototype.hasOwnProperty.call(value, "narrative")
+    ? [...commonKeys, "narrative"] : commonKeys;
   if (!isRecord(value)
-    || !(value.candidate_status === "machine_draft" && hasExactKeys(value, commonKeys)
-      || value.candidate_status === "human_confirmed" && hasExactKeys(value, [...commonKeys, "reviewer", "markdown"]))
+    || !(value.candidate_status === "machine_draft" && hasExactKeys(value, payloadKeys)
+      || value.candidate_status === "human_confirmed" && hasExactKeys(value, [...payloadKeys, "reviewer", "markdown"]))
     || !["not_answerable", "partially_answerable", "answerable"].includes(String(value.assessment_status))
     || !isStringArray(value.gap_keys)
     || !Array.isArray(value.strongest_counterevidence)
     || !value.strongest_counterevidence.every((ref) => isCompanyResearchSourceRef(ref, true))
     || !isStringArray(value.next_verification_events)
+    || !(value.narrative === undefined || value.narrative === null || isCompanyResearchMemoNarrative(value.narrative))
     || !isCompanyResearchLineage(value._lineage, ["judgment_context"])) return false;
   if (value.candidate_status === "human_confirmed"
     && (value.reviewer !== "human:local-user"
@@ -1157,7 +1509,7 @@ function collectNumericObservations(value: unknown, observations: Record<string,
     return observations;
   }
   if (!isRecord(value)) return observations;
-  if (isNumericObservation(value)) {
+  if (isNumericObservation(value) || isModelInputObservation(value)) {
     observations.push(value);
     return observations;
   }
@@ -1199,6 +1551,7 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
   const artifactVersions = isRecord(summary) ? summary.artifact_versions : null;
   if (!hasExactKeys(summary, ["artifact_versions", "reviewed_fact_count"])
     || !isRecord(artifactVersions)
+    || !Object.keys(artifactVersions).every((kind) => kind === "critical_inputs" || COMPANY_RESEARCH_ARTIFACT_KINDS.has(kind as typeof COMPANY_RESEARCH_STEPS[number]))
     || !Object.values(artifactVersions).every(isPositiveInteger)
     || !isNonNegativeInteger(summary.reviewed_fact_count)) return false;
   const artifacts = value.artifacts.filter(isRecord);
@@ -1210,7 +1563,7 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     kinds.add(String(artifact.kind));
   }
   if (kinds.has("valuation_set") && !kinds.has("scenario_set")) return false;
-  if (!sameStringSets(Object.keys(artifactVersions), [...kinds])) return false;
+  if (!sameStringSets(Object.keys(artifactVersions).filter((kind) => kind !== "critical_inputs"), [...kinds])) return false;
   if (artifacts.some((artifact) => artifactVersions[String(artifact.kind)] !== artifact.version)) return false;
   const exactRef = (ref: Record<string, unknown>, registryShape: boolean): boolean => {
     const id = String(registryShape ? ref.id : ref.artifact_id);
@@ -1253,7 +1606,7 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
       const factObservation = fact && isRecord(fact.observation) ? fact.observation : null;
       const source = factObservation && isRecord(factObservation.source_ref) ? factObservation.source_ref : null;
       if (factObservation === null || source === null
-        || (artifact.kind !== "evidence_index" && fact?.review_decision !== "confirmed")
+        || (artifact.kind !== "evidence_index" && artifactVersions.critical_inputs === undefined && fact?.review_decision !== "confirmed")
         || observation.value !== factObservation.value
         || observation.unit !== factObservation.unit
         || observation.currency !== factObservation.currency
@@ -1277,7 +1630,6 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
     const refs = item.artifact_refs.filter(isRecord);
     const refKinds = refs.map((ref) => String(ref.kind));
     const allowed = COMPANY_RESEARCH_MODULE_ARTIFACTS[item.key];
-    if (!allowed) return false;
     const expectedKinds = item.key === "scenarios_valuation_implied_expectations" && item.valuation_state === "blocked"
       ? ["scenario_set"] : allowed;
     if (!refs.every((ref) => exactRef(ref, true))
@@ -1296,6 +1648,479 @@ function isCompanyResearchWorkspace(value: unknown): value is CompanyResearchWor
   });
 }
 
+const COMPANY_RESEARCH_RUN_STATUSES = new Set<CompanyResearchRunStatus>([
+  "queued", "collecting_sources", "analyzing_company", "building_forecast",
+  "generating_report", "completed", "needs_input", "failed",
+]);
+const COMPANY_RESEARCH_RUN_STAGE_KEYS: readonly CompanyResearchRunStageKey[] = [
+  "identity", "sources", "analysis", "forecast", "report",
+];
+const COMPANY_RESEARCH_RUN_STAGE_STATUSES = new Set<CompanyResearchRunStageStatus>([
+  "pending", "active", "completed", "needs_input", "failed",
+]);
+const COMPANY_RESEARCH_PROCESS_MESSAGES = {
+  initialized: "Research run initialized",
+  source_stage_claimed: "Source collection started",
+  source_provider_failed: "Source provider unavailable",
+  source_preparation_failed: "Source preparation failed",
+  source_claim_recovered: "Source collection claim recovered",
+  evidence_index_prepared: "Source collection completed",
+  evidence_reviewed: "Source review recorded",
+  model_stage_claimed: "Company analysis started",
+  model_provider_failed: "Model provider unavailable",
+  model_claim_recovered: "Company analysis claim recovered",
+  process_warning: "AI narrative unavailable; deterministic report retained",
+  business_map_prepared: "Company analysis completed",
+  critical_input_decided: "Critical research input decided",
+  model_rebuild_queued: "Forecast rebuild queued",
+  source_preparation_blocked: "Source preparation blocked",
+  model_preparation_blocked: "Model preparation blocked",
+  stale_output_discarded: "Stale output discarded",
+  historical_basis_recovered: "Historical basis recovered",
+  retry_queued: "Research retry queued",
+  judgment_confirmed: "Judgment confirmed",
+  company_research_published: "Research report published",
+} as const;
+const COMPANY_RESEARCH_PROCESS_TRANSITIONS: Record<keyof typeof COMPANY_RESEARCH_PROCESS_MESSAGES, Readonly<Record<string, string>>> = {
+  initialized: { new: "source_ready" },
+  source_stage_claimed: { source_ready: "source_active", source_auto_retry: "source_active", source_recovered: "source_active" },
+  source_provider_failed: { source_active: "source_auto_retry" },
+  source_preparation_failed: { source_active: "source_manual_retry" },
+  source_claim_recovered: { source_active: "source_recovered" },
+  evidence_index_prepared: { source_active: "evidence_review" },
+  evidence_reviewed: { evidence_review: "evidence_review" },
+  model_stage_claimed: { evidence_review: "model_active", model_ready: "model_active", model_auto_retry: "model_active", model_recovered: "model_active" },
+  model_provider_failed: { model_active: "model_auto_retry" },
+  model_claim_recovered: { model_active: "model_recovered" },
+  process_warning: { model_active: "model_active" },
+  business_map_prepared: { model_active: "review_ready" },
+  critical_input_decided: { model_active: "review_ready", review_ready: "review_ready" },
+  model_rebuild_queued: { review_ready: "model_ready" },
+  source_preparation_blocked: { source_active: "source_blocked" },
+  model_preparation_blocked: { model_active: "model_blocked" },
+  stale_output_discarded: { source_active: "source_blocked", model_active: "model_blocked" },
+  historical_basis_recovered: { model_blocked: "basis_recovered" },
+  retry_queued: {
+    source_auto_retry: "source_ready", source_manual_retry: "source_ready", model_auto_retry: "model_ready",
+    source_blocked: "source_ready", model_blocked: "model_ready", basis_recovered: "model_ready",
+  },
+  judgment_confirmed: { model_active: "confirmed", review_ready: "confirmed" },
+  company_research_published: { confirmed: "published" },
+};
+const COMPANY_RESEARCH_CRITICAL_KINDS = new Set<CompanyResearchCriticalInputKind>([
+  "source_fact", "management_guidance", "consensus", "ai_assumption",
+  "user_assumption", "derived_calculation", "unknown",
+]);
+const COMPANY_RESEARCH_CRITICAL_DECISIONS = new Set<CompanyResearchCriticalInputDecision>([
+  "pending", "confirmed", "replaced_with_user_assumption", "marked_unknown", "accepted_gap",
+]);
+const COMPANY_RESEARCH_CRITICAL_SURFACES: readonly CompanyResearchCriticalSurface[] = [
+  "revenue", "operating_profit", "fcff", "capital_structure", "discount_terminal",
+  "scenario", "security_value", "security_return", "answerability", "direction",
+  "strongest_counterevidence",
+];
+const COMPANY_RESEARCH_CRITICAL_SURFACE_RANK = new Map(
+  COMPANY_RESEARCH_CRITICAL_SURFACES.map((surface, index) => [surface, index]),
+);
+const CRITICAL_INPUT_KEYS = [
+  "key", "kind", "value", "value_type", "period", "unit", "currency", "source_ref",
+  "provider", "available_at", "coverage", "rationale", "assumption_key", "equation_id",
+  "parent_input_keys", "unknown_reason", "gap_key",
+] as const;
+const CRITICAL_INPUT_KEY_PATTERN = /^[a-z][a-z0-9_.:-]*$/;
+const CRITICAL_ASSUMPTION_KEY_PATTERN = /^[a-z][a-z0-9_.-]*\.v[1-9][0-9]*:[a-z][a-z0-9_]*(?::[a-z][a-z0-9_]*)*$/;
+const CRITICAL_DECIMAL_PATTERN = /^(?:0|-?(?:0\.\d*[1-9]|[1-9]\d*(?:\.\d*[1-9])?))$/;
+
+function isCanonicalText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value === value.trim();
+}
+
+function isNullableCanonicalText(value: unknown): value is string | null {
+  return value === null || isCanonicalText(value);
+}
+
+function isCriticalInputSourceRef(value: unknown): value is NonNullable<CompanyResearchCriticalInputCandidate["source_ref"]> {
+  return isRecord(value)
+    && hasExactKeys(value, LINEAGE_SOURCE_REF_KEYS)
+    && isCanonicalText(value.fact_key) && CRITICAL_INPUT_KEY_PATTERN.test(value.fact_key)
+    && isCanonicalText(value.source_role) && isCanonicalText(value.source_url)
+    && isCanonicalText(value.source_locator) && isHash(value.raw_hash);
+}
+
+function isCriticalInputCandidate(value: unknown): value is CompanyResearchCriticalInputCandidate {
+  if (!isRecord(value) || !hasExactKeys(value, CRITICAL_INPUT_KEYS)
+    || !isCanonicalText(value.key) || !CRITICAL_INPUT_KEY_PATTERN.test(value.key)
+    || typeof value.kind !== "string" || !COMPANY_RESEARCH_CRITICAL_KINDS.has(value.kind as CompanyResearchCriticalInputKind)
+    || !["decimal", "text", "none"].includes(String(value.value_type))
+    || !isNullableCanonicalText(value.period) || !isNullableCanonicalText(value.unit) || !isNullableCanonicalText(value.currency)
+    || !(value.source_ref === null || isCriticalInputSourceRef(value.source_ref))
+    || !isNullableCanonicalText(value.provider) || !isNullableDateTime(value.available_at)
+    || !isNullableCanonicalText(value.coverage) || !isNullableCanonicalText(value.rationale)
+    || !isNullableCanonicalText(value.assumption_key) || !isNullableCanonicalText(value.equation_id)
+    || !Array.isArray(value.parent_input_keys) || !value.parent_input_keys.every((item) => isCanonicalText(item) && CRITICAL_INPUT_KEY_PATTERN.test(item))
+    || new Set(value.parent_input_keys).size !== value.parent_input_keys.length
+    || !sameOrderedStrings(value.parent_input_keys, [...value.parent_input_keys].sort())
+    || !isNullableCanonicalText(value.unknown_reason) || !isNullableCanonicalText(value.gap_key)) return false;
+  if (value.value_type === "decimal" ? !(typeof value.value === "string" && CRITICAL_DECIMAL_PATTERN.test(value.value))
+    : value.value_type === "text" ? !isCanonicalText(value.value)
+      : value.value !== null) return false;
+  if (value.kind !== "unknown" && value.value === null) return false;
+  const noAssumption = value.assumption_key === null && value.rationale === null;
+  const noEquation = value.equation_id === null && value.parent_input_keys.length === 0;
+  const noConsensus = value.provider === null && value.available_at === null && value.coverage === null;
+  const noGap = value.unknown_reason === null && value.gap_key === null;
+  if (value.kind === "source_fact" || value.kind === "management_guidance") {
+    return value.source_ref !== null && noAssumption && noEquation && noConsensus && noGap;
+  }
+  if (value.kind === "consensus") {
+    return value.source_ref !== null && isCanonicalText(value.provider) && isDateTime(value.available_at)
+      && isCanonicalText(value.coverage) && noAssumption && noEquation && noGap;
+  }
+  if (value.kind === "ai_assumption" || value.kind === "user_assumption") {
+    return value.source_ref === null && isCanonicalText(value.assumption_key)
+      && CRITICAL_ASSUMPTION_KEY_PATTERN.test(value.assumption_key) && isCanonicalText(value.rationale)
+      && noEquation && noConsensus && noGap;
+  }
+  if (value.kind === "derived_calculation") {
+    return value.source_ref === null && isCanonicalText(value.equation_id)
+      && value.parent_input_keys.length > 0 && noAssumption && noConsensus && noGap;
+  }
+  return value.value === null && value.value_type === "none" && value.source_ref === null
+    && noAssumption && noEquation && noConsensus
+    && isCanonicalText(value.unknown_reason) && isCanonicalText(value.gap_key);
+}
+
+function isCriticalInputImpact(value: unknown): value is CompanyResearchCriticalInput["impact"] {
+  if (!isRecord(value) || !hasExactKeys(value, ["surfaces", "dependency_paths"])
+    || !Array.isArray(value.surfaces) || value.surfaces.length === 0
+    || !value.surfaces.every((surface) => typeof surface === "string" && COMPANY_RESEARCH_CRITICAL_SURFACE_RANK.has(surface as CompanyResearchCriticalSurface))
+    || new Set(value.surfaces).size !== value.surfaces.length
+    || !Array.isArray(value.dependency_paths) || value.dependency_paths.length === 0
+    || !value.dependency_paths.every((path) => Array.isArray(path) && path.length > 0 && path.every(isCanonicalText)
+      && path[path.length - 1].startsWith("surface:")
+      && COMPANY_RESEARCH_CRITICAL_SURFACE_RANK.has(path[path.length - 1].slice(8) as CompanyResearchCriticalSurface))) return false;
+  const surfaces = value.surfaces as CompanyResearchCriticalSurface[];
+  if (!sameOrderedStrings(surfaces, [...surfaces].sort((left, right) =>
+    Number(COMPANY_RESEARCH_CRITICAL_SURFACE_RANK.get(left)) - Number(COMPANY_RESEARCH_CRITICAL_SURFACE_RANK.get(right))))) return false;
+  const paths = value.dependency_paths as string[][];
+  const encodedPaths = paths.map((path) => JSON.stringify(path));
+  if (new Set(encodedPaths).size !== paths.length || !sameOrderedStrings(encodedPaths, [...encodedPaths].sort())) return false;
+  const reached = new Set(paths.map((path) => path[path.length - 1]).filter((marker) => marker.startsWith("surface:")).map((marker) => marker.slice(8)));
+  return sameStringSets([...reached], surfaces);
+}
+
+function isCompanyResearchCriticalInput(value: unknown): value is CompanyResearchCriticalInput {
+  if (!isRecord(value)
+    || !hasExactKeys(value, [...CRITICAL_INPUT_KEYS, "impact", "decision", "replacement", "input_fingerprint"])
+    || !isCriticalInputCandidate(Object.fromEntries(CRITICAL_INPUT_KEYS.map((key) => [key, value[key]])))
+    || !isCriticalInputImpact(value.impact)
+    || typeof value.decision !== "string" || !COMPANY_RESEARCH_CRITICAL_DECISIONS.has(value.decision as CompanyResearchCriticalInputDecision)
+    || !isHash(value.input_fingerprint)) return false;
+  if (value.decision === "replaced_with_user_assumption") {
+    if (value.kind === "derived_calculation" || !isCriticalInputCandidate(value.replacement)
+      || value.replacement.kind !== "user_assumption" || value.replacement.key !== value.key) return false;
+  } else if (value.replacement !== null) return false;
+  if (value.decision === "accepted_gap" && value.kind !== "unknown") return false;
+  if (value.decision === "marked_unknown" && (value.kind === "unknown" || value.kind === "derived_calculation")) return false;
+  return true;
+}
+
+function isCompanyResearchCriticalInputSet(value: unknown): value is CompanyResearchCriticalInputSet {
+  if (!isProductDto(value)
+    || !hasExactKeys(value, ["schema_version", "artifact_id", "version", "input_hash", "content_hash", "inputs"])
+    || !isUuid(value.artifact_id) || !isPositiveInteger(value.version)
+    || !isHash(value.input_hash) || !isHash(value.content_hash)
+    || !Array.isArray(value.inputs) || !value.inputs.every(isCompanyResearchCriticalInput)
+    || value.inputs.some((item) => item.kind === "derived_calculation")) return false;
+  const keys = value.inputs.map((item) => item.key);
+  if (new Set(keys).size !== keys.length) return false;
+  const orderKeys = value.inputs.map((item) => `${String(Math.min(...item.impact.surfaces.map((surface) => Number(COMPANY_RESEARCH_CRITICAL_SURFACE_RANK.get(surface))))).padStart(2, "0")}:${item.key}`);
+  return sameOrderedStrings(orderKeys, [...orderKeys].sort());
+}
+
+function isCompanyResearchRun(value: unknown): value is CompanyResearchRun {
+  if (!isRecord(value)
+    || !hasExactKeys(value, ["project_id", "company", "securities", "status", "progress", "started_at", "updated_at", "stages", "recent_process", "workspace", "critical_inputs", "selected_revision"])
+    || !isUuid(value.project_id) || !isCompanyResearchIdentity(value.company)
+    || !Array.isArray(value.securities) || value.securities.length === 0 || !value.securities.every(isCompanyResearchSecurity)
+    || new Set(value.securities.map((item) => isRecord(item) ? item.object_id : null)).size !== value.securities.length
+    || new Set(value.securities.map((item) => isRecord(item) ? item.external_key : null)).size !== value.securities.length
+    || typeof value.status !== "string" || !COMPANY_RESEARCH_RUN_STATUSES.has(value.status as CompanyResearchRunStatus)
+    || !isNonNegativeInteger(value.progress) || value.progress > 100
+    || !isDateTime(value.started_at) || !isDateTime(value.updated_at) || !isAtOrBefore(value.started_at, value.updated_at)
+    || !Array.isArray(value.stages) || value.stages.length !== COMPANY_RESEARCH_RUN_STAGE_KEYS.length
+    || !value.stages.every((stage) => isProductDto(stage) && hasExactKeys(stage, ["schema_version", "key", "status"])
+      && typeof stage.key === "string" && typeof stage.status === "string"
+      && COMPANY_RESEARCH_RUN_STAGE_STATUSES.has(stage.status as CompanyResearchRunStageStatus))
+    || !sameOrderedStrings(value.stages.map((stage) => String((stage as Record<string, unknown>).key)), COMPANY_RESEARCH_RUN_STAGE_KEYS)
+    || !Array.isArray(value.recent_process) || value.recent_process.length > 100
+    || !isCompanyResearchWorkspace(value.workspace)
+    || !(value.critical_inputs === null || isCompanyResearchCriticalInputSet(value.critical_inputs))
+    || !isNullableUuid(value.selected_revision)) return false;
+  const process = value.recent_process as CompanyResearchProcessEntry[];
+  if (!process.every((entry) => isProductDto(entry)
+    && hasExactKeys(entry, ["schema_version", "code", "message", "occurred_at", "retry"])
+    && typeof entry.code === "string" && Object.prototype.hasOwnProperty.call(COMPANY_RESEARCH_PROCESS_MESSAGES, entry.code)
+    && entry.message === COMPANY_RESEARCH_PROCESS_MESSAGES[entry.code as keyof typeof COMPANY_RESEARCH_PROCESS_MESSAGES]
+    && isDateTime(entry.occurred_at)
+    && (entry.retry === null || isProductDto(entry.retry)
+      && hasExactKeys(entry.retry, ["schema_version", "retryable", "next_attempt_at"])
+      && typeof entry.retry.retryable === "boolean" && isNullableDateTime(entry.retry.next_attempt_at)
+      && entry.retry.retryable === (entry.retry.next_attempt_at !== null)))) return false;
+  const processTimes = process.map((entry) => Date.parse(String(entry.occurred_at)));
+  if (processTimes.some((timestamp, index) => timestamp < Date.parse(String(value.started_at))
+    || timestamp > Date.parse(String(value.updated_at)) || (index > 0 && timestamp < processTimes[index - 1]))) return false;
+  if (process.slice(0, -1).some((entry) => entry.retry !== null)) return false;
+  if (!isReachableCompanyResearchProcessSuffix(process)) return false;
+  const workspace = value.workspace;
+  if (!sameUuid(workspace.project_id, value.project_id)
+    || !isRecord(value.company) || !sameUuid(workspace.company.object_id, value.company.object_id)
+    || workspace.company.external_key !== value.company.external_key
+    || workspace.company.canonical_name !== value.company.canonical_name
+    || workspace.preparation.progress !== value.progress
+    || !(workspace.selected_revision === null && value.selected_revision === null
+      || sameUuid(workspace.selected_revision, value.selected_revision))) return false;
+  const preparationError = workspace.preparation.error;
+  const latestRetry = process.at(-1)?.retry ?? null;
+  if (preparationError === null) {
+    if (latestRetry !== null) return false;
+  } else if (latestRetry === null
+    || latestRetry.retryable !== preparationError.retryable
+    || !sameNullableInstant(latestRetry.next_attempt_at, preparationError.next_attempt_at)) return false;
+  const projectedStatus = projectedCompanyResearchRunStatus(workspace.preparation);
+  const expectedStages = projectedStatus === null ? null
+    : expectedCompanyResearchStageStatuses(projectedStatus, process, workspace.preparation);
+  if (projectedStatus !== value.status || expectedStages === null
+    || !sameOrderedStrings(value.stages.map((stage) => String((stage as Record<string, unknown>).status)), expectedStages)
+    || !hasExpectedTerminalProcess(process, workspace.preparation)) return false;
+  if (workspace.preparation.status === "blocked") {
+    const blockedStage = companyResearchFailureStage(process, workspace.preparation);
+    if (workspace.preparation.progress !== (blockedStage === "sources" ? 10 : blockedStage === "analysis" ? 35 : -1)) return false;
+  }
+  const criticalVersion = workspace.change_summary.artifact_versions.critical_inputs;
+  const criticalInputs = value.critical_inputs as CompanyResearchCriticalInputSet | null;
+  if ((criticalInputs === null) !== (criticalVersion === undefined)
+    || criticalInputs !== null && (criticalInputs.version !== criticalVersion
+      || workspace.artifacts.some((artifact) => sameUuid(artifact.id, criticalInputs.artifact_id)))) return false;
+  const memo = workspace.artifacts.find((artifact) => artifact.kind === "memo");
+  if (value.status === "needs_input" && workspace.preparation.status === "awaiting_judgment_review"
+    && criticalInputs !== null && !criticalInputs.inputs.some((input) => input.decision === "pending")) return false;
+  return value.status !== "completed" || memo !== undefined && memo.payload.candidate_status === "human_confirmed"
+    && (criticalInputs === null || criticalInputs.inputs.every((input) => input.decision !== "pending"));
+}
+
+function isReachableCompanyResearchProcessSuffix(process: CompanyResearchProcessEntry[]): boolean {
+  if (process.length === 0) return false;
+  let possibleStates = new Set(
+    Object.keys(COMPANY_RESEARCH_PROCESS_TRANSITIONS[process[0].code as keyof typeof COMPANY_RESEARCH_PROCESS_TRANSITIONS]),
+  );
+  for (const entry of process) {
+    const transitions = COMPANY_RESEARCH_PROCESS_TRANSITIONS[entry.code as keyof typeof COMPANY_RESEARCH_PROCESS_TRANSITIONS];
+    const nextStates = new Set<string>();
+    possibleStates.forEach((state) => {
+      const next = transitions[state];
+      if (next !== undefined) nextStates.add(next);
+    });
+    if (nextStates.size === 0) return false;
+    possibleStates = nextStates;
+  }
+  return true;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+async function hasAuthenticMemoNarratives(run: CompanyResearchRun): Promise<boolean> {
+  for (const artifact of run.workspace.artifacts) {
+    if (artifact.kind !== "memo" || artifact.payload.narrative == null) continue;
+    const narrative = artifact.payload.narrative;
+    const content = {
+      summary: narrative.summary,
+      business_explanation: narrative.business_explanation,
+      driver_explanations: narrative.driver_explanations,
+      counterevidence: narrative.counterevidence,
+      gaps: narrative.gaps,
+      next_checks: narrative.next_checks,
+    };
+    if (await sha256Utf8(stableJson(content)) !== narrative.output_hash) return false;
+  }
+  return true;
+}
+
+function decimalSemanticKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^([+-]?)(?:(\d(?:_?\d)*)(?:\.(\d(?:_?\d)*)?)?|\.(\d(?:_?\d)*))(?:[eE]([+-]?\d(?:_?\d)*))?$/.exec(value.trim());
+  if (match === null) return null;
+  const integer = (match[2] ?? "").replaceAll("_", "");
+  const fraction = (match[3] ?? match[4] ?? "").replaceAll("_", "");
+  let digits = `${integer}${fraction}`.replace(/^0+/, "");
+  if (digits === "") return "0:0:0";
+  const trailing = digits.match(/0+$/)?.[0].length ?? 0;
+  if (trailing > 0) digits = digits.slice(0, -trailing);
+  const exponentText = (match[5] ?? "0").replaceAll("_", "");
+  const exponent = BigInt(exponentText) - BigInt(fraction.length) + BigInt(trailing);
+  return `${match[1] === "-" ? "-" : "+"}:${digits}:${exponent}`;
+}
+
+function sameSemanticDecimal(actual: unknown, expected: unknown): boolean {
+  const left = decimalSemanticKey(actual);
+  const right = decimalSemanticKey(expected);
+  return left !== null && left === right;
+}
+
+function pythonUtcIsoformat(value: string): string {
+  return value.endsWith("Z") ? `${value.slice(0, -1)}+00:00` : value;
+}
+
+async function hasAuthenticCriticalInputFingerprints(run: CompanyResearchRun): Promise<boolean> {
+  if (run.critical_inputs === null) return true;
+  for (const input of run.critical_inputs.inputs) {
+    const payload = {
+      schema_version: "company-research-critical-input-fingerprint.v1",
+      kind: input.kind,
+      value: { type: input.value_type, value: input.value },
+      period: input.period,
+      unit: input.unit,
+      currency: input.currency,
+      source: input.source_ref,
+      consensus: input.kind === "consensus" ? {
+        provider: input.provider,
+        available_at: input.available_at === null ? null : pythonUtcIsoformat(input.available_at),
+        coverage: input.coverage,
+      } : null,
+      assumption_key: input.assumption_key,
+      equation_id: input.equation_id,
+      parent_input_keys: input.parent_input_keys,
+      gap_key: input.gap_key,
+      dependency_paths: input.impact.dependency_paths,
+    };
+    if (await sha256Utf8(stableJson(payload)) !== input.input_fingerprint) return false;
+  }
+  return true;
+}
+
+function projectedCompanyResearchRunStatus(
+  preparation: CompanyResearchRunWorkspace["preparation"],
+): CompanyResearchRunStatus | null {
+  const direct = new Map<string, CompanyResearchRunStatus>([
+    ["queued:0", "queued"],
+    ["preparing_sources:10", "collecting_sources"],
+    ["building_model:25", "analyzing_company"],
+    ["building_model:35", "analyzing_company"],
+    ["building_model:60", "building_forecast"],
+    ["building_model:80", "generating_report"],
+    ["awaiting_judgment_review:85", "needs_input"],
+    ["ready_to_freeze:95", "completed"],
+    ["completed:100", "completed"],
+  ]);
+  const directStatus = direct.get(`${preparation.status}:${preparation.progress}`);
+  if (directStatus !== undefined) return preparation.error === null ? directStatus : null;
+  if (preparation.status === "recoverable_failure" && preparation.progress === 30) return "failed";
+  if (preparation.status !== "blocked" || preparation.error === null) return null;
+  const needsInputCodes = new Set([
+    "critical_input_pending", "missing_critical_baseline", "critical_input_unknown",
+    "conflicting_sources", "missing_key_baseline", "mechanism_unidentified", "missing_market_bridge",
+  ]);
+  const failedCodes = new Set([
+    "permission_denied", "source_unavailable", "company_research_source_unavailable",
+    "alphabet_source_unavailable", "provider_unavailable", "model_provider_failed",
+    "validation_failed", "integrity_failed", "stale_output_discarded",
+  ]);
+  if (needsInputCodes.has(preparation.error.code)) return "needs_input";
+  return failedCodes.has(preparation.error.code) ? "failed" : null;
+}
+
+function companyResearchFailureStage(
+  process: CompanyResearchProcessEntry[],
+  preparation: CompanyResearchRunWorkspace["preparation"],
+): CompanyResearchRunStageKey | null {
+  const terminal = process.at(-1)?.code;
+  if (["source_provider_failed", "source_preparation_failed", "source_preparation_blocked"].includes(String(terminal))) return "sources";
+  if (["model_provider_failed", "model_preparation_blocked"].includes(String(terminal))) return "analysis";
+  if (terminal === "stale_output_discarded") {
+    if (process.some((entry) => entry.code === "model_stage_claimed")) return "analysis";
+    if (process.some((entry) => entry.code === "source_stage_claimed")) return "sources";
+  }
+  return preparation.current_step === "evidence_index" ? "sources"
+    : preparation.current_step === null ? null : "analysis";
+}
+
+function expectedCompanyResearchStageStatuses(
+  status: CompanyResearchRunStatus,
+  process: CompanyResearchProcessEntry[],
+  preparation: CompanyResearchRunWorkspace["preparation"],
+): CompanyResearchRunStageStatus[] | null {
+  if (status === "queued") return ["completed", "pending", "pending", "pending", "pending"];
+  if (status === "collecting_sources") return ["completed", "active", "pending", "pending", "pending"];
+  if (status === "analyzing_company") return ["completed", "completed", "active", "pending", "pending"];
+  if (status === "building_forecast") return ["completed", "completed", "completed", "active", "pending"];
+  if (status === "generating_report") return ["completed", "completed", "completed", "completed", "active"];
+  if (status === "completed") return ["completed", "completed", "completed", "completed", "completed"];
+  if (status === "needs_input" && preparation.status === "awaiting_judgment_review") {
+    return ["completed", "completed", "completed", "completed", "needs_input"];
+  }
+  const failedStage = companyResearchFailureStage(process, preparation);
+  if (failedStage === null) return null;
+  const terminal = status === "needs_input" ? "needs_input" : "failed";
+  return failedStage === "sources"
+    ? ["completed", terminal, "pending", "pending", "pending"]
+    : ["completed", "completed", terminal, "pending", "pending"];
+}
+
+function hasExpectedTerminalProcess(
+  process: CompanyResearchProcessEntry[],
+  preparation: CompanyResearchRunWorkspace["preparation"],
+): boolean {
+  const terminal = process.at(-1)?.code;
+  const allowed: Partial<Record<CompanyResearchRunWorkspace["preparation"]["status"], readonly string[]>> = {
+    queued: ["initialized", "retry_queued", "source_claim_recovered"],
+    preparing_sources: ["source_stage_claimed"],
+    building_model: ["model_stage_claimed", "model_claim_recovered", "model_rebuild_queued"],
+    awaiting_judgment_review: ["model_stage_claimed", "process_warning", "critical_input_decided"],
+    ready_to_freeze: ["judgment_confirmed"],
+    completed: ["company_research_published"],
+    recoverable_failure: ["source_provider_failed", "source_preparation_failed", "model_provider_failed"],
+    blocked: [
+      "source_provider_failed", "source_preparation_failed", "source_preparation_blocked",
+      "model_provider_failed", "model_preparation_blocked", "stale_output_discarded",
+    ],
+  };
+  return terminal !== undefined && (allowed[preparation.status]?.includes(terminal) ?? false);
+}
+
+function isCriticalInputDecisionRequest(value: unknown): value is CriticalInputDecisionRequest {
+  if (!isRecord(value)) return false;
+  const allowed = new Set([
+    "schema_version", "critical_input_key", "expected_artifact_id", "expected_input_fingerprint",
+    "decision", "replacement_value", "replacement_unit", "replacement_rationale",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))
+    || value.schema_version !== "underwriting.v1"
+    || !isCanonicalText(value.critical_input_key) || value.critical_input_key.length > 200
+    || !isUuid(value.expected_artifact_id) || !isHash(value.expected_input_fingerprint)
+    || !["confirmed", "marked_unknown", "accepted_gap", "replaced_with_user_assumption"].includes(String(value.decision))) return false;
+  const replacement = [value.replacement_value, value.replacement_unit, value.replacement_rationale];
+  if (value.decision === "replaced_with_user_assumption") {
+    return replacement.every(isCanonicalText)
+      && String(value.replacement_value).length <= 10_000
+      && String(value.replacement_unit).length <= 120
+      && String(value.replacement_rationale).length <= 4_000;
+  }
+  return replacement.every((item) => item === undefined || item === null);
+}
+
+function invalidCompanyResearchRunResponse(): never {
+  throw new InvestmentResearchRequestError(
+    "投资研究服务返回了无法验证的数据",
+    200,
+    "invalid_response",
+    null,
+  );
+}
+
 function isCompanyResearchEvidenceReview(value: unknown): value is CompanyResearchEvidenceReview {
   const artifact = isProductDto(value) ? value.evidence_artifact : null;
   return isProductDto(value) && hasExactKeys(value, ["schema_version", "evidence_artifact"])
@@ -1312,7 +2137,9 @@ const COMPANY_RESEARCH_FROZEN_ARTIFACT_ORDER = [
   "valuation_set",
   "judgment_context",
   "memo",
+  "critical_inputs",
 ] as const;
+const COMPANY_RESEARCH_FROZEN_ARTIFACT_KINDS = new Set<string>(COMPANY_RESEARCH_FROZEN_ARTIFACT_ORDER);
 
 function isFrozenMemoIdentity(value: unknown): boolean {
   return isProductDto(value)
@@ -1376,16 +2203,19 @@ function isReturnRangeSummary(value: unknown): boolean {
     && isCanonicalDecimal(value.minimum) && isCanonicalDecimal(value.maximum);
 }
 
-function isFrozenArtifactSummary(value: unknown): boolean {
-  if (!Array.isArray(value) || value.length < 8 || value.length > 9) return false;
+function isFrozenArtifactSummary(value: unknown, strategyVersion: string): boolean {
+  if (!Array.isArray(value)) return false;
   if (!value.every((item) => isProductDto(item)
     && hasExactKeys(item, ["schema_version", "kind", "id", "version", "input_hash", "content_hash"])
-    && typeof item.kind === "string" && COMPANY_RESEARCH_ARTIFACT_KINDS.has(item.kind as typeof COMPANY_RESEARCH_STEPS[number])
+    && typeof item.kind === "string" && COMPANY_RESEARCH_FROZEN_ARTIFACT_KINDS.has(item.kind)
     && isUuid(item.id) && isPositiveInteger(item.version)
     && isHash(item.input_hash) && isHash(item.content_hash))) return false;
   const kinds = value.map((item) => isRecord(item) ? String(item.kind) : "");
   const ids = value.map((item) => isRecord(item) ? item.id : null);
-  const expected = COMPANY_RESEARCH_FROZEN_ARTIFACT_ORDER.filter((kind) => kind !== "valuation_set" || kinds.includes(kind));
+  const mainline = strategyVersion === "company-research-mainline.v1";
+  if (kinds.includes("critical_inputs") !== mainline) return false;
+  const expected = COMPANY_RESEARCH_FROZEN_ARTIFACT_ORDER.filter((kind) =>
+    (kind !== "valuation_set" || kinds.includes(kind)) && (kind !== "critical_inputs" || mainline));
   return sameOrderedStrings(kinds, expected)
     && new Set(kinds).size === kinds.length
     && new Set(ids).size === ids.length;
@@ -1409,7 +2239,7 @@ function isFrozenPublicationProjection(value: Record<string, unknown>): boolean 
     || !value.strongest_counterevidence.every((ref) => isCompanyResearchSourceRef(ref, true))
     || !isStringArray(value.next_verification_events)
     || !isNonEmptyString(value.memo_markdown) || value.memo_markdown.length > 100_000
-    || !isFrozenArtifactSummary(value.artifacts)) return false;
+    || !isFrozenArtifactSummary(value.artifacts, String(value.strategy_version))) return false;
   return value.assessment.answerability !== "not_answerable"
     || value.value_range === null && value.return_range === null;
 }
@@ -1797,8 +2627,10 @@ export class InvestmentResearchApi {
       200,
       jsonInit("POST", body),
     );
+    const focusQuestion = normalizeFocusQuestion(body.focus_question);
     if (value.company.object_id !== body.company_id
-      || !sameInstant(value.cutoff_at, body.cutoff_at)) {
+      || !sameInstant(value.cutoff_at, body.cutoff_at)
+      || value.focus_question !== focusQuestion) {
       mismatch("company-research preview binding mismatch");
     }
     return value;
@@ -1836,6 +2668,72 @@ export class InvestmentResearchApi {
     assertUuid(projectId, "projectId");
     const value = await requestJson(`${this.root}/company-research/projects/${encodeURIComponent(projectId)}/workspace`, isCompanyResearchWorkspace, 200, { method: "GET" });
     if (value.project_id !== projectId) mismatch("company-research workspace project identity mismatch");
+    return value;
+  }
+
+  async companyResearchRun(projectId: string, includeProcess = false): Promise<CompanyResearchRun> {
+    assertUuid(projectId, "projectId");
+    if (typeof includeProcess !== "boolean") {
+      throw new InvestmentResearchRequestError("includeProcess 必须是布尔值", 0, "invalid_request", null);
+    }
+    const suffix = includeProcess ? "?include_process=true" : "";
+    const value = await requestJson(
+      `${this.root}/company-research/projects/${encodeURIComponent(projectId)}/run${suffix}`,
+      isCompanyResearchRun,
+      200,
+      { method: "GET" },
+    );
+    if (!sameUuid(value.project_id, projectId)) mismatch("company-research run project identity mismatch");
+    if (value.recent_process.length > (includeProcess ? 100 : 3)
+      || includeProcess && value.recent_process.length < 100 && value.recent_process[0]?.code !== "initialized"
+      || !await hasAuthenticMemoNarratives(value)
+      || !await hasAuthenticCriticalInputFingerprints(value)) invalidCompanyResearchRunResponse();
+    return value;
+  }
+
+  async decideCompanyResearchCriticalInput(
+    projectId: string,
+    body: CriticalInputDecisionRequest,
+  ): Promise<CompanyResearchRun> {
+    assertUuid(projectId, "projectId");
+    if (!isRecord(body)) {
+      throw new InvestmentResearchRequestError("关键输入决定请求无效", 0, "invalid_request", null);
+    }
+    const normalizedBody: CriticalInputDecisionRequest = body.decision === "replaced_with_user_assumption"
+      ? {
+        ...body,
+        replacement_value: body.replacement_value?.trim(),
+        replacement_unit: body.replacement_unit?.trim(),
+        replacement_rationale: body.replacement_rationale?.trim(),
+      }
+      : body;
+    if (!isCriticalInputDecisionRequest(normalizedBody)) {
+      throw new InvestmentResearchRequestError("关键输入决定请求无效", 0, "invalid_request", null);
+    }
+    const value = await requestJson(
+      `${this.root}/company-research/projects/${encodeURIComponent(projectId)}/critical-input-decisions`,
+      isCompanyResearchRun,
+      200,
+      jsonInit("POST", normalizedBody),
+    );
+    if (!sameUuid(value.project_id, projectId)) mismatch("company-research run project identity mismatch");
+    if (value.recent_process.length > 3 || !await hasAuthenticMemoNarratives(value)
+      || !await hasAuthenticCriticalInputFingerprints(value)) {
+      invalidCompanyResearchRunResponse();
+    }
+    const decided = value.critical_inputs?.inputs.find((input) => input.key === normalizedBody.critical_input_key);
+    if (value.critical_inputs === null || value.critical_inputs.version < 2
+      || sameUuid(value.critical_inputs.artifact_id, normalizedBody.expected_artifact_id)
+      || decided === undefined || decided.input_fingerprint !== normalizedBody.expected_input_fingerprint
+      || decided.decision !== normalizedBody.decision) mismatch("company-research critical input decision mismatch");
+    if (normalizedBody.decision === "replaced_with_user_assumption" && (
+      decided.replacement === null
+      || (decided.replacement.value_type === "decimal"
+        ? !sameSemanticDecimal(decided.replacement.value, normalizedBody.replacement_value)
+        : decided.replacement.value !== normalizedBody.replacement_value)
+      || decided.replacement.unit !== normalizedBody.replacement_unit
+      || decided.replacement.rationale !== normalizedBody.replacement_rationale
+    )) mismatch("company-research critical input replacement mismatch");
     return value;
   }
 

@@ -17,6 +17,12 @@ import {
   chooseRunError,
   createPrivateRuntime,
   createTrafficAudit,
+  LIVE_COMPANY_RESEARCH_CASES,
+  assertLiveCaseDefinitions,
+  assertLiveCaseOutcome,
+  assertCriticalInputFinalBinding,
+  assertCriticalInputSuccessor,
+  criticalInputSuccessorInputHash,
   assertExactReviewSuccessor,
   parseVerifierArgs,
   removePrivateRuntime,
@@ -951,6 +957,323 @@ test("Alphabet binding validates every expected foundation security identity", (
   }
 });
 
+test("live verifier declares exact CATL answerable and Alphabet refusal cases", () => {
+  assert.deepEqual(
+    assertLiveCaseDefinitions(LIVE_COMPANY_RESEARCH_CASES).map((item) => ({
+      id: item.id,
+      companyExternalKey: item.companyExternalKey,
+      securityExternalKeys: item.securityExternalKeys,
+      expectedAnswerability: item.expectedAnswerability,
+      expectedCriticalInputCount: item.expectedCriticalInputCount,
+    })),
+    [
+      {
+        id: "catl-answerable",
+        companyExternalKey: "CN:300750:COMPANY",
+        securityExternalKeys: ["SZSE:300750"],
+        expectedAnswerability: "answerable",
+        expectedCriticalInputCount: 55,
+      },
+      {
+        id: "alphabet-not-answerable",
+        companyExternalKey: "US:ALPHABET:COMPANY",
+        securityExternalKeys: ["NASDAQ:GOOG", "NASDAQ:GOOGL"],
+        expectedAnswerability: "not_answerable",
+        expectedCriticalInputCount: 77,
+      },
+    ],
+  );
+  assert.throws(
+    () => assertLiveCaseDefinitions([LIVE_COMPANY_RESEARCH_CASES[0]]),
+    /exact CATL and Alphabet cases/u,
+  );
+});
+
+test("live case proof binds exact CATL answerable and Alphabet refusal outcomes", () => {
+  const definition = LIVE_COMPANY_RESEARCH_CASES[0];
+  const bytes = Buffer.from("# CATL\n\nFrozen research.\n", "utf8");
+  const exportHash = createHash("sha256").update(bytes).digest("hex");
+  const proof = {
+    answerability: definition.expectedAnswerability,
+    criticalInputCount: definition.expectedCriticalInputCount,
+    selectedRevisionId: "00000000-0000-4000-8000-000000000101",
+    replayedRevisionId: "00000000-0000-4000-8000-000000000101",
+    exportedRevisionId: "00000000-0000-4000-8000-000000000101",
+    publishedManifestHash: "a".repeat(64),
+    replayedManifestHash: "a".repeat(64),
+    declaredExportHash: exportHash,
+    exportBytes: bytes,
+    valueRangeCount: 1,
+    assessmentDirection: null,
+    assessmentConfidence: null,
+    valueRange: { minimum: "188.42", maximum: "294.17", currency: "CNY" },
+    returnRange: { minimum: "-0.24", maximum: "0.19" },
+    scenarioIds: ["base", "bull", "bear"],
+    sensitivityVariables: ["required_return", "terminal_growth"],
+    strongestCounterevidenceCount: 1,
+    nextVerificationEventCount: 2,
+  };
+  assert.strictEqual(assertLiveCaseOutcome(definition, proof), proof);
+  assert.throws(
+    () => assertLiveCaseOutcome(definition, { ...proof, replayedRevisionId: "00000000-0000-4000-8000-000000000102" }),
+    /frozen revision identity/u,
+  );
+  assert.throws(
+    () => assertLiveCaseOutcome(definition, { ...proof, replayedManifestHash: "b".repeat(64) }),
+    /frozen revision identity/u,
+  );
+  assert.throws(
+    () => assertLiveCaseOutcome(definition, { ...proof, declaredExportHash: "f".repeat(64) }),
+    /Markdown export hash/u,
+  );
+  assert.throws(
+    () => assertLiveCaseOutcome(definition, { ...proof, valueRange: null }),
+    /CATL answerable proof/u,
+  );
+  assert.throws(
+    () => assertLiveCaseOutcome(definition, { ...proof, scenarioIds: ["base", "bull"] }),
+    /CATL answerable proof/u,
+  );
+
+  const alphabet = LIVE_COMPANY_RESEARCH_CASES[1];
+  const alphabetProof = {
+    ...proof,
+    answerability: "not_answerable",
+    criticalInputCount: alphabet.expectedCriticalInputCount,
+    valueRangeCount: 0,
+    valueRange: null,
+    returnRange: null,
+    scenarioIds: [],
+    sensitivityVariables: [],
+    strongestCounterevidenceCount: 1,
+    nextVerificationEventCount: 31,
+  };
+  assert.strictEqual(assertLiveCaseOutcome(alphabet, alphabetProof), alphabetProof);
+  for (const [field, value] of [
+    ["assessmentDirection", "provisional_neutral"],
+    ["assessmentConfidence", "low"],
+    ["valueRange", { minimum: "1", maximum: "2", currency: "USD" }],
+    ["returnRange", { minimum: "-1", maximum: "1" }],
+  ]) {
+    assert.throws(
+      () => assertLiveCaseOutcome(alphabet, { ...alphabetProof, [field]: value }),
+      /Alphabet refusal proof/u,
+    );
+  }
+});
+
+test("traffic audit forbids browser model or publish shortcuts and bearer leakage", () => {
+  const audit = createTrafficAudit("http://127.0.0.1:4173");
+  const localApi = "http://127.0.0.1:4173/api/underwriting/v1/product/company-research/projects/p/run";
+  audit.recordRequest("GET", localApi, {});
+  assert.throws(
+    () => audit.recordRequest("POST", "http://127.0.0.1:4173/api/underwriting/v1/product/company-research/projects/p/model", {}),
+    /browser-side model shortcut/u,
+  );
+  assert.throws(
+    () => audit.recordRequest("POST", "http://127.0.0.1:4173/api/underwriting/v1/product/company-research/projects/p/publication-shortcut", {}),
+    /browser-side publish shortcut/u,
+  );
+  assert.throws(
+    () => audit.recordRequest("GET", "http://127.0.0.1:4173/research/new", { authorization: "Bearer secret" }),
+    /Bearer header may only target the local API/u,
+  );
+  assert.throws(
+    () => audit.recordRequest("GET", "https://example.test/api/data", { authorization: "Bearer secret" }),
+    /unexpected external request/u,
+  );
+  assert.throws(
+    () => createTrafficAudit("http://127.0.0.1:4173", { clientMode: "mock" }).assertNoMockAdapter(),
+    /mock adapter is forbidden/u,
+  );
+});
+
+function criticalInput(key, kind = "source_fact") {
+  return {
+    key,
+    kind,
+    value: kind === "unknown" ? null : "100",
+    value_type: kind === "unknown" ? "none" : "decimal",
+    period: kind === "unknown" ? null : "FY2025",
+    unit: kind === "unknown" ? null : "CNY million",
+    currency: kind === "unknown" ? null : "CNY",
+    source_ref: kind === "unknown" ? null : { fact_key: key, raw_hash: "e".repeat(64) },
+    provider: null,
+    available_at: null,
+    coverage: null,
+    rationale: null,
+    assumption_key: null,
+    equation_id: null,
+    parent_input_keys: [],
+    unknown_reason: kind === "unknown" ? "not disclosed" : null,
+    gap_key: kind === "unknown" ? "missing_input" : null,
+    impact: { surfaces: ["answerability"], dependency_paths: [[key, "surface:answerability"]] },
+    decision: "pending",
+    replacement: null,
+    input_fingerprint: createHash("sha256").update(key).digest("hex"),
+  };
+}
+
+function criticalSuccessorFixture(decision) {
+  const selected = criticalInput(decision === "accepted_gap" ? "unknown:input" : "fact:input", decision === "accepted_gap" ? "unknown" : "source_fact");
+  const untouched = criticalInput("assumption:untouched", "ai_assumption");
+  const current = {
+    artifact_id: "00000000-0000-4000-8000-000000000201",
+    version: 1,
+    input_hash: "a".repeat(64),
+    content_hash: "b".repeat(64),
+    inputs: [selected, untouched],
+  };
+  const replacement = decision === "replaced_with_user_assumption" ? {
+    ...selected,
+    kind: "user_assumption",
+    value: "110",
+    unit: "CNY million",
+    source_ref: null,
+    provider: null,
+    available_at: null,
+    coverage: null,
+    rationale: "authorized user override",
+    assumption_key: `company-research-mainline.v1:user_assumption_input_${selected.input_fingerprint.slice(0, 16)}`,
+    equation_id: null,
+    parent_input_keys: [],
+    unknown_reason: null,
+    gap_key: null,
+  } : null;
+  delete replacement?.impact;
+  delete replacement?.decision;
+  delete replacement?.replacement;
+  delete replacement?.input_fingerprint;
+  const expectedRequest = {
+    schema_version: "underwriting.v1",
+    critical_input_key: selected.key,
+    expected_artifact_id: current.artifact_id,
+    expected_input_fingerprint: selected.input_fingerprint,
+    decision,
+    ...(replacement ? {
+      replacement_value: replacement.value,
+      replacement_unit: replacement.unit,
+      replacement_rationale: replacement.rationale,
+    } : {}),
+  };
+  const afterSelected = { ...selected, decision, replacement };
+  const successor = {
+    project_id: "00000000-0000-4000-8000-000000000200",
+    critical_inputs: {
+      artifact_id: "00000000-0000-4000-8000-000000000202",
+      version: 2,
+      input_hash: "c".repeat(64),
+      content_hash: "d".repeat(64),
+      inputs: [afterSelected, structuredClone(untouched)],
+    },
+  };
+  successor.critical_inputs.input_hash = criticalInputSuccessorInputHash({
+    parentContentHash: current.content_hash,
+    inputKey: selected.key,
+    inputFingerprint: selected.input_fingerprint,
+    decision,
+    replacement,
+  });
+  return { current, successor, selected, expectedDecision: decision, expectedRequest, projectId: successor.project_id, expectedTotal: 2 };
+}
+
+for (const decision of ["confirmed", "replaced_with_user_assumption", "marked_unknown", "accepted_gap"]) {
+  test(`critical successor exactly fences ${decision}`, () => {
+    const fixture = criticalSuccessorFixture(decision);
+    assert.strictEqual(assertCriticalInputSuccessor(fixture), fixture.successor.critical_inputs);
+  });
+}
+
+test("critical successor rejects identity, hash, decision, key-set, and untouched-entry tampering", () => {
+  const fixture = criticalSuccessorFixture("confirmed");
+  const mutations = [
+    (value) => { value.project_id = "00000000-0000-4000-8000-000000000299"; },
+    (value) => { value.critical_inputs.artifact_id = fixture.current.artifact_id; },
+    (value) => { value.critical_inputs.version = 3; },
+    (value) => { value.critical_inputs.input_hash = fixture.current.input_hash; },
+    (value) => { value.critical_inputs.input_hash = "e".repeat(64); },
+    (value) => { value.critical_inputs.content_hash = fixture.current.content_hash; },
+    (value) => { value.critical_inputs.inputs[0].decision = "accepted_gap"; },
+    (value) => { value.critical_inputs.inputs[0].input_fingerprint = "f".repeat(64); },
+    (value) => { value.critical_inputs.inputs[0].value = "tampered"; },
+    (value) => { value.critical_inputs.inputs[1].value = "tampered"; },
+    (value) => { value.critical_inputs.inputs[1].key = "assumption:renamed"; },
+    (value) => { value.critical_inputs.inputs.pop(); },
+  ];
+  for (const mutate of mutations) {
+    const successor = structuredClone(fixture.successor);
+    mutate(successor);
+    assert.throws(
+      () => assertCriticalInputSuccessor({ ...fixture, successor }),
+      /critical input successor/u,
+    );
+  }
+  assert.throws(
+    () => assertCriticalInputSuccessor({ ...fixture, expectedRequest: { ...fixture.expectedRequest, expected_artifact_id: "00000000-0000-4000-8000-000000000299" } }),
+    /critical input successor/u,
+  );
+  assert.throws(
+    () => assertCriticalInputSuccessor({ ...fixture, expectedRequest: { ...fixture.expectedRequest, expected_input_fingerprint: "f".repeat(64) } }),
+    /critical input successor/u,
+  );
+  assert.throws(
+    () => assertCriticalInputSuccessor({ ...fixture, expectedRequest: { ...fixture.expectedRequest, critical_input_key: "fact:other" } }),
+    /critical input successor/u,
+  );
+  assert.throws(
+    () => assertCriticalInputSuccessor({ ...fixture, expectedRequest: { ...fixture.expectedRequest, decision: "marked_unknown" } }),
+    /critical input successor/u,
+  );
+
+  for (const mutate of [
+    (replacement) => { replacement.value = "111"; },
+    (replacement) => { replacement.currency = "USD"; },
+    (replacement) => { replacement.period = "FY2024"; },
+    (replacement) => { replacement.source_ref = { fact_key: "forged", raw_hash: "f".repeat(64) }; },
+    (replacement) => { replacement.assumption_key = "company-research-mainline.v1:forged"; },
+  ]) {
+    const replacementFixture = criticalSuccessorFixture("replaced_with_user_assumption");
+    const replacement = replacementFixture.successor.critical_inputs.inputs[0].replacement;
+    mutate(replacement);
+    replacementFixture.successor.critical_inputs.input_hash = criticalInputSuccessorInputHash({
+      parentContentHash: replacementFixture.current.content_hash,
+      inputKey: replacementFixture.selected.key,
+      inputFingerprint: replacementFixture.selected.input_fingerprint,
+      decision: replacementFixture.expectedDecision,
+      replacement,
+    });
+    assert.throws(
+      () => assertCriticalInputSuccessor(replacementFixture),
+      /critical input successor/u,
+    );
+  }
+});
+
+test("critical final binding rejects fresh content hashes absent from run or frozen revision", () => {
+  const fixture = criticalSuccessorFixture("confirmed");
+  const critical = fixture.successor.critical_inputs;
+  const finalRunCritical = structuredClone(critical);
+  const frozenArtifacts = [{
+    kind: "critical_inputs",
+    id: critical.artifact_id,
+    version: critical.version,
+    input_hash: critical.input_hash,
+    content_hash: critical.content_hash,
+  }];
+  assert.strictEqual(
+    assertCriticalInputFinalBinding({ critical, finalRunCritical, frozenArtifacts }),
+    frozenArtifacts[0],
+  );
+  assert.throws(
+    () => assertCriticalInputFinalBinding({
+      critical: { ...critical, content_hash: "f".repeat(64) },
+      finalRunCritical,
+      frozenArtifacts,
+    }),
+    /critical input final binding/u,
+  );
+});
+
 function createTerminationHarness(outcomes) {
   let now = 0;
   let nextTimerId = 1;
@@ -1015,7 +1338,7 @@ function createTestRuntime() {
 function liveStackProcessIds() {
   const output = execFileSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" });
   const markers = [
-    "app.scripts.run_company_research_worker --loop --poll-seconds 0.1",
+    "app.scripts.run_company_research_worker --loop --poll-seconds 1",
     "uvicorn app.main:app --host 127.0.0.1 --port",
     "node_modules/vite/bin/vite.js --host 127.0.0.1 --port",
   ];
@@ -1536,7 +1859,7 @@ test("buildVerifierEnvironment exposes only the verifier's closed environment", 
     APP_ENV: "production",
     DATABASE_URL: "sqlite:////private/live.sqlite",
     RESEARCH_TENANT_TOKENS: JSON.stringify({ "test-only-token": "live-company-research-verifier" }),
-    VITE_API_BASE: "http://127.0.0.1:41001",
+    VITE_BACKEND_URL: "http://127.0.0.1:41001",
     RESEARCH_BEARER_TOKEN: "test-only-token",
     VITE_RESEARCH_CLIENT: "",
     NO_PROXY: "127.0.0.1,localhost",

@@ -2,25 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import (
-    Context,
-    Decimal,
     MAX_EMAX,
     MAX_PREC,
     MIN_EMIN,
     ROUND_HALF_EVEN,
+    Context,
+    Decimal,
     localcontext,
 )
 from enum import StrEnum
-import hashlib
-import json
-import re
 from typing import Protocol
 from unicodedata import normalize
 from uuid import UUID
-
 
 DEFAULT_MODULES = (
     "overview",
@@ -34,7 +33,8 @@ DEFAULT_MODULES = (
     "versions_changes_memo",
 )
 
-DEFAULT_STRATEGY_VERSION = "company-research-default.v1"
+DEFAULT_STRATEGY_VERSION = "company-research-mainline.v1"
+LEGACY_STRATEGY_VERSION = "company-research-default.v1"
 DEFAULT_HORIZON_YEARS = 5
 DEFAULT_BASE_CURRENCY = "CNY"
 DEFAULT_REQUIRED_RETURN = Decimal("0.12")
@@ -44,6 +44,7 @@ _MODULE_KEY = re.compile(r"[a-z][a-z0-9_]*")
 _GAP_CODE = re.compile(r"[a-z][a-z0-9_]*")
 _INPUT_HASH = re.compile(r"[0-9a-f]{64}")
 _IDENTITY_NAME_MAX_LENGTH = 512
+FOCUS_QUESTION_MAX_LENGTH = 500
 
 
 def _company_research_decimal_context(*, precision: int) -> Context:
@@ -106,6 +107,23 @@ def _require_canonical_name(value: object, field_name: str) -> str:
     return text
 
 
+def normalize_focus_question(value: object | None) -> str | None:
+    """Return canonical agenda context without treating it as policy input."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CompanyResearchValidationError("focus_question must be text")
+    normalized = normalize("NFC", value.strip())
+    if not normalized:
+        raise CompanyResearchValidationError("focus_question must not be blank")
+    if len(normalized) > FOCUS_QUESTION_MAX_LENGTH:
+        raise CompanyResearchValidationError(
+            f"focus_question must not exceed {FOCUS_QUESTION_MAX_LENGTH} characters"
+        )
+    return normalized
+
+
 def _require_finite_decimal(value: object, field_name: str) -> Decimal:
     if type(value) is not Decimal:
         raise CompanyResearchValidationError(f"{field_name} must be a Decimal")
@@ -131,6 +149,57 @@ def _canonical_hash(value: object) -> str:
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
     ).encode("utf-8")
     return hashlib.sha256(serialized).hexdigest()
+
+
+COMPANY_RESEARCH_AI_MEMO_PROMPT_VERSION = "company-research-ai-memo.v2"
+COMPANY_RESEARCH_AI_MEMO_SYSTEM_PROMPT = (
+    "You select closed company-research narrative relations only."
+)
+COMPANY_RESEARCH_AI_MEMO_INSTRUCTIONS = (
+    "Return only the exact closed response contract. Select only supplied stable "
+    "keys and the enumerated templates and relations. Do not return prose, numbers, "
+    "source names, URLs, or extra fields. Include exactly three unique driver blocks."
+)
+
+
+def company_research_ai_memo_response_contract() -> dict[str, object]:
+    """Return the exact closed narrative schema included in the model prompt."""
+
+    def claim(template: str, relation: str) -> dict[str, object]:
+        return {
+            "template": template,
+            "relation": relation,
+            "subject_key": "authenticated_stable_key",
+            "object_key": "authenticated_stable_key",
+            "citations": ["authenticated_stable_key"],
+        }
+
+    return {
+        "summary": claim("assessment_summary", "summarizes"),
+        "business_explanation": claim("business_overview", "uses"),
+        "driver_explanations": [
+            {
+                "driver_key": "authenticated_driver_key",
+                **claim("driver_path", "drives"),
+            }
+        ],
+        "counterevidence": [claim("counterevidence_fact", "challenges")],
+        "gaps": [claim("open_gap", "blocks")],
+        "next_checks": [claim("verify_gap", "verifies")],
+    }
+
+
+def company_research_ai_memo_prompt_hash() -> str:
+    """Hash the exact canonical system and structured-schema prompt content."""
+
+    return _canonical_hash(
+        {
+            "system": COMPANY_RESEARCH_AI_MEMO_SYSTEM_PROMPT,
+            "prompt_version": COMPANY_RESEARCH_AI_MEMO_PROMPT_VERSION,
+            "instructions": COMPANY_RESEARCH_AI_MEMO_INSTRUCTIONS,
+            "response_contract": company_research_ai_memo_response_contract(),
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,9 +344,12 @@ class CompanyResearchDefaultPolicy:
             raise CompanyResearchValidationError("horizon_years must be an int")
         _require_finite_decimal(self.required_return, "required_return")
         _require_finite_decimal(self.permanent_loss_limit, "permanent_loss_limit")
-        if self.strategy_version != DEFAULT_STRATEGY_VERSION:
+        if self.strategy_version not in {
+            DEFAULT_STRATEGY_VERSION,
+            LEGACY_STRATEGY_VERSION,
+        }:
             raise CompanyResearchValidationError(
-                "strategy_version is fixed by the default policy"
+                "strategy_version is not a supported company research policy"
             )
         if self.horizon_years != DEFAULT_HORIZON_YEARS:
             raise CompanyResearchValidationError(
@@ -471,6 +543,7 @@ class CompanyResearchPreview:
     permanent_loss_limit: Decimal
     generic_modules: tuple[CompanyResearchModule, ...]
     business_modules: tuple[CompanyResearchModule, ...]
+    focus_question: str | None = None
     research_gaps: tuple[ResearchGap, ...] = ()
     input_hash: str = field(default="")
 
@@ -489,6 +562,9 @@ class CompanyResearchPreview:
             generic_modules=self.generic_modules,
         )
         _validated_business_modules(self.business_modules)
+        object.__setattr__(
+            self, "focus_question", normalize_focus_question(self.focus_question)
+        )
         object.__setattr__(self, "required_return", policy.required_return)
         object.__setattr__(self, "permanent_loss_limit", policy.permanent_loss_limit)
         self.validate_research_gaps(self.research_gaps)
@@ -519,8 +595,12 @@ class CompanyResearchPreview:
         return validate_research_gaps(gaps, self.allowed_module_keys)
 
     def canonical_payload(self) -> dict[str, object]:
-        return {
-            "schema_version": "company-research-preview.v1",
+        payload = {
+            "schema_version": (
+                "company-research-preview.v2"
+                if self.focus_question is not None
+                else "company-research-preview.v1"
+            ),
             "strategy": {
                 "strategy_version": self.strategy_version,
                 "horizon_years": self.horizon_years,
@@ -543,6 +623,9 @@ class CompanyResearchPreview:
                 gap.canonical_payload() for gap in self.research_gaps
             ),
         }
+        if self.focus_question is not None:
+            payload["focus_question"] = self.focus_question
+        return payload
 
 
 def build_company_research_preview(
@@ -550,6 +633,8 @@ def build_company_research_preview(
     adapter: CompanyResearchAdapter,
     identities: CompanyResearchIdentitySet,
     cutoff_at: datetime,
+    strategy_version: str = DEFAULT_STRATEGY_VERSION,
+    focus_question: str | None = None,
 ) -> CompanyResearchPreview:
     """Build the deterministic default policy preview for one supported company."""
     if type(identities) is not CompanyResearchIdentitySet:
@@ -570,7 +655,7 @@ def build_company_research_preview(
     modules = _validated_business_modules(
         business_modules(identities.company.external_key)
     )
-    policy = CompanyResearchDefaultPolicy()
+    policy = CompanyResearchDefaultPolicy(strategy_version=strategy_version)
     return CompanyResearchPreview(
         company=identities.company,
         securities=identities.securities,
@@ -582,6 +667,7 @@ def build_company_research_preview(
         permanent_loss_limit=policy.permanent_loss_limit,
         generic_modules=policy.generic_modules,
         business_modules=modules,
+        focus_question=normalize_focus_question(focus_question),
     )
 
 
@@ -795,7 +881,7 @@ class ClassifiedBusinessEvidenceArtifact:
     metric_key: str
     category: str
     value: Decimal
-    currency: str
+    currency: str | None
     unit: str
     period_start: str
     period_end: str
@@ -811,7 +897,9 @@ class ClassifiedBusinessEvidenceArtifact:
                 "classified evidence category is invalid"
             )
         _artifact_decimal(self.value, "classified evidence value")
-        for name in ("currency", "unit", "period_start", "period_end"):
+        if self.currency is not None:
+            _artifact_text(self.currency, "classified evidence currency")
+        for name in ("unit", "period_start", "period_end"):
             _artifact_text(getattr(self, name), f"classified evidence {name}")
 
 
@@ -1318,17 +1406,62 @@ class CapitalStructureReference:
             )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class SecurityValuationReference:
     security_external_key: str
     listed_class_economic_units: Decimal
     conversion_ratio: Decimal
     adr_ratio: Decimal
     dividend_rights_per_unit: Decimal
-    market_price_usd: Decimal
-    usd_cny_rate: Decimal
+    market_price: Decimal
+    quote_currency: str
+    quote_to_base_rate: Decimal
     rights_ref: SourceLineageReference
     price_ref: SourceLineageReference
+
+    def __init__(
+        self,
+        security_external_key: str,
+        listed_class_economic_units: Decimal,
+        conversion_ratio: Decimal,
+        adr_ratio: Decimal,
+        dividend_rights_per_unit: Decimal,
+        market_price_usd: Decimal | None = None,
+        usd_cny_rate: Decimal | None = None,
+        rights_ref: SourceLineageReference | None = None,
+        price_ref: SourceLineageReference | None = None,
+        *,
+        market_price: Decimal | None = None,
+        quote_currency: str | None = None,
+        quote_to_base_rate: Decimal | None = None,
+    ) -> None:
+        resolved_price = market_price if market_price is not None else market_price_usd
+        resolved_rate = (
+            quote_to_base_rate if quote_to_base_rate is not None else usd_cny_rate
+        )
+        object.__setattr__(self, "security_external_key", security_external_key)
+        object.__setattr__(
+            self, "listed_class_economic_units", listed_class_economic_units
+        )
+        object.__setattr__(self, "conversion_ratio", conversion_ratio)
+        object.__setattr__(self, "adr_ratio", adr_ratio)
+        object.__setattr__(self, "dividend_rights_per_unit", dividend_rights_per_unit)
+        object.__setattr__(self, "market_price", resolved_price)
+        object.__setattr__(self, "quote_currency", quote_currency or "USD")
+        object.__setattr__(self, "quote_to_base_rate", resolved_rate)
+        object.__setattr__(self, "rights_ref", rights_ref)
+        object.__setattr__(self, "price_ref", price_ref)
+        self.__post_init__()
+
+    @property
+    def market_price_usd(self) -> Decimal:
+        """Read-only compatibility alias for authenticated legacy Alphabet rows."""
+        return self.market_price
+
+    @property
+    def usd_cny_rate(self) -> Decimal:
+        """Read-only compatibility alias for authenticated legacy Alphabet rows."""
+        return self.quote_to_base_rate
 
     def __post_init__(self) -> None:
         _artifact_text(self.security_external_key, "security.security_external_key")
@@ -1337,8 +1470,8 @@ class SecurityValuationReference:
             "conversion_ratio",
             "adr_ratio",
             "dividend_rights_per_unit",
-            "market_price_usd",
-            "usd_cny_rate",
+            "market_price",
+            "quote_to_base_rate",
         ):
             _artifact_decimal(getattr(self, name), f"security.{name}")
         if self.listed_class_economic_units <= Decimal("0"):
@@ -1353,13 +1486,14 @@ class SecurityValuationReference:
             raise CompanyResearchValidationError(
                 "security dividend_rights_per_unit must be positive for valuation"
             )
-        if self.market_price_usd <= Decimal("0"):
+        _artifact_text(self.quote_currency, "security.quote_currency")
+        if self.market_price <= Decimal("0"):
             raise CompanyResearchValidationError(
-                "security.market_price_usd must be positive"
+                "security.market_price must be positive"
             )
-        if self.usd_cny_rate <= Decimal("0"):
+        if self.quote_to_base_rate <= Decimal("0"):
             raise CompanyResearchValidationError(
-                "security.usd_cny_rate must be positive"
+                "security.quote_to_base_rate must be positive"
             )
         if (
             type(self.rights_ref) is not SourceLineageReference
@@ -1370,12 +1504,43 @@ class SecurityValuationReference:
             )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class MarketBridgeArtifact:
     capital_structure: CapitalStructureReference
     securities: tuple[SecurityValuationReference, ...]
-    usd_cny_rate: Decimal
-    fx_ref: SourceLineageReference
+    base_currency: str
+    financial_currency: str
+    financial_to_base_rate: Decimal
+    fx_ref: SourceLineageReference | None
+
+    def __init__(
+        self,
+        capital_structure: CapitalStructureReference,
+        securities: tuple[SecurityValuationReference, ...],
+        usd_cny_rate: Decimal | None = None,
+        fx_ref: SourceLineageReference | None = None,
+        *,
+        base_currency: str | None = None,
+        financial_currency: str | None = None,
+        financial_to_base_rate: Decimal | None = None,
+    ) -> None:
+        resolved_rate = (
+            financial_to_base_rate
+            if financial_to_base_rate is not None
+            else usd_cny_rate
+        )
+        object.__setattr__(self, "capital_structure", capital_structure)
+        object.__setattr__(self, "securities", securities)
+        object.__setattr__(self, "base_currency", base_currency or "CNY")
+        object.__setattr__(self, "financial_currency", financial_currency or "USD")
+        object.__setattr__(self, "financial_to_base_rate", resolved_rate)
+        object.__setattr__(self, "fx_ref", fx_ref)
+        self.__post_init__()
+
+    @property
+    def usd_cny_rate(self) -> Decimal:
+        """Read-only compatibility alias for authenticated legacy Alphabet rows."""
+        return self.financial_to_base_rate
 
     def __post_init__(self) -> None:
         if type(self.capital_structure) is not CapitalStructureReference:
@@ -1398,18 +1563,39 @@ class MarketBridgeArtifact:
             raise CompanyResearchValidationError(
                 "market_bridge securities must not duplicate"
             )
-        _artifact_decimal(self.usd_cny_rate, "market_bridge.usd_cny_rate")
+        _artifact_text(self.base_currency, "market_bridge.base_currency")
+        _artifact_text(self.financial_currency, "market_bridge.financial_currency")
+        _artifact_decimal(
+            self.financial_to_base_rate,
+            "market_bridge.financial_to_base_rate",
+        )
+        same_currency = self.base_currency == self.financial_currency
         if (
-            self.usd_cny_rate <= Decimal("0")
-            or type(self.fx_ref) is not SourceLineageReference
+            self.financial_to_base_rate <= Decimal("0")
+            or (
+                same_currency
+                and (
+                    self.financial_to_base_rate != Decimal("1")
+                    or self.fx_ref is not None
+                )
+            )
+            or (not same_currency and type(self.fx_ref) is not SourceLineageReference)
         ):
             raise CompanyResearchValidationError(
-                "market_bridge must have an exact positive FX reference"
+                "market_bridge currency conversion contract is invalid"
+            )
+        if any(
+            item.quote_currency != self.financial_currency
+            or item.quote_to_base_rate != self.financial_to_base_rate
+            for item in self.securities
+        ):
+            raise CompanyResearchValidationError(
+                "market bridge security currencies do not match the bridge"
             )
         references = (
             self.capital_structure.source_ref,
             self.capital_structure.policy_ref,
-            self.fx_ref,
+            *((self.fx_ref,) if self.fx_ref is not None else ()),
             *(
                 reference
                 for security in self.securities
@@ -1422,13 +1608,20 @@ class MarketBridgeArtifact:
             raise CompanyResearchValidationError(
                 "market bridge references must be unique across capital, rights, price, and FX roles"
             )
-        if self.capital_structure.source_ref.fact_key != "capital_structure_usd":
+        capital_fact_keys = {
+            "capital_structure_usd",
+            f"capital_structure_{self.financial_currency.lower()}",
+        }
+        if self.capital_structure.source_ref.fact_key not in capital_fact_keys:
             raise CompanyResearchValidationError(
-                "market bridge capital reference must identify USD capital structure"
+                "market bridge capital reference must identify its currency"
             )
-        if self.fx_ref.fact_key != "usd_cny_fx":
+        if self.fx_ref is not None and self.fx_ref.fact_key not in {
+            "usd_cny_fx",
+            (f"fx_{self.financial_currency.lower()}_{self.base_currency.lower()}"),
+        }:
             raise CompanyResearchValidationError(
-                "market bridge FX reference must identify the USD/CNY pair"
+                "market bridge FX reference must identify the currency pair"
             )
         for security in self.securities:
             suffix = re.sub(
@@ -1438,9 +1631,12 @@ class MarketBridgeArtifact:
                 raise CompanyResearchValidationError(
                     "market bridge rights reference must identify its security"
                 )
-            if security.price_ref.fact_key != f"market_price_usd_{suffix}":
+            if security.price_ref.fact_key not in {
+                f"market_price_usd_{suffix}",
+                f"market_price_{security.quote_currency.lower()}_{suffix}",
+            }:
                 raise CompanyResearchValidationError(
-                    "market bridge price reference must identify its security and USD currency"
+                    "market bridge price reference must identify its security and currency"
                 )
 
 
@@ -1486,7 +1682,12 @@ class MarketEquityComponentReference:
     price_proxy_policy_version: str | None = None
 
     def __post_init__(self) -> None:
-        if self.component_key not in {"class_a", "class_b", "class_c"}:
+        if self.component_key not in {
+            "class_a",
+            "class_b",
+            "class_c",
+            "listed_common",
+        }:
             raise CompanyResearchValidationError(
                 "market equity component key is invalid"
             )
@@ -1508,6 +1709,34 @@ class MarketEquityComponentReference:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelSensitivityRequest:
+    variable_key: str
+    low_value: Decimal
+    high_value: Decimal
+    low_assumption_key: str
+    high_assumption_key: str
+
+    def __post_init__(self) -> None:
+        if self.variable_key not in {"required_return", "terminal_growth"}:
+            raise CompanyResearchValidationError(
+                "model sensitivity variable is unsupported"
+            )
+        _artifact_decimal(self.low_value, "model sensitivity low_value")
+        _artifact_decimal(self.high_value, "model sensitivity high_value")
+        if self.low_value >= self.high_value:
+            raise CompanyResearchValidationError(
+                "model sensitivity range must be ordered"
+            )
+        if any(
+            _VERSIONED_ASSUMPTION_KEY.fullmatch(value) is None
+            for value in (self.low_assumption_key, self.high_assumption_key)
+        ):
+            raise CompanyResearchValidationError(
+                "model sensitivity requires governed assumption keys"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class CompanyResearchModelInput:
     business_map: BusinessMapArtifact
     driver_map: DriverMapArtifact
@@ -1522,6 +1751,7 @@ class CompanyResearchModelInput:
     judgment_context: "JudgmentContextArtifact"
     reverse_dcf: ReverseDcfRequest | None = None
     equity_components: tuple[MarketEquityComponentReference, ...] = ()
+    sensitivity_requests: tuple[ModelSensitivityRequest, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -1581,6 +1811,18 @@ class CompanyResearchModelInput:
             raise CompanyResearchValidationError(
                 "model input reverse DCF must be typed"
             )
+        if (
+            not isinstance(self.sensitivity_requests, tuple)
+            or not all(
+                type(item) is ModelSensitivityRequest
+                for item in self.sensitivity_requests
+            )
+            or len({item.variable_key for item in self.sensitivity_requests})
+            != len(self.sensitivity_requests)
+        ):
+            raise CompanyResearchValidationError(
+                "model input sensitivities must be unique and typed"
+            )
         if self.market_bridge is not None:
             if (
                 not isinstance(self.equity_components, tuple)
@@ -1588,8 +1830,9 @@ class CompanyResearchModelInput:
                     type(item) is MarketEquityComponentReference
                     for item in self.equity_components
                 )
-                or tuple(item.component_key for item in self.equity_components)
-                != ("class_a", "class_b", "class_c")
+                or not self.equity_components
+                or len({item.component_key for item in self.equity_components})
+                != len(self.equity_components)
             ):
                 raise CompanyResearchValidationError(
                     "model input requires exact Class A-B-C equity components"
@@ -1641,19 +1884,52 @@ class ScenarioDcfValue:
         _artifact_decimal(self.enterprise_value, "scenario DCF enterprise value")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class SecurityValueRangeArtifact:
     security_external_key: str
-    usd_per_share: ValueRange
-    cny_return: ValueRange
+    value_per_share: ValueRange
+    value_currency: str
+    base_currency_return: ValueRange
+    schema_version: str
+
+    def __init__(
+        self,
+        security_external_key: str,
+        *,
+        value_per_share: ValueRange,
+        value_currency: str,
+        base_currency_return: ValueRange,
+        schema_version: str = "company-research.security-value.v2",
+    ) -> None:
+        object.__setattr__(self, "security_external_key", security_external_key)
+        object.__setattr__(self, "value_per_share", value_per_share)
+        object.__setattr__(self, "value_currency", value_currency)
+        object.__setattr__(self, "base_currency_return", base_currency_return)
+        object.__setattr__(self, "schema_version", schema_version)
+        self.__post_init__()
+
+    @property
+    def usd_per_share(self) -> ValueRange:
+        """Read-only compatibility alias for legacy Alphabet callers."""
+        return self.value_per_share
+
+    @property
+    def cny_return(self) -> ValueRange:
+        """Read-only compatibility alias for legacy base-currency returns."""
+        return self.base_currency_return
 
     def __post_init__(self) -> None:
         _artifact_text(self.security_external_key, "security value security key")
         if (
-            type(self.usd_per_share) is not ValueRange
-            or type(self.cny_return) is not ValueRange
+            type(self.value_per_share) is not ValueRange
+            or type(self.base_currency_return) is not ValueRange
         ):
             raise CompanyResearchValidationError("security value ranges must be typed")
+        _artifact_text(self.value_currency, "security value currency")
+        if self.schema_version != "company-research.security-value.v2":
+            raise CompanyResearchValidationError(
+                "security value schema version is unsupported"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1719,12 +1995,83 @@ class RequiredReturnComparisonArtifact:
 
 
 @dataclass(frozen=True, slots=True)
+class SensitivitySecurityValueArtifact:
+    security_external_key: str
+    low_input_value_per_share: Decimal
+    high_input_value_per_share: Decimal
+
+    def __post_init__(self) -> None:
+        _artifact_text(
+            self.security_external_key,
+            "sensitivity security external key",
+        )
+        _artifact_decimal(
+            self.low_input_value_per_share,
+            "sensitivity low-input value per share",
+        )
+        _artifact_decimal(
+            self.high_input_value_per_share,
+            "sensitivity high-input value per share",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ValuationSensitivityArtifact:
+    variable_key: str
+    low_input: Decimal
+    high_input: Decimal
+    low_assumption_key: str
+    high_assumption_key: str
+    security_values: tuple[SensitivitySecurityValueArtifact, ...]
+    value_currency: str
+    equation_id: str = "dcf_sensitivity.v1"
+
+    def __post_init__(self) -> None:
+        if self.variable_key not in {"required_return", "terminal_growth"}:
+            raise CompanyResearchValidationError(
+                "valuation sensitivity variable is unsupported"
+            )
+        _artifact_decimal(self.low_input, "valuation sensitivity low input")
+        _artifact_decimal(self.high_input, "valuation sensitivity high input")
+        if self.low_input >= self.high_input:
+            raise CompanyResearchValidationError(
+                "valuation sensitivity inputs must be ordered"
+            )
+        if any(
+            _VERSIONED_ASSUMPTION_KEY.fullmatch(value) is None
+            for value in (self.low_assumption_key, self.high_assumption_key)
+        ):
+            raise CompanyResearchValidationError(
+                "valuation sensitivity assumption keys are invalid"
+            )
+        if (
+            not isinstance(self.security_values, tuple)
+            or not self.security_values
+            or not all(
+                type(item) is SensitivitySecurityValueArtifact
+                for item in self.security_values
+            )
+            or len({item.security_external_key for item in self.security_values})
+            != len(self.security_values)
+        ):
+            raise CompanyResearchValidationError(
+                "valuation sensitivity security values are invalid"
+            )
+        _artifact_text(self.value_currency, "valuation sensitivity value currency")
+        if self.equation_id != "dcf_sensitivity.v1":
+            raise CompanyResearchValidationError(
+                "valuation sensitivity equation is unsupported"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ValuationSetArtifact:
     scenario_dcf_values: tuple[ScenarioDcfValue, ...]
     reverse_dcf: ReverseDcfArtifact | None
     security_value_ranges: tuple[SecurityValueRangeArtifact, ...]
     required_return: Decimal
     required_return_comparisons: tuple[RequiredReturnComparisonArtifact, ...]
+    sensitivity_analyses: tuple[ValuationSensitivityArtifact, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -1745,9 +2092,13 @@ class ValuationSetArtifact:
             raise CompanyResearchValidationError(
                 "valuation set reverse DCF must be typed"
             )
-        if not isinstance(self.security_value_ranges, tuple) or not all(
-            type(item) is SecurityValueRangeArtifact
-            for item in self.security_value_ranges
+        if (
+            not isinstance(self.security_value_ranges, tuple)
+            or not self.security_value_ranges
+            or not all(
+                type(item) is SecurityValueRangeArtifact
+                for item in self.security_value_ranges
+            )
         ):
             raise CompanyResearchValidationError(
                 "valuation set security ranges must be typed"
@@ -1787,8 +2138,26 @@ class ValuationSetArtifact:
             raise CompanyResearchValidationError(
                 "valuation set required return comparisons must preserve the mandate return"
             )
+        if (
+            not isinstance(self.sensitivity_analyses, tuple)
+            or not all(
+                type(item) is ValuationSensitivityArtifact
+                for item in self.sensitivity_analyses
+            )
+            or len({item.variable_key for item in self.sensitivity_analyses})
+            != len(self.sensitivity_analyses)
+            or any(
+                {value.security_external_key for value in item.security_values}
+                != {value.security_external_key for value in self.security_value_ranges}
+                or item.value_currency != self.security_value_ranges[0].value_currency
+                for item in self.sensitivity_analyses
+            )
+        ):
+            raise CompanyResearchValidationError(
+                "valuation set sensitivities must cover each security exactly once"
+            )
         ranges_by_security = {
-            item.security_external_key: item.cny_return
+            item.security_external_key: item.base_currency_return
             for item in self.security_value_ranges
         }
         for comparison in self.required_return_comparisons:
@@ -1887,6 +2256,202 @@ _MEMO_ARTIFACT_KINDS = frozenset(
         "valuation_set",
     }
 )
+_NARRATIVE_STABLE_KEY = re.compile(r"[a-z][a-z0-9_.:-]*")
+
+
+class CompanyResearchProcessWarningCode(StrEnum):
+    AI_NARRATIVE_PROVIDER_UNAVAILABLE = "ai_narrative_provider_unavailable"
+    AI_NARRATIVE_VALIDATION_EXHAUSTED = "ai_narrative_validation_exhausted"
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchProcessWarning:
+    """A recoverable narrative warning that never invalidates financial work."""
+
+    code: CompanyResearchProcessWarningCode
+    recoverable: bool = True
+    stage: str = "generating_report"
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.code) is not CompanyResearchProcessWarningCode
+            or self.recoverable is not True
+            or self.stage != "generating_report"
+        ):
+            raise CompanyResearchValidationError(
+                "company research process warning is invalid"
+            )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "code": self.code.value,
+            "recoverable": self.recoverable,
+            "stage": self.stage,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchNarrativeClaim:
+    text: str
+    citations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_text(self.text, "company research narrative claim text")
+        if (
+            not isinstance(self.citations, tuple)
+            or not self.citations
+            or len(set(self.citations)) != len(self.citations)
+            or self.citations != tuple(sorted(self.citations))
+            or not all(
+                isinstance(item, str)
+                and _NARRATIVE_STABLE_KEY.fullmatch(item) is not None
+                for item in self.citations
+            )
+        ):
+            raise CompanyResearchValidationError(
+                "company research narrative citations must be canonical stable keys"
+            )
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {"text": self.text, "citations": self.citations}
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchDriverExplanation:
+    driver_key: str
+    text: str
+    citations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_key(
+            self.driver_key, "company research driver explanation key", _GAP_CODE
+        )
+        CompanyResearchNarrativeClaim(self.text, self.citations)
+
+    def canonical_payload(self) -> dict[str, object]:
+        return {
+            "driver_key": self.driver_key,
+            "text": self.text,
+            "citations": self.citations,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyResearchMemoNarrative:
+    schema_version: str
+    summary: CompanyResearchNarrativeClaim
+    business_explanation: CompanyResearchNarrativeClaim
+    driver_explanations: tuple[CompanyResearchDriverExplanation, ...]
+    counterevidence: tuple[CompanyResearchNarrativeClaim, ...]
+    gaps: tuple[CompanyResearchNarrativeClaim, ...]
+    next_checks: tuple[CompanyResearchNarrativeClaim, ...]
+    generator_kind: str
+    prompt_version: str
+    input_hash: str
+    output_hash: str
+    provider: str | None = None
+    model: str | None = None
+    prompt_hash: str | None = None
+    provider_model_identifier: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.schema_version not in {
+            "company-research-memo-narrative.v1",
+            "company-research-memo-narrative.v2",
+        }:
+            raise CompanyResearchValidationError(
+                "company research narrative schema version is invalid"
+            )
+        if (
+            type(self.summary) is not CompanyResearchNarrativeClaim
+            or type(self.business_explanation) is not CompanyResearchNarrativeClaim
+        ):
+            raise CompanyResearchValidationError(
+                "company research narrative summary and business explanation must be typed"
+            )
+        if (
+            not isinstance(self.driver_explanations, tuple)
+            or len(self.driver_explanations) != 3
+            or not all(
+                type(item) is CompanyResearchDriverExplanation
+                for item in self.driver_explanations
+            )
+            or len({item.driver_key for item in self.driver_explanations}) != 3
+        ):
+            raise CompanyResearchValidationError(
+                "company research narrative requires exactly three driver explanations"
+            )
+        for name in ("counterevidence", "gaps", "next_checks"):
+            claims = getattr(self, name)
+            if not isinstance(claims, tuple) or not all(
+                type(item) is CompanyResearchNarrativeClaim for item in claims
+            ):
+                raise CompanyResearchValidationError(
+                    f"company research narrative {name} must be typed"
+                )
+        if self.generator_kind not in {
+            "authenticated_ai",
+            "deterministic_fallback",
+        }:
+            raise CompanyResearchValidationError(
+                "company research narrative generator kind is invalid"
+            )
+        _require_text(self.prompt_version, "company research narrative prompt version")
+        if self.schema_version == "company-research-memo-narrative.v1":
+            _require_text(
+                self.provider_model_identifier,
+                "company research narrative provider model identifier",
+            )
+            if any(
+                value is not None
+                for value in (self.provider, self.model, self.prompt_hash)
+            ):
+                raise CompanyResearchValidationError(
+                    "legacy company research narrative provenance must remain opaque"
+                )
+        else:
+            for value, name in (
+                (self.provider, "provider"),
+                (self.model, "model"),
+            ):
+                _require_text(value, f"company research narrative {name}")
+            if self.provider_model_identifier is not None:
+                raise CompanyResearchValidationError(
+                    "company research narrative v2 provider and model must be separate"
+                )
+            if (
+                self.prompt_version != COMPANY_RESEARCH_AI_MEMO_PROMPT_VERSION
+                or self.prompt_hash != company_research_ai_memo_prompt_hash()
+            ):
+                raise CompanyResearchValidationError(
+                    "company research narrative prompt_hash does not match prompt content"
+                )
+        hashes = [(self.input_hash, "input_hash"), (self.output_hash, "output_hash")]
+        if self.schema_version == "company-research-memo-narrative.v2":
+            hashes.append((self.prompt_hash, "prompt_hash"))
+        for value, name in hashes:
+            if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+                raise CompanyResearchValidationError(
+                    f"company research narrative {name} must be SHA-256"
+                )
+        if self.output_hash != _canonical_hash(self.content_payload()):
+            raise CompanyResearchValidationError(
+                "company research narrative output_hash does not match content"
+            )
+
+    def content_payload(self) -> dict[str, object]:
+        return {
+            "summary": self.summary.canonical_payload(),
+            "business_explanation": self.business_explanation.canonical_payload(),
+            "driver_explanations": tuple(
+                item.canonical_payload() for item in self.driver_explanations
+            ),
+            "counterevidence": tuple(
+                item.canonical_payload() for item in self.counterevidence
+            ),
+            "gaps": tuple(item.canonical_payload() for item in self.gaps),
+            "next_checks": tuple(item.canonical_payload() for item in self.next_checks),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -1933,8 +2498,16 @@ class CompanyResearchMemoArtifact:
     candidate_status: str = "machine_draft"
     reviewer: str | None = None
     markdown: str | None = None
+    narrative: CompanyResearchMemoNarrative | None = None
 
     def __post_init__(self) -> None:
+        if (
+            self.narrative is not None
+            and type(self.narrative) is not CompanyResearchMemoNarrative
+        ):
+            raise CompanyResearchValidationError(
+                "company research memo narrative must be typed"
+            )
         if self.candidate_status == "machine_draft":
             if self.reviewer is not None or self.markdown is not None:
                 raise CompanyResearchValidationError(

@@ -12,12 +12,16 @@ from app.env import load_local_env
 
 load_local_env()
 
+from app.ai.client import LLMClient  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.services.research_worker_heartbeat import WorkerHeartbeatService  # noqa: E402
-from app.services.worker_heartbeat_publisher import WorkerHeartbeatPublisher  # noqa: E402
+from app.services.worker_heartbeat_publisher import (  # noqa: E402
+    WorkerHeartbeatPublisher,
+)
 from app.underwriting.services.company_research_preparation import (  # noqa: E402
     CompanyResearchPreparationWorker,
 )
+from sqlalchemy.exc import OperationalError  # noqa: E402
 
 
 def _worker_id() -> str:
@@ -39,6 +43,17 @@ def _touch(*, mode: str, state: str) -> None:
         session.commit()
 
 
+def _llm_client() -> LLMClient | None:
+    try:
+        return LLMClient.from_env()
+    except RuntimeError:
+        return None
+
+
+def _is_transient_sqlite_writer_contention(error: OperationalError) -> bool:
+    return "database is locked" in str(error).lower()
+
+
 def run_once(*, recover_after_minutes: int = 30, session_factory=SessionLocal) -> bool:
     """Claim and execute one source or model-bundle stage when work is due."""
     with session_factory() as session:
@@ -52,7 +67,11 @@ def run_once(*, recover_after_minutes: int = 30, session_factory=SessionLocal) -
     if claim is None:
         return bool(recovered or cancelled)
     with session_factory() as session:
-        worker = CompanyResearchPreparationWorker(session, now=_utcnow)
+        worker = CompanyResearchPreparationWorker(
+            session,
+            now=_utcnow,
+            llm_client=_llm_client(),
+        )
         worker.run_claim(claim)
         session.commit()
     return True
@@ -79,7 +98,13 @@ def main() -> None:
     publisher.start()
     try:
         while True:
-            if not run_once():
+            try:
+                worked = run_once()
+            except OperationalError as error:
+                if not _is_transient_sqlite_writer_contention(error):
+                    raise
+                worked = False
+            if not worked:
                 time.sleep(max(args.poll_seconds, 0.1))
     finally:
         publisher.stop()

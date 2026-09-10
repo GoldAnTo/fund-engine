@@ -19,17 +19,17 @@ const args = process.argv.slice(2);
 if (!args.length) throw new Error("expected a Node script to execute");
 
 let executable = process.execPath;
-if (currentMajor !== targetMajor) {
+if (currentMajor < targetMajor) {
   const nvmRoot = process.env.NVM_DIR || resolve(homedir(), ".nvm");
   const versionsDir = resolve(nvmRoot, "versions", "node");
   const candidateVersion = existsSync(versionsDir)
-    ? readdirSync(versionsDir).filter((name) => new RegExp(`^v${targetMajor}\\.\\d+\\.\\d+$`).test(name)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).at(-1)
+    ? readdirSync(versionsDir).filter((name) => name.startsWith(`v${targetMajor}.`)).sort().at(-1)
     : undefined;
   const candidate = candidateVersion
     ? resolve(versionsDir, candidateVersion, "bin", "node")
     : "";
   if (!existsSync(candidate)) {
-    throw new Error(`Node ${targetMajor} is required; install it with: nvm install ${target}`);
+    throw new Error(`Node ${target}+ is required; install it with: nvm install ${target}`);
   }
   executable = candidate;
 }

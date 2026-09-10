@@ -87,26 +87,28 @@ export default function ResearchHomePage() {
       <header className="ir-page-head">
         <div>
           <p className="ir-eyebrow">Research register</p>
-          <h1>独立投资研究</h1>
-          <p>从明确的 Company 与 Security 身份出发，维护可冻结、可复核的长期研究版本。</p>
+          <h1>AI 公司研究</h1>
+          <p>输入公司或证券，生成有来源、有假设、有反证并可保存的研究初稿。</p>
         </div>
-        <Link className="ir-button ir-button--primary" to="/research/new">建立研究项目</Link>
+        <Link className="ir-button ir-button--primary" to="/research/new">开始 AI 研究</Link>
       </header>
 
-      <section className="ir-search-section" aria-busy={searching} aria-labelledby="ir-object-search-title" aria-live="polite">
+      <section className="ir-search-section" aria-busy={searching} aria-labelledby="ir-object-search-title">
         <div>
           <p className="ir-eyebrow">Object search</p>
           <h2 id="ir-object-search-title">查找研究对象</h2>
         </div>
         <form className="ir-search-form" onSubmit={search}>
           <label>
-            <span>搜索 Company、Security 或 Industry</span>
-            <input autoComplete="off" name="research_object_query" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <span>搜索公司或证券</span>
+            <input autoComplete="off" name="company_or_security" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
           <button className="ir-button" disabled={searching || !query.trim()} type="submit">
             {searching ? "搜索中" : "搜索对象"}
           </button>
         </form>
+        {searching ? <p className="ir-search-status" role="status">正在搜索研究对象…</p> : null}
+        {searchCompleted && !searching && !searchError && results.length > 0 ? <p className="ir-search-status" role="status">已找到 {results.length} 个相关对象。</p> : null}
         {searchError ? <div className="ir-alert" role="alert"><p>{searchError}</p><button className="ir-button" disabled={searching} onClick={() => void runSearch()} type="button">重试对象搜索</button></div> : null}
         {results.length > 0 ? (
           <ul className="ir-object-list" aria-label="对象搜索结果">
@@ -149,7 +151,7 @@ export default function ResearchHomePage() {
           <div className="ir-empty">
             <strong>尚无独立研究项目</strong>
             <p>先确认一家公司与至少一只相关证券，再建立第一份研究边界。</p>
-            <Link to="/research/new">建立研究项目</Link>
+            <Link to="/research/new">开始 AI 研究</Link>
           </div>
         ) : null}
         {recentProjects.length > 0 ? (
@@ -169,6 +171,15 @@ export default function ResearchHomePage() {
           </ol>
         ) : null}
       </section>
+
+      <details className="ir-advanced-tools">
+        <summary>高级工具</summary>
+        <nav aria-label="高级研究工具">
+          <Link to="/events">事件研究与基金披露</Link>
+          <Link to="/underwriting/research">历史档案</Link>
+          <Link to="/monitoring">运行管理</Link>
+        </nav>
+      </details>
     </main>
   );
 }

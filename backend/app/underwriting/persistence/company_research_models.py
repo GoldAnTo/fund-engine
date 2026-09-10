@@ -69,19 +69,19 @@ COMPANY_RESEARCH_PREPARATION_STATUSES = frozenset(
     }
 )
 
-COMPANY_RESEARCH_ARTIFACT_KINDS = frozenset(
-    {
-        "evidence_index",
-        "business_map",
-        "driver_map",
-        "financial_bridge",
-        "scenario_set",
-        "valuation_set",
-        "research_gaps",
-        "judgment_context",
-        "memo",
-    }
+COMPANY_RESEARCH_ARTIFACT_ORDER = (
+    "evidence_index",
+    "research_gaps",
+    "business_map",
+    "driver_map",
+    "financial_bridge",
+    "scenario_set",
+    "valuation_set",
+    "judgment_context",
+    "memo",
+    "critical_inputs",
 )
+COMPANY_RESEARCH_ARTIFACT_KINDS = frozenset(COMPANY_RESEARCH_ARTIFACT_ORDER)
 COMPANY_RESEARCH_PREPARATION_STEPS = COMPANY_RESEARCH_ARTIFACT_KINDS | {
     "model_bundle"
 }

@@ -4,6 +4,7 @@ from datetime import datetime
 from threading import Event
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 
@@ -67,5 +68,37 @@ def test_heartbeat_publisher_exits_the_worker_when_periodic_persistence_fails() 
     publisher.start()
     try:
         assert fatal.wait(1)
+    finally:
+        publisher.stop()
+
+
+def test_heartbeat_publisher_retries_transient_sqlite_writer_contention() -> None:
+    from app.services.worker_heartbeat_publisher import WorkerHeartbeatPublisher
+
+    fatal = Event()
+    retried = Event()
+    attempts = 0
+
+    def touch() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 2:
+            raise OperationalError("BEGIN IMMEDIATE", {}, Exception("database is locked"))
+        if attempts == 3:
+            retried.set()
+
+    publisher = WorkerHeartbeatPublisher(
+        session_factory=lambda: None,
+        worker_id="worker-container",
+        worker_kind="company_research",
+        interval_seconds=0.01,
+        fatal_exit=lambda _code: fatal.set(),
+    )
+    publisher._touch = touch
+
+    publisher.start()
+    try:
+        assert retried.wait(1)
+        assert not fatal.is_set()
     finally:
         publisher.stop()

@@ -26,6 +26,8 @@ const ids = {
   manifest: "00000000-0000-4000-8000-000000000018",
   membershipA: "00000000-0000-4000-8000-000000000019",
   membershipB: "00000000-0000-4000-8000-000000000020",
+  criticalInputs: "00000000-0000-4000-8000-000000000021",
+  criticalInputsSuccessor: "00000000-0000-4000-8000-000000000022",
 };
 const hash = "a".repeat(64);
 const agendaHash = "57e7c6fda6962645939bf3b4ac9ece70be170d1170a2571252593c42a50ece73";
@@ -221,7 +223,7 @@ function companyResearchWorkspaceBody(): any {
 
 function addReportedBusinessArtifact(workspace: any): any {
   const evidence = workspace.artifacts.find((item: any) => item.kind === "evidence_index");
-  const fact = evidence.payload.facts[0]!;
+  const fact = evidence.payload.facts[0];
   fact.review_decision = "confirmed";
   workspace.change_summary.reviewed_fact_count = 1;
   const source = { ...fact.observation.source_ref };
@@ -252,7 +254,7 @@ function addScenarioArtifact(workspace: any): any {
   addReportedBusinessArtifact(workspace);
   const evidence = workspace.artifacts.find((item: any) => item.kind === "evidence_index");
   const business = workspace.artifacts.find((item: any) => item.kind === "business_map");
-  const fact = evidence.payload.facts[0]!;
+  const fact = evidence.payload.facts[0];
   const factRef = { ...fact.observation.source_ref };
   delete factRef.kind;
   const driver = {
@@ -337,7 +339,7 @@ function addClosedModelArtifacts(workspace: any, includeDerivedGaps = true): any
     input_hash: hash, content_hash: agendaHash,
     payload: {
       operating_baseline_available: true, financial_bridge_closed: true, market_security_bridge_available: false,
-      strongest_counterevidence: [], next_verification_events: [derivedGaps[0]!.message],
+      strongest_counterevidence: [], next_verification_events: [derivedGaps[0].message],
       _lineage: { artifact_refs: parentArtifacts.map((item) => ({ artifact_id: item.id, artifact_kind: item.kind, content_hash: item.content_hash })), market_snapshot_ids: [], market_snapshot_bindings: [] },
     },
     source_refs: sourceRefs,
@@ -348,8 +350,8 @@ function addClosedModelArtifacts(workspace: any, includeDerivedGaps = true): any
     driver_map_ref: { artifact_kind: "driver_map", content_hash: driver.content_hash },
     financial_bridge_ref: { artifact_kind: "financial_bridge", content_hash: financial.content_hash },
     scenario_set_ref: { artifact_kind: "scenario_set", content_hash: scenario.content_hash },
-    valuation_set_ref: null, gap_keys: [derivedGaps[0]!.code], strongest_counterevidence: [],
-    next_verification_events: [derivedGaps[0]!.message], candidate_status: "machine_draft",
+    valuation_set_ref: null, gap_keys: [derivedGaps[0].code], strongest_counterevidence: [],
+    next_verification_events: [derivedGaps[0].message], candidate_status: "machine_draft",
     _lineage: { artifact_refs: [{ artifact_id: judgment.id, artifact_kind: judgment.kind, content_hash: judgment.content_hash }], market_snapshot_ids: [], market_snapshot_bindings: [] },
   };
   const memo = {
@@ -384,6 +386,239 @@ function confirmedCompanyResearchWorkspaceBody(markdown = "Frozen memo"): any {
   const memoModule = workspace.modules.find((item: any) => item.key === "versions_changes_memo");
   memoModule.artifact_refs = [{ id: memo.id, kind: memo.kind, content_hash: memo.content_hash }];
   return workspace;
+}
+
+const criticalInputFingerprint = "06183d490843d20ce3ab258ac03dee9d06ba8db8a978b7315b4d060f94d364e8";
+
+function companyResearchRunBody(processCount = 3): any {
+  const workspace = addClosedModelArtifacts(companyResearchWorkspaceBody());
+  workspace.change_summary.artifact_versions.critical_inputs = 1;
+  const sourceRef = {
+    fact_key: "reported_revenue",
+    source_role: "regulatory_filing",
+    source_url: "https://example.test/source",
+    source_locator: "p. 1",
+    raw_hash: hash,
+  };
+  const criticalInput = {
+    key: "reported_revenue",
+    kind: "source_fact",
+    value: "1",
+    value_type: "decimal",
+    period: "2025-01-01/2025-12-31",
+    unit: "USD_million",
+    currency: "USD",
+    source_ref: sourceRef,
+    provider: null,
+    available_at: null,
+    coverage: null,
+    rationale: null,
+    assumption_key: null,
+    equation_id: null,
+    parent_input_keys: [],
+    unknown_reason: null,
+    gap_key: null,
+    impact: {
+      surfaces: ["revenue"],
+      dependency_paths: [["input:reported_revenue", "surface:revenue"]],
+    },
+    decision: "pending",
+    replacement: null,
+    input_fingerprint: criticalInputFingerprint,
+  };
+  const process = [
+    ["initialized", "Research run initialized"],
+    ["source_stage_claimed", "Source collection started"],
+    ["evidence_index_prepared", "Source collection completed"],
+    ["model_stage_claimed", "Company analysis started"],
+  ].slice(-processCount);
+  return {
+    project_id: ids.project,
+    company: companyResearchPreviewBody().company,
+    securities: companyResearchPreviewBody().securities,
+    status: "needs_input",
+    progress: 85,
+    started_at: now,
+    updated_at: "2026-08-24T00:10:00Z",
+    stages: [
+      ["identity", "completed"],
+      ["sources", "completed"],
+      ["analysis", "completed"],
+      ["forecast", "completed"],
+      ["report", "needs_input"],
+    ].map(([key, status]) => ({ schema_version: "underwriting.v1", key, status })),
+    recent_process: process.map(([code, message], index) => ({
+      schema_version: "underwriting.v1",
+      code,
+      message,
+      occurred_at: `2026-08-24T00:0${index + 1}:00Z`,
+      retry: null,
+    })),
+    workspace,
+    critical_inputs: {
+      schema_version: "underwriting.v1",
+      artifact_id: ids.criticalInputs,
+      version: 1,
+      input_hash: hash,
+      content_hash: companyResearchHash,
+      inputs: [criticalInput],
+    },
+    selected_revision: null,
+  };
+}
+
+function completedCompanyResearchRunBody(): any {
+  const run = companyResearchRunBody();
+  run.workspace = confirmedCompanyResearchWorkspaceBody();
+  run.workspace.change_summary.artifact_versions.critical_inputs = 1;
+  run.status = "completed";
+  run.progress = 95;
+  run.stages = run.stages.map((stage: any) => ({ ...stage, status: "completed" }));
+  run.critical_inputs.inputs[0].decision = "confirmed";
+  run.recent_process = [
+    ["model_stage_claimed", "Company analysis started"],
+    ["critical_input_decided", "Critical research input decided"],
+    ["judgment_confirmed", "Judgment confirmed"],
+  ].map(([code, message], index) => ({
+    schema_version: "underwriting.v1", code, message, occurred_at: `2026-08-24T00:0${index + 1}:00Z`, retry: null,
+  }));
+  return run;
+}
+
+function companyResearchRunAtStatus(status: string): any {
+  if (status === "needs_input") return companyResearchRunBody();
+  if (status === "completed") return completedCompanyResearchRunBody();
+  const run = companyResearchRunBody();
+  const workspace = companyResearchWorkspaceBody();
+  workspace.artifacts = [];
+  workspace.change_summary = { artifact_versions: {}, reviewed_fact_count: 0 };
+  workspace.source_count = 0;
+  workspace.gap_count = 0;
+  workspace.modules = workspace.modules.map((module: any) => ({
+    ...module,
+    state: "not_started",
+    artifact_refs: [],
+    valuation_state: module.key === "scenarios_valuation_implied_expectations" ? "pending" : "not_applicable",
+  }));
+  run.workspace = workspace;
+  run.critical_inputs = null;
+  const definitions: Record<string, { preparation: any; progress: number; stages: string[]; process: [string, string][] }> = {
+    queued: {
+      preparation: { status: "queued", current_step: "evidence_index", error: null }, progress: 0,
+      stages: ["completed", "pending", "pending", "pending", "pending"],
+      process: [["initialized", "Research run initialized"]],
+    },
+    collecting_sources: {
+      preparation: { status: "preparing_sources", current_step: "evidence_index", error: null }, progress: 10,
+      stages: ["completed", "active", "pending", "pending", "pending"],
+      process: [["initialized", "Research run initialized"], ["source_stage_claimed", "Source collection started"]],
+    },
+    analyzing_company: {
+      preparation: { status: "building_model", current_step: "model_bundle", error: null }, progress: 25,
+      stages: ["completed", "completed", "active", "pending", "pending"],
+      process: [["source_stage_claimed", "Source collection started"], ["evidence_index_prepared", "Source collection completed"], ["model_stage_claimed", "Company analysis started"]],
+    },
+    building_forecast: {
+      preparation: { status: "building_model", current_step: "model_bundle", error: null }, progress: 60,
+      stages: ["completed", "completed", "completed", "active", "pending"],
+      process: [["source_stage_claimed", "Source collection started"], ["evidence_index_prepared", "Source collection completed"], ["model_stage_claimed", "Company analysis started"]],
+    },
+    generating_report: {
+      preparation: { status: "building_model", current_step: "model_bundle", error: null }, progress: 80,
+      stages: ["completed", "completed", "completed", "completed", "active"],
+      process: [["source_stage_claimed", "Source collection started"], ["evidence_index_prepared", "Source collection completed"], ["model_stage_claimed", "Company analysis started"]],
+    },
+    failed: {
+      preparation: {
+        status: "recoverable_failure", current_step: "model_bundle",
+        error: { schema_version: "underwriting.v1", code: "provider_unavailable", failed_step: "model_bundle", retryable: true, next_attempt_at: "2026-08-24T00:20:00Z" },
+      },
+      progress: 30,
+      stages: ["completed", "completed", "failed", "pending", "pending"],
+      process: [["evidence_index_prepared", "Source collection completed"], ["model_stage_claimed", "Company analysis started"], ["model_provider_failed", "Model provider unavailable"]],
+    },
+  };
+  const definition = definitions[status];
+  Object.assign(workspace.preparation, definition.preparation, { progress: definition.progress });
+  run.status = status;
+  run.progress = definition.progress;
+  run.stages = run.stages.map((stage: any, index: number) => ({ ...stage, status: definition.stages[index] }));
+  run.recent_process = definition.process.map(([code, message], index) => ({
+    schema_version: "underwriting.v1", code, message, occurred_at: `2026-08-24T00:0${index + 1}:00Z`, retry: null,
+  }));
+  if (workspace.preparation.error !== null) {
+    run.recent_process.at(-1).retry = {
+      schema_version: "underwriting.v1",
+      retryable: workspace.preparation.error.retryable,
+      next_attempt_at: workspace.preparation.error.next_attempt_at,
+    };
+  }
+  return run;
+}
+
+function companyResearchRunWithNarrativeBody(): any {
+  const run = companyResearchRunBody();
+  const memo = run.workspace.artifacts.find((item: any) => item.kind === "memo");
+  const claim = (text: string, citations = ["reported_revenue"]) => ({ text, citations });
+  memo.payload.narrative = {
+    schema_version: "company-research-memo-narrative.v2",
+    summary: claim("当前判断受关键收入事实支持。"),
+    business_explanation: claim("公司通过核心业务创造收入。"),
+    driver_explanations: [
+      { driver_key: "revenue_driver", ...claim("收入驱动决定增长路径。") },
+      { driver_key: "margin_driver", ...claim("利润率驱动决定经营杠杆。") },
+      { driver_key: "cash_driver", ...claim("现金驱动决定估值承受力。") },
+    ],
+    counterevidence: [claim("反证仍需持续验证。")],
+    gaps: [claim("缺口限制当前可回答性。", ["missing_segment_margin"])],
+    next_checks: [claim("下一步核验关键缺口。", ["missing_segment_margin"])],
+    generator_kind: "authenticated_ai",
+    prompt_version: "company-research-ai-memo.v2",
+    input_hash: hash,
+    output_hash: "aa8eb6582a1d5bb9917049d54c9730d8f900cd9dca18a4d9b29054c68e44c61f",
+    provider: "openai",
+    model: "gpt-test",
+    prompt_hash: "130456e78c5517c79c0b2f6f17cfac7b02cef4018fc4dacd41793abac0b7e2b9",
+    provider_model_identifier: null,
+  };
+  return run;
+}
+
+function replacementDecisionRunBody(value = "1"): any {
+  const run = companyResearchRunAtStatus("analyzing_company");
+  const criticalInputs = companyResearchRunBody().critical_inputs;
+  const selected = criticalInputs.inputs[0];
+  criticalInputs.artifact_id = ids.criticalInputsSuccessor;
+  criticalInputs.version = 2;
+  selected.decision = "replaced_with_user_assumption";
+  selected.replacement = {
+    key: selected.key,
+    kind: "user_assumption",
+    value,
+    value_type: "decimal",
+    period: selected.period,
+    unit: "USD_million",
+    currency: selected.currency,
+    source_ref: null,
+    provider: null,
+    available_at: null,
+    coverage: null,
+    rationale: "Rebased",
+    assumption_key: "company-research-mainline.v1:user_assumption_input_06183d490843d20c",
+    equation_id: null,
+    parent_input_keys: [],
+    unknown_reason: null,
+    gap_key: null,
+  };
+  run.critical_inputs = criticalInputs;
+  run.workspace.change_summary.artifact_versions.critical_inputs = 2;
+  run.recent_process = [
+    ["critical_input_decided", "Critical research input decided"],
+    ["model_rebuild_queued", "Forecast rebuild queued"],
+  ].map(([code, message], index) => ({
+    schema_version: "underwriting.v1", code, message, occurred_at: `2026-08-24T00:0${index + 1}:00Z`, retry: null,
+  }));
+  return run;
 }
 
 function industryCompanyBrowseBody(items: object[] = [
@@ -561,6 +796,486 @@ const operationCases: OperationCase[] = [
 ];
 
 describe("InvestmentResearchApi", () => {
+  it("exposes the company-research run read and critical-input decision clients", () => {
+    const api = new InvestmentResearchApi();
+
+    expect((api as unknown as Record<string, unknown>).companyResearchRun).toBeTypeOf("function");
+    expect((api as unknown as Record<string, unknown>).decideCompanyResearchCriticalInput).toBeTypeOf("function");
+  });
+
+  it("decodes a complete company-research run and uses bounded process queries", async () => {
+    const recent = companyResearchRunBody();
+    const full = companyResearchRunBody(4);
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(recent))
+      .mockResolvedValueOnce(response(full));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchRun(ids.project)).resolves.toMatchObject({
+      project_id: ids.project,
+      status: "needs_input",
+      critical_inputs: { inputs: [{ kind: "source_fact", decision: "pending" }] },
+    });
+    await expect(api.companyResearchRun(ids.project, true)).resolves.toMatchObject({
+      recent_process: [{ code: "initialized" }, { code: "source_stage_claimed" }, { code: "evidence_index_prepared" }, { code: "model_stage_claimed" }],
+    });
+    expect(fetchSpy.mock.calls.map(([url]) => String(url))).toEqual([
+      `/api/underwriting/v1/product/company-research/projects/${ids.project}/run`,
+      `/api/underwriting/v1/product/company-research/projects/${ids.project}/run?include_process=true`,
+    ]);
+  });
+
+  it("decodes non-currency governed evidence used by business and driver inputs", async () => {
+    const body = companyResearchRunBody();
+    const evidence = body.workspace.artifacts.find((item: any) => item.kind === "evidence_index");
+    const business = body.workspace.artifacts.find((item: any) => item.kind === "business_map");
+    const driver = body.workspace.artifacts.find((item: any) => item.kind === "driver_map");
+    const fact = evidence.payload.facts[0];
+    const parent = structuredClone(fact);
+    parent.fact_key = "reported_volume";
+    parent.metric_key = "volume";
+    parent.observation = {
+      ...parent.observation,
+      key: "volume",
+      unit: "GWh",
+      currency: null,
+      source_ref: { ...parent.observation.source_ref, fact_key: parent.fact_key },
+    };
+    const derived = structuredClone(fact);
+    derived.fact_key = "derived_volume";
+    derived.metric_key = "volume";
+    derived.observation = {
+      ...derived.observation,
+      key: "volume",
+      unit: "GWh",
+      currency: null,
+      state: "derived",
+      source_ref: {
+        kind: "evidence_derivation",
+        equation_id: "volume-derived.v1",
+        parent_fact_keys: [parent.fact_key],
+      },
+    };
+    evidence.payload.facts.unshift(parent, derived);
+    evidence.payload.counterevidence_fact_keys = [parent.fact_key];
+    evidence.payload.next_verification_events = ["Verify volume disclosure."];
+    body.workspace.change_summary.reviewed_fact_count = 3;
+    const source = {
+      fact_key: derived.fact_key,
+      source_role: derived.source_role,
+      source_url: derived.source_url,
+      source_locator: derived.source_locator,
+      raw_hash: derived.raw_hash,
+    };
+    business.payload.modules[0].fact_refs = [source];
+    business.payload.modules[0].classified_evidence[0] = {
+      ...business.payload.modules[0].classified_evidence[0],
+      fact_ref: source,
+      metric_key: derived.metric_key,
+      observation: derived.observation,
+    };
+    driver.payload.drivers[0].fact_refs = [source];
+    driver.payload.drivers[0].values = [derived.observation];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(body)));
+
+    await expect(new InvestmentResearchApi().companyResearchRun(ids.project)).resolves.toMatchObject({
+      workspace: { artifacts: expect.arrayContaining([
+        expect.objectContaining({ kind: "business_map" }),
+        expect.objectContaining({ kind: "driver_map" }),
+      ]) },
+    });
+  });
+
+  it("decodes the closed authenticated narrative nested in a mainline machine memo", async () => {
+    const body = companyResearchRunWithNarrativeBody();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(body)));
+
+    await expect(new InvestmentResearchApi().companyResearchRun(ids.project)).resolves.toMatchObject({
+      workspace: { artifacts: expect.arrayContaining([
+        expect.objectContaining({ kind: "memo", payload: expect.objectContaining({
+          narrative: expect.objectContaining({
+            schema_version: "company-research-memo-narrative.v2",
+            generator_kind: "authenticated_ai",
+          }),
+        }) }),
+      ]) },
+    });
+  });
+
+  it("rejects a memo narrative whose authenticated content changed without a new output hash", async () => {
+    const changedText = companyResearchRunWithNarrativeBody();
+    changedText.workspace.artifacts.find((item: any) => item.kind === "memo").payload.narrative.summary.text = "被篡改的判断。";
+    const changedCitation = companyResearchRunWithNarrativeBody();
+    changedCitation.workspace.artifacts.find((item: any) => item.kind === "memo").payload.narrative.summary.citations = ["different_fact"];
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(changedText))
+      .mockResolvedValueOnce(response(changedCitation)));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("keeps the legacy v1 narrative closed and rejects narrative provenance drift", async () => {
+    const legacy = companyResearchRunWithNarrativeBody();
+    const legacyNarrative = legacy.workspace.artifacts.find((item: any) => item.kind === "memo").payload.narrative;
+    Object.assign(legacyNarrative, {
+      schema_version: "company-research-memo-narrative.v1",
+      provider: null,
+      model: null,
+      prompt_hash: null,
+      provider_model_identifier: "legacy-provider/model",
+    });
+    const invalid = Array.from({ length: 4 }, () => companyResearchRunWithNarrativeBody());
+    Object.assign(invalid[0].workspace.artifacts.find((item: any) => item.kind === "memo").payload.narrative, { raw_response: "secret" });
+    invalid[1].workspace.artifacts.find((item: any) => item.kind === "memo").payload.narrative.provider_model_identifier = "combined/provider";
+    invalid[2].workspace.artifacts.find((item: any) => item.kind === "memo").payload.narrative.driver_explanations[1].driver_key = "revenue_driver";
+    invalid[3].workspace.artifacts.find((item: any) => item.kind === "memo").payload.narrative.summary.citations = ["reported_revenue", "reported_revenue"];
+    const fetchSpy = vi.fn().mockResolvedValueOnce(response(legacy));
+    invalid.forEach((candidate) => fetchSpy.mockResolvedValueOnce(response(candidate)));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchRun(ids.project)).resolves.toMatchObject({
+      workspace: { artifacts: expect.arrayContaining([expect.objectContaining({
+        kind: "memo",
+        payload: expect.objectContaining({ narrative: expect.objectContaining({
+          schema_version: "company-research-memo-narrative.v1",
+          provider_model_identifier: "legacy-provider/model",
+        }) }),
+      })]) },
+    });
+    for (let index = 0; index < invalid.length; index += 1) {
+      await expect(api.companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
+
+  it.each([
+    "queued",
+    "collecting_sources",
+    "analyzing_company",
+    "building_forecast",
+    "generating_report",
+    "needs_input",
+    "failed",
+    "completed",
+  ] as const)("accepts the exact company-research run projection for %s", async (status) => {
+    const body = companyResearchRunAtStatus(status);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(body)));
+
+    await expect(new InvestmentResearchApi().companyResearchRun(ids.project)).resolves.toMatchObject({ status });
+  });
+
+  it("keeps a legacy needs-input run readable without a critical-input head", async () => {
+    const legacy = companyResearchRunBody();
+    legacy.critical_inputs = null;
+    delete legacy.workspace.change_summary.artifact_versions.critical_inputs;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(legacy)));
+
+    await expect(new InvestmentResearchApi().companyResearchRun(ids.project)).resolves.toMatchObject({
+      status: "needs_input",
+      critical_inputs: null,
+    });
+  });
+
+  it("accepts a blocked provider failure projected at the analysis checkpoint", async () => {
+    const blocked = companyResearchRunAtStatus("failed");
+    Object.assign(blocked.workspace.preparation, {
+      status: "blocked",
+      progress: 35,
+      error: {
+        schema_version: "underwriting.v1",
+        code: "provider_unavailable",
+        failed_step: "model_bundle",
+        retryable: false,
+        next_attempt_at: null,
+      },
+    });
+    blocked.progress = 35;
+    blocked.recent_process.at(-1).retry = {
+      schema_version: "underwriting.v1",
+      retryable: false,
+      next_attempt_at: null,
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(blocked)));
+
+    await expect(new InvestmentResearchApi().companyResearchRun(ids.project)).resolves.toMatchObject({
+      status: "failed",
+      workspace: { preparation: { status: "blocked" } },
+    });
+  });
+
+  it("binds the latest process retry projection to the workspace preparation error", async () => {
+    const missing = companyResearchRunAtStatus("failed");
+    missing.recent_process.at(-1).retry = null;
+    const stale = companyResearchRunAtStatus("failed");
+    stale.recent_process.at(-1).retry.next_attempt_at = "2026-08-24T00:21:00Z";
+    const unexpected = companyResearchRunBody();
+    unexpected.recent_process.at(-1).retry = {
+      schema_version: "underwriting.v1",
+      retryable: true,
+      next_attempt_at: "2026-08-24T00:20:00Z",
+    };
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(missing))
+      .mockResolvedValueOnce(response(stale))
+      .mockResolvedValueOnce(response(unexpected));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+
+    for (let index = 0; index < 3; index += 1) {
+      await expect(api.companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
+
+  it("rejects status, progress, stage, and preparation combinations that are not one exact projection", async () => {
+    const candidates = Array.from({ length: 5 }, () => companyResearchRunBody());
+    candidates[0].status = "queued";
+    candidates[1].progress = 60;
+    candidates[1].workspace.preparation.progress = 60;
+    candidates[2].stages[3].status = "active";
+    Object.assign(candidates[3].workspace.preparation, { status: "building_model", current_step: "model_bundle" });
+    candidates[4].critical_inputs.inputs[0].decision = "confirmed";
+    candidates[4].status = "completed";
+    candidates[4].progress = 95;
+    candidates[4].workspace.preparation.progress = 95;
+    const fetchSpy = vi.fn();
+    candidates.forEach((candidate) => fetchSpy.mockResolvedValueOnce(response(candidate)));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+
+    for (let index = 0; index < candidates.length; index += 1) {
+      await expect(api.companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
+
+  it("returns a complete fresh run after a critical-input decision", async () => {
+    const decided = completedCompanyResearchRunBody();
+    decided.critical_inputs.artifact_id = ids.criticalInputsSuccessor;
+    decided.critical_inputs.version = 2;
+    decided.workspace.change_summary.artifact_versions.critical_inputs = 2;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(decided)));
+    const api = new InvestmentResearchApi();
+    const request = {
+      schema_version: "underwriting.v1" as const,
+      critical_input_key: "reported_revenue",
+      expected_artifact_id: ids.criticalInputs,
+      expected_input_fingerprint: criticalInputFingerprint,
+      decision: "confirmed" as const,
+      replacement_value: null,
+      replacement_unit: null,
+      replacement_rationale: null,
+    };
+
+    await expect(api.decideCompanyResearchCriticalInput(ids.project, request)).resolves.toMatchObject({
+      project_id: ids.project,
+      workspace: { project_id: ids.project },
+      critical_inputs: { inputs: [{ key: "reported_revenue", decision: "confirmed" }] },
+    });
+  });
+
+  it("rejects a critical-input decision response that reuses the stale artifact head", async () => {
+    const stale = completedCompanyResearchRunBody();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(stale)));
+
+    await expect(new InvestmentResearchApi().decideCompanyResearchCriticalInput(ids.project, {
+      schema_version: "underwriting.v1",
+      critical_input_key: "reported_revenue",
+      expected_artifact_id: ids.criticalInputs,
+      expected_input_fingerprint: criticalInputFingerprint,
+      decision: "confirmed",
+      replacement_value: null,
+      replacement_unit: null,
+      replacement_rationale: null,
+    })).rejects.toMatchObject({ code: "identity_mismatch" });
+  });
+
+  it.each([
+    ["1.0", "1"],
+    ["01", "1"],
+    ["1e3", "1000"],
+  ])("accepts a server-canonical decimal replacement for request %s", async (requested, returned) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(replacementDecisionRunBody(returned))));
+
+    await expect(new InvestmentResearchApi().decideCompanyResearchCriticalInput(ids.project, {
+      schema_version: "underwriting.v1",
+      critical_input_key: "reported_revenue",
+      expected_artifact_id: ids.criticalInputs,
+      expected_input_fingerprint: criticalInputFingerprint,
+      decision: "replaced_with_user_assumption",
+      replacement_value: requested,
+      replacement_unit: "USD_million",
+      replacement_rationale: "Rebased",
+    })).resolves.toMatchObject({
+      critical_inputs: { inputs: [{ replacement: { value: returned } }] },
+    });
+  });
+
+  it("rejects a materially different decimal replacement", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(response(replacementDecisionRunBody("2")));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+    const request = {
+      schema_version: "underwriting.v1" as const,
+      critical_input_key: "reported_revenue",
+      expected_artifact_id: ids.criticalInputs,
+      expected_input_fingerprint: criticalInputFingerprint,
+      decision: "replaced_with_user_assumption" as const,
+      replacement_unit: "USD_million",
+      replacement_rationale: "Rebased",
+    };
+
+    await expect(api.decideCompanyResearchCriticalInput(ids.project, { ...request, replacement_value: "1.0" }))
+      .rejects.toMatchObject({ code: "identity_mismatch" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects open, foreign, stale, duplicate, and impossible run envelopes", async () => {
+    const candidates = Array.from({ length: 11 }, () => companyResearchRunBody());
+    Object.assign(candidates[0], { raw_error: "Authorization: Bearer secret" });
+    candidates[1].project_id = ids.company;
+    candidates[2].company.external_key = "FOREIGN:COMPANY";
+    candidates[3].stages.reverse();
+    candidates[4].stages[1].key = candidates[4].stages[0].key;
+    candidates[5].recent_process[0].raw_error = "/Users/analyst/private/report.pdf";
+    candidates[6].critical_inputs.inputs.push(structuredClone(candidates[6].critical_inputs.inputs[0]));
+    candidates[7].critical_inputs.inputs[0].input_fingerprint = "b".repeat(64);
+    candidates[8].critical_inputs.inputs[0].decision = "confirmed";
+    candidates[8].critical_inputs.inputs[0].replacement = structuredClone(candidates[8].critical_inputs.inputs[0]);
+    delete candidates[8].critical_inputs.inputs[0].replacement.impact;
+    delete candidates[8].critical_inputs.inputs[0].replacement.decision;
+    delete candidates[8].critical_inputs.inputs[0].replacement.replacement;
+    delete candidates[8].critical_inputs.inputs[0].replacement.input_fingerprint;
+    candidates[9].recent_process.push(...Array.from({ length: 98 }, (_, index) => ({
+      schema_version: "underwriting.v1", code: `extra_${index}`, message: "Extra", occurred_at: "2026-08-24T00:09:00Z", retry: null,
+    })));
+    candidates[10].status = "completed";
+    const memo = candidates[10].workspace.artifacts.find((item: any) => item.kind === "memo");
+    candidates[10].workspace.artifacts = candidates[10].workspace.artifacts.filter((item: any) => item !== memo);
+    delete candidates[10].workspace.change_summary.artifact_versions.memo;
+    const fetchSpy = vi.fn();
+    candidates.forEach((candidate) => fetchSpy.mockResolvedValueOnce(response(candidate)));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+
+    for (let index = 0; index < candidates.length; index += 1) {
+      await expect(api.companyResearchRun(ids.project, index === 9)).rejects.toMatchObject({
+        code: "invalid_response",
+      });
+    }
+  });
+
+  it("rejects unreachable process transitions while accepting a recent reachable suffix", async () => {
+    const unreachable = companyResearchRunBody();
+    unreachable.recent_process = [
+      { schema_version: "underwriting.v1", code: "company_research_published", message: "Research report published", occurred_at: "2026-08-24T00:01:00Z", retry: null },
+      { schema_version: "underwriting.v1", code: "model_stage_claimed", message: "Company analysis started", occurred_at: "2026-08-24T00:02:00Z", retry: null },
+    ];
+    const suffix = companyResearchRunBody(3);
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(unreachable))
+      .mockResolvedValueOnce(response(suffix)));
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.companyResearchRun(ids.project)).resolves.toMatchObject({
+      recent_process: [{ code: "source_stage_claimed" }, { code: "evidence_index_prepared" }, { code: "model_stage_claimed" }],
+    });
+  });
+
+  it("requires an initialized genesis when the full process history is requested", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(companyResearchRunBody(3))));
+
+    await expect(new InvestmentResearchApi().companyResearchRun(ids.project, true))
+      .rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("accepts a reachable capped full-process suffix after the backend truncates a long history", async () => {
+    const capped = companyResearchRunBody();
+    capped.recent_process = [
+      ...Array.from({ length: 99 }, () => ({
+        schema_version: "underwriting.v1",
+        code: "evidence_reviewed",
+        message: "Source review recorded",
+        occurred_at: "2026-08-24T00:02:00Z",
+        retry: null,
+      })),
+      {
+        schema_version: "underwriting.v1",
+        code: "model_stage_claimed",
+        message: "Company analysis started",
+        occurred_at: "2026-08-24T00:03:00Z",
+        retry: null,
+      },
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(capped)));
+
+    const result = await new InvestmentResearchApi().companyResearchRun(ids.project, true);
+
+    expect(result.recent_process).toHaveLength(100);
+    expect(result.recent_process[0]).toMatchObject({ code: "evidence_reviewed" });
+  });
+
+  it("rejects critical-input provenance and decision fields that contradict their kind", async () => {
+    const candidates = Array.from({ length: 8 }, () => companyResearchRunBody());
+    candidates[0].critical_inputs.inputs[0].source_ref = null;
+    Object.assign(candidates[1].critical_inputs.inputs[0], { kind: "consensus", provider: null, available_at: null, coverage: null });
+    Object.assign(candidates[2].critical_inputs.inputs[0], {
+      kind: "ai_assumption", assumption_key: "company-research-mainline.v1:reported_revenue", rationale: "Scenario input",
+    });
+    Object.assign(candidates[3].critical_inputs.inputs[0], {
+      kind: "derived_calculation", source_ref: null, equation_id: "revenue.v1", parent_input_keys: ["reported_revenue"],
+    });
+    Object.assign(candidates[4].critical_inputs.inputs[0], {
+      kind: "unknown", value_type: "none", value: "1", source_ref: null, unknown_reason: "Missing", gap_key: "missing_revenue",
+    });
+    candidates[5].critical_inputs.inputs[0].decision = "accepted_gap";
+    candidates[6].critical_inputs.inputs[0].decision = "marked_unknown";
+    Object.assign(candidates[6].critical_inputs.inputs[0], {
+      kind: "unknown", value_type: "none", value: null, source_ref: null, unknown_reason: "Missing", gap_key: "missing_revenue",
+    });
+    candidates[7].critical_inputs.inputs[0].parent_input_keys = ["z_parent", "a_parent"];
+    const fetchSpy = vi.fn();
+    candidates.forEach((candidate) => fetchSpy.mockResolvedValueOnce(response(candidate)));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+
+    for (let index = 0; index < candidates.length; index += 1) {
+      await expect(api.companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    }
+  });
+
+  it("rejects more than three recent process entries and contradictory decision requests before fetch", async () => {
+    const fourRecent = companyResearchRunBody(4);
+    const fetchSpy = vi.fn().mockResolvedValue(response(fourRecent));
+    vi.stubGlobal("fetch", fetchSpy);
+    const api = new InvestmentResearchApi();
+
+    await expect(api.companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+    await expect(api.decideCompanyResearchCriticalInput(ids.project, {
+      schema_version: "underwriting.v1",
+      critical_input_key: "reported_revenue",
+      expected_artifact_id: ids.criticalInputs,
+      expected_input_fingerprint: criticalInputFingerprint,
+      decision: "confirmed",
+      replacement_value: "2",
+    })).rejects.toMatchObject({ code: "invalid_request" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "TimeoutError: Authorization: Bearer super-secret",
+    '{"api_key":"super-secret","query":"private company request"}',
+    "/Users/analyst/private/company-source.pdf",
+  ])("rejects raw process text even when the process object shape is closed", async (message) => {
+    const body = companyResearchRunBody();
+    body.recent_process[body.recent_process.length - 1].message = message;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(body)));
+
+    await expect(new InvestmentResearchApi().companyResearchRun(ids.project)).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
   afterEach(() => vi.unstubAllGlobals());
 
   it.each(operationCases)("enforces the $name wire contract", async (operation) => {
@@ -568,7 +1283,7 @@ describe("InvestmentResearchApi", () => {
     vi.stubGlobal("fetch", fetchSpy);
     await operation.run(new InvestmentResearchApi());
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0]!;
+    const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe(operation.url);
     expect(init).toMatchObject({ method: operation.method, credentials: "include" });
     if (operation.method === "GET") expect(init?.body).toBeUndefined();
@@ -672,7 +1387,7 @@ describe("InvestmentResearchApi", () => {
       [`/api/underwriting/v1/product/company-research/projects/${ids.project}`, "GET"],
       [`/api/underwriting/v1/product/company-research/projects/${ids.project}/retry`, "POST"],
     ]);
-    expect(fetchSpy.mock.calls[1]![1]!?.headers).toMatchObject({ "Idempotency-Key": "company-research-key" });
+    expect(fetchSpy.mock.calls[1][1]?.headers).toMatchObject({ "Idempotency-Key": "company-research-key" });
   });
 
   it("uses the five high-level company research publication routes and sends idempotency only for publish", async () => {
@@ -708,11 +1423,11 @@ describe("InvestmentResearchApi", () => {
       [`${root}/${ids.project}/revisions/${ids.revision}`, "GET"],
       [`${root}/${ids.project}/revisions/${ids.revision}/export`, "GET"],
     ]);
-    expect(fetchSpy.mock.calls[0]![1]!?.headers).not.toHaveProperty("Idempotency-Key");
-    expect(fetchSpy.mock.calls[1]![1]!?.headers).not.toHaveProperty("Idempotency-Key");
-    expect(fetchSpy.mock.calls[2]![1]!?.headers).toMatchObject({ "Idempotency-Key": "alphabet-live-freeze" });
-    expect(fetchSpy.mock.calls[3]![1]!?.headers).toBeUndefined();
-    expect(fetchSpy.mock.calls[4]![1]!?.headers).toBeUndefined();
+    expect(fetchSpy.mock.calls[0][1]?.headers).not.toHaveProperty("Idempotency-Key");
+    expect(fetchSpy.mock.calls[1][1]?.headers).not.toHaveProperty("Idempotency-Key");
+    expect(fetchSpy.mock.calls[2][1]?.headers).toMatchObject({ "Idempotency-Key": "alphabet-live-freeze" });
+    expect(fetchSpy.mock.calls[3][1]?.headers).toBeUndefined();
+    expect(fetchSpy.mock.calls[4][1]?.headers).toBeUndefined();
   });
 
   it("accepts the persisted publication manifest hash after the preview hash is consumed", async () => {
@@ -868,7 +1583,7 @@ describe("InvestmentResearchApi", () => {
     const reorderedArtifacts = clone(companyResearchPublicationPreviewBody());
     reorderedArtifacts.artifacts.reverse();
     const duplicateArtifact = clone(companyResearchPublicationPreviewBody());
-    duplicateArtifact.artifacts[1]!.id = duplicateArtifact.artifacts[0]!.id;
+    duplicateArtifact.artifacts[1].id = duplicateArtifact.artifacts[0].id;
 
     const wrongPublishedProject = clone(companyResearchFrozenRevisionBody());
     wrongPublishedProject.project_id = ids.company;
@@ -954,7 +1669,7 @@ describe("InvestmentResearchApi", () => {
   it("rejects company-research response identity and preparation-state drift", async () => {
     const api = new InvestmentResearchApi();
     const invalidPreview = companyResearchPreviewBody();
-    invalidPreview.securities.push({ ...invalidPreview.securities[0]! });
+    invalidPreview.securities.push({ ...invalidPreview.securities[0] });
     const invalidStatus = companyResearchProjectBody("completed", "evidence_index");
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(response(invalidPreview))
@@ -1040,7 +1755,7 @@ describe("InvestmentResearchApi", () => {
 
   it("validates the closed company-research workspace and review response", async () => {
     const workspace = companyResearchWorkspaceBody();
-    const reviewed = { schema_version: "underwriting.v1", evidence_artifact: { ...workspace.artifacts[0]!, version: 2 } };
+    const reviewed = { schema_version: "underwriting.v1", evidence_artifact: { ...workspace.artifacts[0], version: 2 } };
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(workspace))
       .mockResolvedValueOnce(response(reviewed));
@@ -1051,6 +1766,42 @@ describe("InvestmentResearchApi", () => {
       `/api/underwriting/v1/product/company-research/projects/${ids.project}/workspace`,
       `/api/underwriting/v1/product/company-research/projects/${ids.project}/evidence-reviews`,
     ]);
+  });
+
+  it("reads governed evidence with exact derived-fact provenance", async () => {
+    const workspace = companyResearchWorkspaceBody();
+    const evidence = workspace.artifacts[0];
+    const reported = evidence.payload.facts[0];
+    evidence.payload.facts.push({
+      ...reported,
+      fact_key: "revenue_yoy_change_2024",
+      metric_key: "revenue_yoy_change",
+      observation: {
+        ...reported.observation,
+        key: "revenue_yoy_change",
+        value: "-0.09",
+        unit: "ratio",
+        currency: null,
+        state: "derived",
+        source_ref: {
+          kind: "evidence_derivation",
+          equation_id: "revenue-yoy.v1",
+          parent_fact_keys: ["reported_revenue"],
+        },
+      },
+    });
+    evidence.payload.counterevidence_fact_keys = ["revenue_yoy_change_2024"];
+    evidence.payload.next_verification_events = ["Verify the next issuer filing."];
+    vi.stubGlobal("fetch", vi.fn(async () => response(workspace)));
+
+    const decoded = await new InvestmentResearchApi().companyResearchWorkspace(ids.project);
+    expect(decoded.artifacts.find((item) => item.kind === "evidence_index"))
+      .toMatchObject({
+        payload: {
+          counterevidence_fact_keys: ["revenue_yoy_change_2024"],
+          next_verification_events: ["Verify the next issuer filing."],
+        },
+      });
   });
 
   it("uses memo-derived gaps and preserves legacy model gap counts", async () => {
@@ -1067,7 +1818,7 @@ describe("InvestmentResearchApi", () => {
 
   it("rejects a workbench response with unknown artifact kinds or a ready module without artifact", async () => {
     const unknown = companyResearchWorkspaceBody();
-    unknown.artifacts[0]!.kind = "unknown_kind";
+    unknown.artifacts[0].kind = "unknown_kind";
     const missing = companyResearchWorkspaceBody();
     const evidenceModule = missing.modules.find((item: any) => item.key === "evidence_and_gaps");
     evidenceModule.state = "ready";
@@ -1083,11 +1834,11 @@ describe("InvestmentResearchApi", () => {
 
   it("rejects reordered modules, invalid decimals, and evidence without its exact source parent", async () => {
     const reordered = companyResearchWorkspaceBody();
-    [reordered.modules[0]!, reordered.modules[1]!] = [reordered.modules[1]!, reordered.modules[0]!];
+    [reordered.modules[0], reordered.modules[1]] = [reordered.modules[1], reordered.modules[0]];
     const invalidDecimal = companyResearchWorkspaceBody();
-    invalidDecimal.artifacts[0]!.payload.facts[0]!.observation.value = "1e3";
+    invalidDecimal.artifacts[0].payload.facts[0].observation.value = "1e3";
     const missingParent = companyResearchWorkspaceBody();
-    missingParent.artifacts[0]!.source_refs = [];
+    missingParent.artifacts[0].source_refs = [];
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(reordered))
       .mockResolvedValueOnce(response(invalidDecimal))
@@ -1102,7 +1853,7 @@ describe("InvestmentResearchApi", () => {
 
   it("rejects derived observations backed by external facts and invalid failure timing", async () => {
     const externalDerived = companyResearchWorkspaceBody();
-    externalDerived.artifacts[0]!.payload.facts[0]!.observation.state = "derived";
+    externalDerived.artifacts[0].payload.facts[0].observation.state = "derived";
     const recoverableWithoutRetry = companyResearchWorkspaceBody();
     recoverableWithoutRetry.preparation = { schema_version: "underwriting.v1", id: ids.draft, status: "recoverable_failure", current_step: "evidence_index", progress: 10, error: { schema_version: "underwriting.v1", code: "source_unavailable", failed_step: "evidence_index", retryable: true, next_attempt_at: null } };
     recoverableWithoutRetry.artifacts = [];
@@ -1122,7 +1873,7 @@ describe("InvestmentResearchApi", () => {
     const valid = addReportedBusinessArtifact(companyResearchWorkspaceBody());
     const substituted = addReportedBusinessArtifact(companyResearchWorkspaceBody());
     const business = substituted.artifacts.find((item: any) => item.kind === "business_map");
-    business.payload.modules[0]!.classified_evidence[0]!.observation.value = "999";
+    business.payload.modules[0].classified_evidence[0].observation.value = "999";
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(valid))
       .mockResolvedValueOnce(response(substituted));
@@ -1135,7 +1886,7 @@ describe("InvestmentResearchApi", () => {
 
   it("counts rejected evidence as reviewed when it is only displayed in the registry", async () => {
     const workspace = companyResearchWorkspaceBody();
-    workspace.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0]!.review_decision = "rejected";
+    workspace.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0].review_decision = "rejected";
     workspace.change_summary.reviewed_fact_count = 1;
     vi.stubGlobal("fetch", vi.fn(async () => response(workspace)));
 
@@ -1145,9 +1896,9 @@ describe("InvestmentResearchApi", () => {
 
   it("rejects downstream reported observations backed by rejected or pending facts", async () => {
     const rejected = addReportedBusinessArtifact(companyResearchWorkspaceBody());
-    rejected.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0]!.review_decision = "rejected";
+    rejected.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0].review_decision = "rejected";
     const pending = addReportedBusinessArtifact(companyResearchWorkspaceBody());
-    delete pending.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0]!.review_decision;
+    delete pending.artifacts.find((item: any) => item.kind === "evidence_index").payload.facts[0].review_decision;
     pending.change_summary.reviewed_fact_count = 0;
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(rejected))
@@ -1185,7 +1936,7 @@ describe("InvestmentResearchApi", () => {
     const valid = addScenarioArtifact(companyResearchWorkspaceBody());
     const invalid = addScenarioArtifact(companyResearchWorkspaceBody());
     const scenario = invalid.artifacts.find((item: any) => item.kind === "scenario_set");
-    const revenue = scenario.payload.scenarios[0]!.driver_overrides.find((item: any) => item.driver_key === "revenue");
+    const revenue = scenario.payload.scenarios[0].driver_overrides.find((item: any) => item.driver_key === "revenue");
     revenue.observation.unit = "USD_million";
     revenue.observation.currency = "USD";
     const fetchSpy = vi.spyOn(globalThis, "fetch")
@@ -1227,7 +1978,7 @@ describe("InvestmentResearchApi", () => {
     mismatched.project_id = ids.company;
     mismatched.artifacts.forEach((artifact: any) => { artifact.project_id = ids.company; });
     const duplicate = companyResearchWorkspaceBody();
-    duplicate.modules[1]! = { ...duplicate.modules[0]! };
+    duplicate.modules[1] = { ...duplicate.modules[0] };
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(extra))
       .mockResolvedValueOnce(response(mismatched))
@@ -1242,13 +1993,13 @@ describe("InvestmentResearchApi", () => {
 
   it("rejects nonexistent, foreign, hash-substituted, and duplicate registry artifacts", async () => {
     const nonexistent = companyResearchWorkspaceBody();
-    nonexistent.modules.find((item: any) => item.key === "evidence_and_gaps").artifact_refs[0]!.id = ids.company;
+    nonexistent.modules.find((item: any) => item.key === "evidence_and_gaps").artifact_refs[0].id = ids.company;
     const foreign = companyResearchWorkspaceBody();
-    foreign.artifacts[0]!.project_id = ids.company;
+    foreign.artifacts[0].project_id = ids.company;
     const substituted = companyResearchWorkspaceBody();
-    substituted.modules.find((item: any) => item.key === "evidence_and_gaps").artifact_refs[0]!.content_hash = companyResearchHash;
+    substituted.modules.find((item: any) => item.key === "evidence_and_gaps").artifact_refs[0].content_hash = companyResearchHash;
     const duplicate = companyResearchWorkspaceBody();
-    duplicate.artifacts.push({ ...duplicate.artifacts[0]! });
+    duplicate.artifacts.push({ ...duplicate.artifacts[0] });
     const fetchSpy = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(response(nonexistent))
       .mockResolvedValueOnce(response(foreign))
@@ -1487,9 +2238,9 @@ describe("InvestmentResearchApi", () => {
     const extraPreview = previewBody();
     extraPreview.manifest.market_snapshot_refs.push(`price:${ids.membershipA}`);
     const wrongPrefixPreview = previewBody();
-    wrongPrefixPreview.manifest.market_snapshot_refs[0]! = `fx:${ids.priceA}`;
+    wrongPrefixPreview.manifest.market_snapshot_refs[0] = `fx:${ids.priceA}`;
     const duplicatePreview = previewBody();
-    duplicatePreview.manifest.market_snapshot_refs[1]! = duplicatePreview.manifest.market_snapshot_refs[0]!;
+    duplicatePreview.manifest.market_snapshot_refs[1] = duplicatePreview.manifest.market_snapshot_refs[0];
     const forbiddenModelPreview = previewBody();
     Reflect.set(forbiddenModelPreview.manifest, "model_refs", ["model:forbidden"]);
     const missingRevision = revisionBody();
@@ -1497,7 +2248,7 @@ describe("InvestmentResearchApi", () => {
     const extraRevision = revisionBody();
     extraRevision.market_snapshot_ids.push(ids.membershipA);
     const duplicateRevision = revisionBody();
-    duplicateRevision.market_snapshot_ids[1]! = duplicateRevision.market_snapshot_ids[0]!;
+    duplicateRevision.market_snapshot_ids[1] = duplicateRevision.market_snapshot_ids[0];
     const fetchSpy = vi.fn()
       .mockResolvedValueOnce(response(missingPreview))
       .mockResolvedValueOnce(response(extraPreview))

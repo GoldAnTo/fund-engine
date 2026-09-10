@@ -4,6 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, open, realpath, rename, rmdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 const USAGE = "usage: verify-live-company-research-ui.mjs [--timeout-seconds 30..300]";
 const LOOPBACK_HOST = "127.0.0.1";
@@ -37,6 +38,40 @@ const WORKSPACE_STATES = new Set([
   "blocked",
   "completed",
 ]);
+const SHA256_DIGEST = /^[0-9a-f]{64}$/u;
+const UUID_VALUE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const FORBIDDEN_BROWSER_SHORTCUTS = Object.freeze([
+  /\/model\/?$/u,
+  /\/publication-shortcut\/?$/u,
+  /\/publish-shortcut\/?$/u,
+]);
+
+export const LIVE_COMPANY_RESEARCH_CASES = Object.freeze([
+  Object.freeze({
+    id: "catl-answerable",
+    query: "宁德时代",
+    companyExternalKey: "CN:300750:COMPANY",
+    companyName: "宁德时代新能源科技股份有限公司（CATL）",
+    securityExternalKeys: Object.freeze(["SZSE:300750"]),
+    expectedAnswerability: "answerable",
+    expectedCriticalInputCount: 55,
+    manifestRelativePath: "app/underwriting/fixtures/catl_answerable_case/manifest.json",
+    manifestSchemaVersion: "catl.answerable-case.manifest.v1",
+    exportFilenamePrefix: "300750-company-research-",
+  }),
+  Object.freeze({
+    id: "alphabet-not-answerable",
+    query: "Alphabet",
+    companyExternalKey: "US:ALPHABET:COMPANY",
+    companyName: "Alphabet Inc.",
+    securityExternalKeys: Object.freeze(["NASDAQ:GOOG", "NASDAQ:GOOGL"]),
+    expectedAnswerability: "not_answerable",
+    expectedCriticalInputCount: 77,
+    manifestRelativePath: "app/underwriting/fixtures/alphabet_golden_case/manifest.json",
+    manifestSchemaVersion: "alphabet.golden-case.manifest.v1",
+    exportFilenamePrefix: "alphabet-company-research-",
+  }),
+]);
 
 export function repositoryPythonVenvRoots(repositoryRoot) {
   if (typeof repositoryRoot !== "string" || !path.isAbsolute(repositoryRoot)) {
@@ -53,6 +88,304 @@ export function repositoryPythonVenvRoots(repositoryRoot) {
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function assertLiveCaseDefinitions(cases) {
+  if (!Array.isArray(cases) || cases.length !== 2
+    || cases[0]?.id !== "catl-answerable" || cases[1]?.id !== "alphabet-not-answerable") {
+    throw new Error("live verifier requires the exact CATL and Alphabet cases");
+  }
+  const expected = [
+    ["CN:300750:COMPANY", "answerable", "SZSE:300750"],
+    ["US:ALPHABET:COMPANY", "not_answerable", "NASDAQ:GOOG,NASDAQ:GOOGL"],
+  ];
+  const seen = new Set();
+  for (const [index, item] of cases.entries()) {
+    if (!isRecord(item) || seen.has(item.id)
+      || typeof item.query !== "string" || item.query.length === 0 || item.query !== item.query.trim()
+      || typeof item.companyName !== "string" || item.companyName.length === 0
+      || !Array.isArray(item.securityExternalKeys) || item.securityExternalKeys.length === 0
+      || new Set(item.securityExternalKeys).size !== item.securityExternalKeys.length
+      || !item.securityExternalKeys.every((key) => typeof key === "string" && key.length > 0)
+      || !Number.isSafeInteger(item.expectedCriticalInputCount) || item.expectedCriticalInputCount < 1
+      || typeof item.manifestRelativePath !== "string" || item.manifestRelativePath.startsWith("/")
+      || !item.manifestRelativePath.endsWith("/manifest.json")
+      || typeof item.manifestSchemaVersion !== "string" || !item.manifestSchemaVersion.endsWith(".v1")
+      || typeof item.exportFilenamePrefix !== "string" || !item.exportFilenamePrefix.endsWith("-")) {
+      throw new Error("live verifier case definition is malformed");
+    }
+    const [companyKey, answerability, securityKeys] = expected[index];
+    if (item.companyExternalKey !== companyKey || item.expectedAnswerability !== answerability
+      || item.securityExternalKeys.join(",") !== securityKeys) {
+      throw new Error("live verifier requires the exact CATL and Alphabet cases");
+    }
+    seen.add(item.id);
+  }
+  return cases;
+}
+
+export function assertLiveCaseOutcome(definition, proof) {
+  assertLiveCaseDefinitions(LIVE_COMPANY_RESEARCH_CASES);
+  if (!LIVE_COMPANY_RESEARCH_CASES.includes(definition) || !isRecord(proof)
+    || proof.answerability !== definition.expectedAnswerability
+    || proof.criticalInputCount !== definition.expectedCriticalInputCount) {
+    throw new Error("live case outcome or critical-input count mismatch");
+  }
+  if (!UUID_VALUE.test(proof.selectedRevisionId ?? "")
+    || proof.replayedRevisionId !== proof.selectedRevisionId
+    || proof.exportedRevisionId !== proof.selectedRevisionId
+    || !SHA256_DIGEST.test(proof.publishedManifestHash ?? "")
+    || proof.replayedManifestHash !== proof.publishedManifestHash) {
+    throw new Error("live case frozen revision identity mismatch");
+  }
+  if (!(proof.exportBytes instanceof Uint8Array) || proof.exportBytes.byteLength === 0
+    || !SHA256_DIGEST.test(proof.declaredExportHash ?? "")
+    || createHash("sha256").update(proof.exportBytes).digest("hex") !== proof.declaredExportHash) {
+    throw new Error("live case Markdown export hash mismatch");
+  }
+  if (!Number.isSafeInteger(proof.valueRangeCount)
+    || definition.expectedAnswerability === "answerable" && proof.valueRangeCount < 1
+    || definition.expectedAnswerability === "not_answerable" && proof.valueRangeCount !== 0) {
+    throw new Error("live case answerability value-range boundary mismatch");
+  }
+  if (definition.id === "alphabet-not-answerable") {
+    if (proof.assessmentDirection !== null || proof.assessmentConfidence !== null
+      || proof.valueRange !== null || proof.returnRange !== null) {
+      throw new Error("live Alphabet refusal proof must close every investment field");
+    }
+  } else if (definition.id === "catl-answerable") {
+    const range = proof.valueRange;
+    const returns = proof.returnRange;
+    if (!isRecord(range) || typeof range.minimum !== "string"
+      || typeof range.maximum !== "string" || range.currency !== "CNY"
+      || !isRecord(returns) || typeof returns.minimum !== "string"
+      || typeof returns.maximum !== "string"
+      || !Array.isArray(proof.scenarioIds)
+      || proof.scenarioIds.join(",") !== "base,bull,bear"
+      || !Array.isArray(proof.sensitivityVariables)
+      || [...proof.sensitivityVariables].sort().join(",") !== "required_return,terminal_growth"
+      || !Number.isSafeInteger(proof.strongestCounterevidenceCount)
+      || proof.strongestCounterevidenceCount < 1
+      || !Number.isSafeInteger(proof.nextVerificationEventCount)
+      || proof.nextVerificationEventCount < 1) {
+      throw new Error("live CATL answerable proof is incomplete");
+    }
+  } else {
+    throw new Error("live case outcome definition is unavailable");
+  }
+  return proof;
+}
+
+function criticalInputSuccessorError(message) {
+  throw new Error(`critical input successor ${message}`);
+}
+
+function decimalSemanticKey(value) {
+  if (typeof value !== "string") return null;
+  const match = /^([+-]?)(?:(\d(?:_?\d)*)(?:\.(\d(?:_?\d)*)?)?|\.(\d(?:_?\d)*))(?:[eE]([+-]?\d(?:_?\d)*))?$/u.exec(value.trim());
+  if (match === null) return null;
+  const integer = (match[2] ?? "").replaceAll("_", "");
+  const fraction = (match[3] ?? match[4] ?? "").replaceAll("_", "");
+  let digits = `${integer}${fraction}`.replace(/^0+/u, "");
+  if (digits === "") return "0:0:0";
+  const trailing = digits.match(/0+$/u)?.[0].length ?? 0;
+  if (trailing > 0) digits = digits.slice(0, -trailing);
+  const exponent = BigInt((match[5] ?? "0").replaceAll("_", ""))
+    - BigInt(fraction.length) + BigInt(trailing);
+  return `${match[1] === "-" ? "-" : "+"}:${digits}:${exponent}`;
+}
+
+function canonicalDecimalString(value) {
+  const semantic = decimalSemanticKey(value);
+  if (semantic === null) return null;
+  const [sign, digits, exponentText] = semantic.split(":");
+  if (digits === "0") return "0";
+  const exponent = BigInt(exponentText);
+  let unsigned;
+  if (exponent >= 0n) {
+    if (exponent > 10_000n) return null;
+    unsigned = `${digits}${"0".repeat(Number(exponent))}`;
+  } else {
+    const point = BigInt(digits.length) + exponent;
+    if (point > 0n) {
+      unsigned = `${digits.slice(0, Number(point))}.${digits.slice(Number(point))}`;
+    } else {
+      if (point < -10_000n) return null;
+      unsigned = `0.${"0".repeat(Number(-point))}${digits}`;
+    }
+  }
+  return sign === "-" ? `-${unsigned}` : unsigned;
+}
+
+export function criticalInputSuccessorInputHash({
+  parentContentHash,
+  inputKey,
+  inputFingerprint,
+  decision,
+  replacement,
+}) {
+  return canonicalHash({
+    schema_version: "company-research-critical-input-decision.v1",
+    parent_content_hash: parentContentHash,
+    input_key: inputKey,
+    input_fingerprint: inputFingerprint,
+    decision,
+    replacement,
+  });
+}
+
+function criticalInputMap(value, expectedTotal, label) {
+  if (!isRecord(value) || !UUID_VALUE.test(value.artifact_id ?? "")
+    || !Number.isSafeInteger(value.version) || value.version < 1
+    || !SHA256_DIGEST.test(value.input_hash ?? "")
+    || !SHA256_DIGEST.test(value.content_hash ?? "")
+    || !Array.isArray(value.inputs) || value.inputs.length !== expectedTotal) {
+    criticalInputSuccessorError(`${label} artifact is invalid`);
+  }
+  const entries = new Map();
+  for (const item of value.inputs) {
+    if (!isRecord(item) || typeof item.key !== "string" || item.key.length === 0
+      || !SHA256_DIGEST.test(item.input_fingerprint ?? "") || entries.has(item.key)) {
+      criticalInputSuccessorError(`${label} input collection is invalid`);
+    }
+    entries.set(item.key, item);
+  }
+  return entries;
+}
+
+export function assertCriticalInputSuccessor({
+  current,
+  successor,
+  selected,
+  expectedDecision,
+  expectedRequest,
+  projectId,
+  expectedTotal,
+}) {
+  const allowedDecisions = new Set([
+    "confirmed",
+    "replaced_with_user_assumption",
+    "marked_unknown",
+    "accepted_gap",
+  ]);
+  if (!UUID_VALUE.test(projectId ?? "") || successor?.project_id !== projectId
+    || !Number.isSafeInteger(expectedTotal) || expectedTotal < 1
+    || !allowedDecisions.has(expectedDecision) || !isRecord(expectedRequest)) {
+    criticalInputSuccessorError("request identity is invalid");
+  }
+  const after = successor.critical_inputs;
+  const beforeByKey = criticalInputMap(current, expectedTotal, "current");
+  const afterByKey = criticalInputMap(after, expectedTotal, "successor");
+  if (after.artifact_id === current.artifact_id
+    || after.version !== current.version + 1
+    || after.input_hash === current.input_hash
+    || after.content_hash === current.content_hash) {
+    criticalInputSuccessorError("artifact identity did not advance");
+  }
+  const beforeKeys = [...beforeByKey.keys()].sort();
+  const afterKeys = [...afterByKey.keys()].sort();
+  if (!isDeepStrictEqual(afterKeys, beforeKeys)) {
+    criticalInputSuccessorError("input key collection changed");
+  }
+  const currentSelected = beforeByKey.get(selected?.key);
+  if (!currentSelected || currentSelected.decision !== "pending"
+    || !isDeepStrictEqual(currentSelected, selected)
+    || expectedRequest.critical_input_key !== selected.key
+    || expectedRequest.expected_artifact_id !== current.artifact_id
+    || expectedRequest.expected_input_fingerprint !== selected.input_fingerprint
+    || expectedRequest.decision !== expectedDecision) {
+    criticalInputSuccessorError("selected input is not bound to the exact request");
+  }
+  const afterSelected = afterByKey.get(selected.key);
+  if (!afterSelected || afterSelected.decision !== expectedDecision
+    || afterSelected.input_fingerprint !== selected.input_fingerprint) {
+    criticalInputSuccessorError("selected decision does not match the request");
+  }
+  const beforeSelectedIdentity = { ...currentSelected };
+  const afterSelectedIdentity = { ...afterSelected };
+  delete beforeSelectedIdentity.decision;
+  delete beforeSelectedIdentity.replacement;
+  delete afterSelectedIdentity.decision;
+  delete afterSelectedIdentity.replacement;
+  if (!isDeepStrictEqual(afterSelectedIdentity, beforeSelectedIdentity)) {
+    criticalInputSuccessorError("selected input identity changed");
+  }
+  const expectedInputHash = criticalInputSuccessorInputHash({
+    parentContentHash: current.content_hash,
+    inputKey: selected.key,
+    inputFingerprint: selected.input_fingerprint,
+    decision: expectedDecision,
+    replacement: afterSelected.replacement,
+  });
+  if (after.input_hash !== expectedInputHash) {
+    criticalInputSuccessorError("input hash does not authenticate the exact decision");
+  }
+  for (const [key, before] of beforeByKey) {
+    if (key !== selected.key && !isDeepStrictEqual(afterByKey.get(key), before)) {
+      criticalInputSuccessorError("non-selected input changed");
+    }
+  }
+  const beforePending = current.inputs.filter((item) => item.decision === "pending");
+  const afterPending = after.inputs.filter((item) => item.decision === "pending");
+  if (afterPending.length !== beforePending.length - 1) {
+    criticalInputSuccessorError("pending count did not decrement exactly once");
+  }
+  if (expectedDecision === "replaced_with_user_assumption") {
+    const replacement = afterSelected.replacement;
+    const assumptionPrefix = typeof selected.assumption_key === "string"
+      ? selected.assumption_key.split(":", 1)[0] : "company-research-mainline.v1";
+    const expectedReplacement = {
+      key: selected.key,
+      kind: "user_assumption",
+      value: replacement?.value,
+      value_type: selected.value_type,
+      period: selected.period,
+      unit: expectedRequest.replacement_unit,
+      currency: selected.currency,
+      source_ref: null,
+      provider: null,
+      available_at: null,
+      coverage: null,
+      rationale: expectedRequest.replacement_rationale,
+      assumption_key: `${assumptionPrefix}:user_assumption_input_${selected.input_fingerprint.slice(0, 16)}`,
+      equation_id: null,
+      parent_input_keys: [],
+      unknown_reason: null,
+      gap_key: null,
+    };
+    const valueMatches = selected.value_type === "decimal"
+      ? canonicalDecimalString(replacement?.value) === replacement?.value
+        && decimalSemanticKey(replacement?.value) === decimalSemanticKey(expectedRequest.replacement_value)
+      : replacement?.value === expectedRequest.replacement_value;
+    if (!isRecord(replacement) || !valueMatches
+      || !isDeepStrictEqual(replacement, expectedReplacement)) {
+      criticalInputSuccessorError("replacement does not match the request");
+    }
+  } else if (afterSelected.replacement !== null) {
+    criticalInputSuccessorError("unexpected replacement was returned");
+  }
+  return after;
+}
+
+export function assertCriticalInputFinalBinding({
+  critical,
+  finalRunCritical,
+  frozenArtifacts,
+}) {
+  if (!isRecord(critical) || !isRecord(finalRunCritical)
+    || !Array.isArray(frozenArtifacts)) {
+    throw new Error("critical input final binding is invalid");
+  }
+  const descriptor = frozenArtifacts.filter((item) => item?.kind === "critical_inputs");
+  if (descriptor.length !== 1
+    || !isDeepStrictEqual(finalRunCritical, critical)
+    || descriptor[0].id !== critical.artifact_id
+    || descriptor[0].version !== critical.version
+    || descriptor[0].input_hash !== critical.input_hash
+    || descriptor[0].content_hash !== critical.content_hash) {
+    throw new Error("critical input final binding does not match run and frozen revision");
+  }
+  return descriptor[0];
 }
 
 function isSafePositiveInteger(value) {
@@ -994,7 +1327,7 @@ export function buildVerifierEnvironment({ host, databaseUrl, token, backendUrl 
     APP_ENV: "production",
     DATABASE_URL: databaseUrl,
     RESEARCH_TENANT_TOKENS: JSON.stringify({ [token]: "live-company-research-verifier" }),
-    VITE_API_BASE: backendUrl,
+    VITE_BACKEND_URL: backendUrl,
     RESEARCH_BEARER_TOKEN: token,
     VITE_RESEARCH_CLIENT: "",
     NO_PROXY: "127.0.0.1,localhost",
@@ -1002,8 +1335,9 @@ export function buildVerifierEnvironment({ host, databaseUrl, token, backendUrl 
   };
 }
 
-export function createTrafficAudit(uiBase) {
+export function createTrafficAudit(uiBase, { clientMode = "" } = {}) {
   const origin = assertLoopbackUrl(uiBase).origin;
+  if (typeof clientMode !== "string") throw new Error("browser client mode is invalid");
   const websocketOrigin = origin.replace(/^http:/u, "ws:");
   const requests = [];
   const responses = [];
@@ -1042,8 +1376,26 @@ export function createTrafficAudit(uiBase) {
   return Object.freeze({
     assertAllowedRequest,
     assertAllowedWebSocket,
-    recordRequest(method, raw) {
+    assertNoMockAdapter() {
+      if (clientMode.trim().toLowerCase() === "mock") {
+        throw new Error("mock adapter is forbidden in live verification");
+      }
+    },
+    recordRequest(method, raw, headers = {}) {
       const url = assertAllowedRequest(raw);
+      const authorization = isRecord(headers)
+        ? headers.authorization ?? headers.Authorization
+        : undefined;
+      if (authorization !== undefined
+        && (url.origin !== origin || !url.pathname.startsWith("/api/"))) {
+        throw new Error("Bearer header may only target the local API");
+      }
+      if (url.origin === origin && url.pathname.startsWith("/api/")
+        && FORBIDDEN_BROWSER_SHORTCUTS.some((pattern) => pattern.test(url.pathname))) {
+        const label = url.pathname.includes("publish") || url.pathname.includes("publication")
+          ? "publish" : "model";
+        throw new Error(`browser-side ${label} shortcut is forbidden`);
+      }
       if (url.origin === origin && url.pathname.startsWith("/api/")) {
         requests.push(Object.freeze([method, url.pathname]));
       }

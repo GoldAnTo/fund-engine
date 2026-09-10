@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { CompanyResearchWorkspace } from "../../data/investmentResearchApi";
+import type { CompanyResearchRun, CompanyResearchWorkspace } from "../../data/investmentResearchApi";
 import * as companyResearchView from "./companyResearchView";
 import {
   COMPANY_RESEARCH_MODULES,
@@ -9,10 +9,89 @@ import {
   numericObservationView,
   publicationAction,
   preparationIsActive,
+  researchRunIsActive,
+  researchRunSnapshotIsMonotonic,
+  researchRunStageView,
+  researchRunStatusView,
   workspaceSnapshotIsMonotonic,
 } from "./companyResearchView";
 
 describe("company research view model", () => {
+  it("uses only the server-projected run status and ordered stages for active progress", () => {
+    const run = {
+      project_id: "project-1",
+      status: "building_forecast",
+      progress: 60,
+      stages: [
+        { key: "identity", status: "completed" },
+        { key: "sources", status: "completed" },
+        { key: "analysis", status: "completed" },
+        { key: "forecast", status: "active" },
+        { key: "report", status: "pending" },
+      ],
+      workspace: { preparation: { status: "blocked", progress: 1 } },
+    } as unknown as CompanyResearchRun;
+
+    expect(researchRunIsActive(run)).toBe(true);
+    expect(researchRunStatusView(run)).toEqual({ status: "building_forecast", label: "建立预测", progress: 60 });
+    expect(researchRunStageView(run).map(({ key, status }) => [key, status])).toEqual([
+      ["identity", "completed"],
+      ["sources", "completed"],
+      ["analysis", "completed"],
+      ["forecast", "active"],
+      ["report", "pending"],
+    ]);
+  });
+
+  it("compares run snapshots by server projections without inferring preparation lifecycle", () => {
+    const current = {
+      project_id: "project-1", company: { object_id: "company-1" }, status: "analyzing_company", progress: 35,
+      updated_at: "2026-08-24T00:01:00Z", selected_revision: null,
+      stages: [
+        { key: "identity", status: "completed" }, { key: "sources", status: "completed" },
+        { key: "analysis", status: "active" }, { key: "forecast", status: "pending" }, { key: "report", status: "pending" },
+      ],
+      critical_inputs: null,
+    } as unknown as CompanyResearchRun;
+    const next = structuredClone(current);
+    next.status = "building_forecast";
+    next.progress = 60;
+    next.updated_at = "2026-08-24T00:02:00Z";
+    next.stages[2].status = "completed";
+    next.stages[3].status = "active";
+
+    expect(researchRunSnapshotIsMonotonic(current, next)).toBe(true);
+    expect(researchRunSnapshotIsMonotonic(next, current)).toBe(false);
+  });
+
+  it("accepts only a successor critical head as a governed rebuild reset to 25", () => {
+    const current = {
+      project_id: "project-1", company: { object_id: "company-1" }, status: "needs_input", progress: 85,
+      updated_at: "2026-08-24T00:01:00Z", selected_revision: null,
+      stages: [
+        { key: "identity", status: "completed" }, { key: "sources", status: "completed" },
+        { key: "analysis", status: "completed" }, { key: "forecast", status: "completed" }, { key: "report", status: "needs_input" },
+      ],
+      critical_inputs: { artifact_id: "critical-1", version: 1, content_hash: "hash-1", inputs: [{ decision: "pending" }] },
+    } as unknown as CompanyResearchRun;
+    const rebuilt = structuredClone(current);
+    Object.assign(rebuilt, { status: "analyzing_company", progress: 25, updated_at: "2026-08-24T00:02:00Z" });
+    rebuilt.stages = [
+      { key: "identity", status: "completed" }, { key: "sources", status: "completed" },
+      { key: "analysis", status: "active" }, { key: "forecast", status: "pending" }, { key: "report", status: "pending" },
+    ] as CompanyResearchRun["stages"];
+    Object.assign(rebuilt.critical_inputs!, { artifact_id: "critical-2", version: 2, content_hash: "hash-2" });
+    rebuilt.critical_inputs!.inputs[0].decision = "marked_unknown";
+
+    expect(researchRunSnapshotIsMonotonic(current, rebuilt)).toBe(true);
+    const staleHead = structuredClone(rebuilt);
+    Object.assign(staleHead.critical_inputs!, { artifact_id: "critical-1", version: 1, content_hash: "hash-1" });
+    expect(researchRunSnapshotIsMonotonic(current, staleHead)).toBe(false);
+    const wrongReset = structuredClone(rebuilt);
+    wrongReset.progress = 35;
+    expect(researchRunSnapshotIsMonotonic(current, wrongReset)).toBe(false);
+  });
+
   it("exposes a publication action helper", () => {
     expect((companyResearchView as Record<string, unknown>).publicationAction).toBeTypeOf("function");
   });
@@ -200,11 +279,11 @@ describe("company research view model", () => {
       ["preparation stage", (next: CompanyResearchWorkspace) => { next.preparation.current_step = "research_gaps"; }],
       ["draft lock", (next: CompanyResearchWorkspace) => { next.draft.lock_version = 3; }],
       ["frozen revision", (next: CompanyResearchWorkspace) => { next.selected_revision = null; }],
-      ["module state", (next: CompanyResearchWorkspace) => { next.modules[0]!.state = "preparing"; }],
-      ["valuation state", (next: CompanyResearchWorkspace) => { next.modules[1]!.valuation_state = "pending"; }],
+      ["module state", (next: CompanyResearchWorkspace) => { next.modules[0].state = "preparing"; }],
+      ["valuation state", (next: CompanyResearchWorkspace) => { next.modules[1].valuation_state = "pending"; }],
       ["reviewed count", (next: CompanyResearchWorkspace) => { next.change_summary.reviewed_fact_count = 1; }],
       ["summary artifact version", (next: CompanyResearchWorkspace) => { next.change_summary.artifact_versions.valuation_set = 2; }],
-      ["artifact version", (next: CompanyResearchWorkspace) => { next.artifacts[1]!.version = 2; }],
+      ["artifact version", (next: CompanyResearchWorkspace) => { next.artifacts[1].version = 2; }],
     ] as const;
     for (const [_label, regress] of regressions) {
       const next = clone();
@@ -229,11 +308,11 @@ describe("company research view model", () => {
       change_summary: { reviewed_fact_count: 0, artifact_versions: { evidence_index: 1 } },
     } as unknown as CompanyResearchWorkspace;
     const successor = structuredClone(current);
-    Object.assign(successor.artifacts[0]!, { id: "evidence-2", content_hash: "hash-2", version: 2 });
-    successor.modules[0]!.state = "preparing";
+    Object.assign(successor.artifacts[0], { id: "evidence-2", content_hash: "hash-2", version: 2 });
+    successor.modules[0].state = "preparing";
     expect(workspaceSnapshotIsMonotonic(current, successor)).toBe(true);
     const predecessor = structuredClone(successor);
-    predecessor.artifacts[0]! = current.artifacts[0]!;
+    predecessor.artifacts[0] = current.artifacts[0];
     expect(workspaceSnapshotIsMonotonic(successor, predecessor)).toBe(false);
   });
 
@@ -252,7 +331,7 @@ describe("company research view model", () => {
     } as unknown as CompanyResearchWorkspace;
     const successor = () => {
       const next = structuredClone(current);
-      Object.assign(next.artifacts[0]!, { id: "evidence-2", content_hash: "hash-2", version: 2 });
+      Object.assign(next.artifacts[0], { id: "evidence-2", content_hash: "hash-2", version: 2 });
       next.change_summary.artifact_versions.evidence_index = 2;
       next.change_summary.reviewed_fact_count = 2;
       next.draft.lock_version = 5;
@@ -266,7 +345,7 @@ describe("company research view model", () => {
       ["draft base without lock advance", (next: CompanyResearchWorkspace) => { next.draft.lock_version = 4; next.draft.base_revision_id = "revision-2"; }],
       ["review count", (next: CompanyResearchWorkspace) => { next.change_summary.reviewed_fact_count = 0; }],
       ["unrelated summary artifact", (next: CompanyResearchWorkspace) => { next.change_summary.artifact_versions.research_gaps = 1; }],
-      ["unrelated artifact head", (next: CompanyResearchWorkspace) => { next.artifacts[1]!.version = 1; }],
+      ["unrelated artifact head", (next: CompanyResearchWorkspace) => { next.artifacts[1].version = 1; }],
     ] as const;
     for (const [_label, regress] of regressions) {
       const next = successor();
@@ -304,7 +383,7 @@ describe("company research view model", () => {
     } as unknown as CompanyResearchWorkspace;
     const resumed = structuredClone(failed);
     Object.assign(resumed.preparation, { status, current_step: failedStep, progress });
-    resumed.modules[0]!.state = moduleState;
+    resumed.modules[0].state = moduleState;
 
     expect(workspaceSnapshotIsMonotonic(failed, resumed, { allowRecovery: true })).toBe(true);
     resumed.draft.id = "draft-2";
@@ -325,11 +404,11 @@ describe("company research view model", () => {
       (next: CompanyResearchWorkspace) => { next.preparation.status = "building_model"; },
       (next: CompanyResearchWorkspace) => { next.preparation.progress = 25; },
       (next: CompanyResearchWorkspace) => { next.preparation.current_step = "scenario_set"; },
-      (next: CompanyResearchWorkspace) => { next.modules[0]!.state = "preparing"; },
+      (next: CompanyResearchWorkspace) => { next.modules[0].state = "preparing"; },
     ]) {
       const next = structuredClone(failed);
       Object.assign(next.preparation, { status: "queued", progress: 0 });
-      next.modules[0]!.state = "not_started";
+      next.modules[0].state = "not_started";
       mutate(next);
       expect(workspaceSnapshotIsMonotonic(failed, next, { allowRecovery: true })).toBe(false);
     }

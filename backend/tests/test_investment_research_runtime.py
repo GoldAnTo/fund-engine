@@ -1178,8 +1178,8 @@ def test_restore_uses_private_snapshot_after_source_bundle_changes(
 def test_runtime_verifier_checks_increment_a_shell_api_and_revision() -> None:
     script = (ROOT / "scripts" / "verify-one-click-runtime.sh").read_text()
 
-    assert 'require_revision "$new_revision" 0070' in script
-    assert "isolated database is at 0070" in script
+    assert 'require_revision "$new_revision" 0071' in script
+    assert "isolated database is at 0071" in script
     assert 'FRONTEND_URL="${ONE_CLICK_FRONTEND_URL:-http://127.0.0.1:' in script
     assert 'API_URL="${ONE_CLICK_API_URL:-http://127.0.0.1:' in script
     assert '"$FRONTEND_URL/research"' in script

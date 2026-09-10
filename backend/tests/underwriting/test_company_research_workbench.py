@@ -1,25 +1,26 @@
+import sys
+import uuid
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-import sys
-import uuid
 
 import pytest
-from sqlalchemy import bindparam, func, select, text
-from sqlalchemy.orm.attributes import set_committed_value
-
 from app.models.ledger import ValidationError
 from app.models.operational import Job
-from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.company_research import LEGACY_STRATEGY_VERSION
+from app.underwriting.api.company_research_router import _artifact_response
 from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
 from app.underwriting.domain.types import InvestmentMandateInput
+from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
+from app.underwriting.hashing import canonical_hash
+from app.underwriting.persistence.company_research_models import (
+    CompanyResearchArtifactVersion,
+)
 from app.underwriting.persistence.company_research_repository import (
     CompanyResearchIntegrityError,
     CompanyResearchPersistedBundle,
     CompanyResearchRepository,
-)
-from app.underwriting.persistence.company_research_models import (
-    CompanyResearchArtifactVersion,
 )
 from app.underwriting.persistence.models import (
     UnderwritingHistoricalBasis,
@@ -31,13 +32,11 @@ from app.underwriting.persistence.product_models import (
     UnderwritingResearchProject,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
-
-from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
-from app.underwriting.services.company_research_initializer import (
-    CompanyResearchInitializer,
-)
 from app.underwriting.services.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
+)
+from app.underwriting.services.company_research_initializer import (
+    CompanyResearchInitializer,
 )
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchModelBuilder,
@@ -49,20 +48,22 @@ from app.underwriting.services.company_research_preparation import (
 from app.underwriting.services.company_research_workbench import (
     CompanyResearchWorkbench,
 )
-from app.underwriting.services.product_foundation_fixture import (
-    ProductFoundationFixtureService,
-)
-from app.underwriting.services.product_project import ResearchProjectService
 from app.underwriting.services.market_snapshots import (
     market_capture_envelope_hash,
     price_snapshot_hash,
 )
+from app.underwriting.services.product_foundation_fixture import (
+    ProductFoundationFixtureService,
+)
+from app.underwriting.services.product_project import ResearchProjectService
 from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
-from tests.underwriting.test_company_research_model_builder import _build_input
+from sqlalchemy import bindparam, func, select, text
+from sqlalchemy.orm.attributes import set_committed_value
 
+from tests.underwriting.test_company_research_model_builder import _build_input
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
 MARKET_CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
@@ -102,10 +103,13 @@ def _prepared(session):
     preview = initializer.preview(
         company_id=loaded.objects["US:ALPHABET:COMPANY"].id, cutoff_at=MARKET_CUTOFF
     )
-    initialized = initializer.initialize(
-        preview_hash=preview.input_hash,
-        company_id=preview.company.object_id,
-        cutoff_at=MARKET_CUTOFF,
+    legacy_preview = replace(
+        preview,
+        strategy_version=LEGACY_STRATEGY_VERSION,
+        input_hash="",
+    )
+    initialized = initializer._create_initialization(
+        preview=legacy_preview,
         idempotency_key="company-workbench-alphabet",
     )
     worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
@@ -246,10 +250,15 @@ def _rewrite_source_refs(session, row, source_refs) -> None:
         ),
         bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
     )
-    assert session.connection().execute(
-        statement,
-        {"source_refs": copied, "content_hash": content_hash, "id": row.id},
-    ).rowcount == 1
+    assert (
+        session.connection()
+        .execute(
+            statement,
+            {"source_refs": copied, "content_hash": content_hash, "id": row.id},
+        )
+        .rowcount
+        == 1
+    )
     session.expire_all()
 
 
@@ -282,11 +291,14 @@ def test_review_rejects_an_unknown_current_source_ref_shape_before_appending(
         )
     session.commit()
 
-    assert session.scalar(
-        select(func.count())
-        .select_from(CompanyResearchArtifactVersion)
-        .where(CompanyResearchArtifactVersion.project_id == initialized.project.id)
-    ) == artifact_count
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(CompanyResearchArtifactVersion)
+            .where(CompanyResearchArtifactVersion.project_id == initialized.project.id)
+        )
+        == artifact_count
+    )
     assert len(repository.events(preparation.id)) == event_count
 
 
@@ -322,15 +334,20 @@ def _durably_rewrite_payload(
         ),
         bindparam("id", type_=CompanyResearchArtifactVersion.__table__.c.id.type),
     )
-    assert session.connection().execute(
-        statement,
-        {
-            "payload": payload,
-            "input_hash": rewritten_input_hash,
-            "content_hash": content_hash,
-            "id": row.id,
-        },
-    ).rowcount == 1
+    assert (
+        session.connection()
+        .execute(
+            statement,
+            {
+                "payload": payload,
+                "input_hash": rewritten_input_hash,
+                "content_hash": content_hash,
+                "id": row.id,
+            },
+        )
+        .rowcount
+        == 1
+    )
     session.expire_all()
 
 
@@ -355,14 +372,10 @@ def _rewrite_as_legacy_model_gap_successor(session, initialized, repository):
     memo = heads["memo"]
     judgment = heads["judgment_context"]
     preparation = repository.preparation_for_project(initialized.project.id)
-    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
-        initialized.project.id
-    )
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(initialized.project.id)
     assert preparation is not None and draft is not None
     assert draft.content.historical_basis_id is not None
-    basis = ProductRepository(session).product_basis(
-        draft.content.historical_basis_id
-    )
+    basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
     assert basis is not None
     model_parents = tuple(
         heads[kind]
@@ -453,9 +466,7 @@ def _rewrite_as_legacy_model_gap_successor(session, initialized, repository):
 def _durably_tamper_basis_source_manifest_hash(session, basis) -> None:
     table = UnderwritingHistoricalBasis.__table__
     statement = text(
-        "UPDATE uw_historical_bases "
-        "SET source_manifest_hash = :source_manifest_hash "
-        "WHERE id = :basis_id"
+        "UPDATE uw_historical_bases SET source_manifest_hash = :source_manifest_hash WHERE id = :basis_id"
     ).bindparams(
         bindparam(
             "source_manifest_hash",
@@ -525,6 +536,71 @@ def test_alphabet_model_workspace_counts_each_governed_source_once(session) -> N
 
     assert workspace.source_count == len(business_map.source_refs)
     assert workspace.source_count == 9
+
+
+def test_legacy_alphabet_valuation_replays_as_neutral_api_payload(session) -> None:
+    initialized, workbench, repository = _model_workspace(session)
+    row = repository.current_artifact(initialized.project.id, "valuation_set")
+    assert row is not None
+    legacy = deepcopy(row.payload)
+    ranges = legacy["security_value_ranges"]
+    assert isinstance(ranges, list)
+    for item in ranges:
+        item["usd_per_share"] = item.pop("value_per_share")
+        item["cny_return"] = item.pop("base_currency_return")
+        item.pop("value_currency")
+        item.pop("schema_version")
+    legacy["sensitivity_analyses"] = []
+    with pytest.raises(ValidationError, match="valuation_set payload is invalid"):
+        CompanyResearchArtifactCodec.validate_payload(
+            "valuation_set",
+            {key: value for key, value in legacy.items() if key != "_lineage"},
+        )
+    with pytest.raises(ValidationError, match="valuation_set payload is invalid"):
+        repository._validate_typed_artifact_payload(
+            kind="valuation_set",
+            payload=legacy,
+            supersedes_id=row.supersedes_id,
+        )
+    legacy.pop("sensitivity_analyses")
+    set_committed_value(row, "payload", legacy)
+    set_committed_value(
+        row,
+        "content_hash",
+        repository.artifact_content_hash(
+            project_id=row.project_id,
+            kind=row.kind,
+            version=row.version,
+            supersedes_id=row.supersedes_id,
+            parent_content_hash=row.parent_content_hash,
+            input_hash=row.input_hash,
+            payload=legacy,
+            source_refs=row.source_refs,
+        ),
+    )
+
+    authenticated = repository.current_artifact(
+        initialized.project.id, "valuation_set"
+    )
+    assert authenticated is row
+    artifact = workbench._artifact(authenticated, initialized.project.id)
+    serialized = _artifact_response(
+        artifact,
+        project_id=initialized.project.id,
+        context={
+            "cutoff": MARKET_CUTOFF.isoformat(),
+            "strategy_version": LEGACY_STRATEGY_VERSION,
+            "financial_currency": "USD",
+            "base_currency": "CNY",
+        },
+    ).model_dump(mode="json", by_alias=True)
+
+    value_range = serialized["payload"]["security_value_ranges"][0]
+    assert value_range["value_currency"] == "USD"
+    assert "value_per_share" in value_range
+    assert "base_currency_return" in value_range
+    assert "usd_per_share" not in value_range
+    assert "cny_return" not in value_range
 
 
 def test_workbench_fails_closed_when_artifact_history_exceeds_its_bound(
@@ -661,9 +737,7 @@ def test_workbench_rejects_a_new_bundle_with_a_legacy_shaped_memo(
 ) -> None:
     initialized, workbench, repository = _model_workspace(session)
     memo = repository.current_artifact(initialized.project.id, "memo")
-    source_gaps = repository.current_artifact(
-        initialized.project.id, "research_gaps"
-    )
+    source_gaps = repository.current_artifact(initialized.project.id, "research_gaps")
     assert memo is not None and source_gaps is not None
     legacy_payload = dict(memo.payload)
     legacy_payload.pop("research_gaps")
@@ -718,9 +792,7 @@ def test_workbench_rejects_a_durably_tampered_historical_basis_source_as_integri
     session,
 ) -> None:
     initialized, workbench, _repository = _model_workspace(session)
-    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
-        initialized.project.id
-    )
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(initialized.project.id)
     assert draft is not None
     assert draft.content.historical_basis_id is not None
     basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)
@@ -1356,9 +1428,7 @@ def test_workbench_rejects_source_identity_tamper_even_with_rehashed_artifact(
     initialized, workbench, repository = _model_workspace(session)
     driver = repository.current_artifact(initialized.project.id, "driver_map")
     preparation = repository.preparation_for_project(initialized.project.id)
-    draft = WorkspaceDraftService(session, now=lambda: NOW).read(
-        initialized.project.id
-    )
+    draft = WorkspaceDraftService(session, now=lambda: NOW).read(initialized.project.id)
     assert driver is not None and preparation is not None
     assert draft is not None and draft.content.historical_basis_id is not None
     basis = ProductRepository(session).product_basis(draft.content.historical_basis_id)

@@ -11,20 +11,13 @@ mock mode) and is persisted on every ``AIRun`` audit record.
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
-import random
-import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
-from contextlib import contextmanager
-from contextvars import ContextVar
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
-from openai import APIConnectionError, APIStatusError, OpenAIError
-from app.ai.usage import record_attempt
+from openai import OpenAIError
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
@@ -34,34 +27,8 @@ DEFAULT_MODEL = "gpt-4o-mini"
 # (versions/regions may still drift), but combined with temperature=0 it
 # closes the bulk of the variance.  See walkthrough defect 7.
 DEFAULT_TEMPERATURE = 0.0
-# Socket inactivity timeout, not cancellation of an entire synchronous call.
-DEFAULT_TIMEOUT_SECONDS = 90.0
-DEFAULT_MAX_ATTEMPTS = 2
-DEFAULT_RETRY_BUDGET_SECONDS = 180.0
-DEFAULT_MAX_INPUT_BYTES = 1_048_576
-DEFAULT_MAX_RESPONSE_BYTES = 2_097_152
-DEFAULT_MAX_COMPLETION_TOKENS = 16_384
 LLM_PROVIDER_ERROR_MESSAGE = "LLM provider request failed"
 LLM_MALFORMED_RESPONSE_MESSAGE = "LLM provider returned an invalid response"
-_operation_deadline: ContextVar[float | None] = ContextVar("llm_operation_deadline", default=None)
-
-
-@contextmanager
-def operation_budget(client):
-    """Share a cooperative deadline across provider calls and compliance rewrite.
-
-    Context-local state survives graph context propagation without placing a
-    mutable deadline on a potentially shared client. Nested scopes cannot
-    extend the caller's budget. This does not cancel synchronous I/O.
-    """
-    budget = getattr(client, "_retry_budget_seconds", DEFAULT_RETRY_BUDGET_SECONDS)
-    deadline = time.monotonic() + budget
-    parent = _operation_deadline.get()
-    token = _operation_deadline.set(min(parent, deadline) if parent is not None else deadline)
-    try:
-        yield
-    finally:
-        _operation_deadline.reset(token)
 
 
 class LLMProviderError(RuntimeError):
@@ -70,33 +37,6 @@ class LLMProviderError(RuntimeError):
 
 class LLMMalformedResponseError(LLMProviderError):
     """Raised when the provider response does not match the JSON protocol."""
-
-
-def _retry_delay(exc: Exception, attempt: int) -> float | None:
-    response = getattr(exc, "response", None)
-    if isinstance(exc, (APIStatusError, httpx.HTTPStatusError)):
-        status = response.status_code
-        if status not in {408, 409, 429} and not 500 <= status < 600:
-            return None
-    elif not isinstance(exc, (APIConnectionError, httpx.TransportError, TimeoutError, ConnectionError)):
-        return None
-    delay = random.uniform(0.5, 1.0) * min(2**attempt, 8)
-    if response is not None:
-        retry_after = response.headers.get("retry-after")
-        if retry_after:
-            try:
-                seconds = float(retry_after)
-            except ValueError:
-                try:
-                    seconds = (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds()
-                except (TypeError, ValueError, OverflowError):
-                    seconds = 0
-            if math.isfinite(seconds) and seconds > 0:
-                # Never retry earlier than requested; decline an excessive wait.
-                if seconds > 30:
-                    return None
-                delay = max(delay, seconds)
-    return delay
 
 
 class LLMClient:
@@ -121,42 +61,14 @@ class LLMClient:
         mock: bool = False,
         temperature: float = DEFAULT_TEMPERATURE,
         seed: int | None = None,
-        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
-        retry_budget_seconds: float = DEFAULT_RETRY_BUDGET_SECONDS,
-        max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES,
-        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
-        max_completion_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
+        provider: str = "openai",
     ) -> None:
-        for name, value, lower, upper in (
-            ("timeout_seconds", timeout_seconds, 0.001, 300),
-            ("retry_budget_seconds", retry_budget_seconds, 0.001, 600),
-            ("temperature", temperature, 0, 2),
-        ):
-            if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or not lower <= value <= upper:
-                raise ValueError(f"{name} must be finite and between {lower} and {upper}")
-        if type(max_attempts) is not int or not 1 <= max_attempts <= 5:
-            raise ValueError("max_attempts must be an integer from 1 through 5")
-        if type(max_completion_tokens) is not int or not 1 <= max_completion_tokens <= 131_072:
-            raise ValueError("max_completion_tokens must be an integer from 1 through 131072")
-        for name, value in (("max_input_bytes", max_input_bytes), ("max_response_bytes", max_response_bytes)):
-            if type(value) is not int or not 1 <= value <= 16_777_216:
-                raise ValueError(f"{name} must be an integer from 1 through 16777216")
-        if not isinstance(model_version, str) or not model_version.strip():
-            raise ValueError("model_version must not be blank")
-        if seed is not None and (type(seed) is not int or not -(2**63) <= seed < 2**63):
-            raise ValueError("seed must be a signed 64-bit integer")
         self.model_version = model_version
+        self.provider = provider
         self._client = client
         self._mock = mock
         self._temperature = temperature
         self._seed = seed
-        self._timeout_seconds = timeout_seconds
-        self._max_attempts = max_attempts
-        self._retry_budget_seconds = retry_budget_seconds
-        self._max_input_bytes = max_input_bytes
-        self._max_response_bytes = max_response_bytes
-        self._max_completion_tokens = max_completion_tokens
 
     # ------------------------------------------------------------------ factory
 
@@ -169,15 +81,6 @@ class LLMClient:
           call.  Zero freezes sampling so reruns land on the same token.
         - ``LLM_SEED`` (default unset): forwarded to ``chat.completions.create``
           as ``seed``. Empty means "do not pin"; zero is a real seed.
-        - ``LLM_TIMEOUT_SECONDS`` (default 90): socket inactivity timeout.
-          Synchronous I/O cannot be forcibly cancelled by this wrapper.
-        - ``LLM_RETRY_BUDGET_SECONDS`` (default 180): shared time budget for
-          attempts and backoff within one chat_json call; late results fail.
-        - ``LLM_MAX_ATTEMPTS`` (default 2): bounded application-level retries
-          for transient provider transport errors.
-        - ``LLM_MAX_COMPLETION_TOKENS`` (default 16384): generation cap sent
-          on every provider attempt, including reasoning tokens where supported.
-          This is not a total task budget or a monetary spending limit.
 
         Without ``LLM_API_KEY``, only ``APP_ENV=test`` may build a deterministic
         mock client. Every other environment is a live runtime and fails
@@ -186,8 +89,6 @@ class LLMClient:
         api_key = os.getenv("LLM_API_KEY")
         base_url = os.getenv("LLM_BASE_URL")
         model = os.getenv("LLM_MODEL", DEFAULT_MODEL)
-        if not model.strip():
-            raise ValueError("LLM_MODEL must not be blank")
         app_env = os.getenv("APP_ENV", "").strip().lower()
 
         if not api_key and app_env != "test":
@@ -199,16 +100,6 @@ class LLMClient:
         temperature = float(os.getenv("LLM_TEMPERATURE", str(DEFAULT_TEMPERATURE)))
         raw_seed = os.getenv("LLM_SEED", "").strip()
         seed: int | None = int(raw_seed) if raw_seed else None
-        timeout_seconds = float(
-            os.getenv("LLM_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
-        )
-        max_attempts = int(os.getenv("LLM_MAX_ATTEMPTS", str(DEFAULT_MAX_ATTEMPTS)))
-        retry_budget_seconds = float(os.getenv("LLM_RETRY_BUDGET_SECONDS", str(DEFAULT_RETRY_BUDGET_SECONDS)))
-        resource_limits = {
-            "max_input_bytes": int(os.getenv("LLM_MAX_INPUT_BYTES", str(DEFAULT_MAX_INPUT_BYTES))),
-            "max_response_bytes": int(os.getenv("LLM_MAX_RESPONSE_BYTES", str(DEFAULT_MAX_RESPONSE_BYTES))),
-            "max_completion_tokens": int(os.getenv("LLM_MAX_COMPLETION_TOKENS", str(DEFAULT_MAX_COMPLETION_TOKENS))),
-        }
 
         if not api_key:
             return cls(
@@ -216,36 +107,23 @@ class LLMClient:
                 mock=True,
                 temperature=temperature,
                 seed=seed,
-                timeout_seconds=timeout_seconds,
-                max_attempts=max_attempts,
-                retry_budget_seconds=retry_budget_seconds,
-                **resource_limits,
+                provider="deterministic_mock",
             )
 
         from openai import OpenAI
 
-        client = OpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            timeout=timeout_seconds,
-            max_retries=0,
-        )
+        client = OpenAI(api_key=api_key, base_url=base_url)
         return cls(
             model_version=model,
             client=client,
             mock=False,
             temperature=temperature,
             seed=seed,
-            timeout_seconds=timeout_seconds,
-            max_attempts=max_attempts,
-            retry_budget_seconds=retry_budget_seconds,
-            **resource_limits,
+            provider=(urlsplit(base_url).hostname if base_url else "openai")
+            or "openai",
         )
 
     # ------------------------------------------------------------------ core
-
-    def operation_budget(self):
-        return operation_budget(self)
 
     def chat_json(self, messages: list[dict], schema_hint: str = "") -> dict:
         """Call the model and return parsed JSON.
@@ -253,16 +131,6 @@ class LLMClient:
         ``schema_hint`` is a short tag (e.g. ``"extract"``, ``"propose"``,
         ``"assess"``) that the mock uses to pick the right response shape.
         """
-        # Measure UTF-8 JSON messages, not characters or an estimated token
-        # count. Stop encoding once the limit is reached; never log content.
-        input_size = 0
-        for chunk in json.JSONEncoder(ensure_ascii=False, separators=(",", ":")).iterencode(messages):
-            try:
-                input_size += len(chunk.encode("utf-8"))
-            except UnicodeEncodeError as exc:
-                raise LLMProviderError("LLM input contains invalid UTF-8") from exc
-            if input_size > self._max_input_bytes:
-                raise LLMProviderError("LLM input exceeds configured size limit")
         if self._mock:
             return _mock_response(messages, schema_hint)
 
@@ -272,62 +140,25 @@ class LLMClient:
             "messages": messages,
             "response_format": {"type": "json_object"},
             "temperature": self._temperature,
-            "max_completion_tokens": self._max_completion_tokens,
-            "timeout": self._timeout_seconds,
         }
         if self._seed is not None:
             create_kwargs["seed"] = self._seed
-        deadline = time.monotonic() + self._retry_budget_seconds
-        parent_deadline = _operation_deadline.get()
-        if parent_deadline is not None:
-            deadline = min(deadline, parent_deadline)
-        for attempt in range(self._max_attempts):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE)
-            create_kwargs["timeout"] = min(self._timeout_seconds, remaining)
-            try:
-                response = self._client.chat.completions.create(**create_kwargs)
-                record_attempt(response, outcome="response_received")
-                if time.monotonic() >= deadline:
-                    # This rejects late results; it does not interrupt an
-                    # in-flight synchronous request or undo provider billing.
-                    raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE)
-                break
-            except (OpenAIError, httpx.HTTPError, TimeoutError, ConnectionError) as exc:
-                record_attempt(outcome="transport_error")
-                delay = _retry_delay(exc, attempt)
-                remaining = deadline - time.monotonic()
-                if attempt + 1 == self._max_attempts or delay is None or delay >= remaining:
-                    raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from exc
-                time.sleep(delay)
+        try:
+            response = self._client.chat.completions.create(**create_kwargs)
+        except (OpenAIError, httpx.HTTPError, TimeoutError, ConnectionError) as exc:
+            raise LLMProviderError(LLM_PROVIDER_ERROR_MESSAGE) from exc
 
         try:
-            choice = response.choices[0]
-            content = choice.message.content
-            finish_reason = choice.finish_reason
-            refusal = getattr(choice.message, "refusal", None)
+            content = response.choices[0].message.content
         except (AttributeError, IndexError, TypeError) as exc:
             raise LLMMalformedResponseError(
                 LLM_MALFORMED_RESPONSE_MESSAGE
             ) from exc
-        # Repair may restore JSON syntax, but cannot restore missing evidence
-        # after truncation or make a provider refusal a valid research result.
-        if finish_reason != "stop" or refusal:
-            raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE)
         if not isinstance(content, str):
             exc = TypeError("LLM response content must be a string")
             raise LLMMalformedResponseError(
                 LLM_MALFORMED_RESPONSE_MESSAGE
             ) from exc
-        # The SDK has already buffered the HTTP response. This bounds our
-        # parsing/repair work, not network download size or provider billing.
-        try:
-            response_too_large = len(content) > self._max_response_bytes or len(content.encode("utf-8")) > self._max_response_bytes
-        except UnicodeEncodeError as exc:
-            raise LLMMalformedResponseError(LLM_MALFORMED_RESPONSE_MESSAGE) from exc
-        if response_too_large:
-            raise LLMMalformedResponseError("LLM response exceeds configured size limit")
         # 推理模型（如 MiniMax-M3）可能在 JSON 前加 <think>...</think> 块
         if "</think>" in content:
             content = content.split("</think>", 1)[1].strip()

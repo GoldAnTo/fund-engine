@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-from copy import deepcopy
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-import subprocess
-import sys
 from threading import Barrier
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import bindparam, create_engine, event as sa_event, func, select, text
-from sqlalchemy.orm import Session, sessionmaker
-
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.models.operational import Job, JobEvent
+from app.scripts import run_company_research_worker
+from app.underwriting.domain.company_research import LEGACY_STRATEGY_VERSION
 from app.underwriting.domain.product_contracts import ProductHistoricalBasisInput
 from app.underwriting.fixtures.alphabet_golden_case import (
     load_alphabet_golden_case_fixture,
@@ -49,36 +48,38 @@ from app.underwriting.persistence.product_models import (
     UnderwritingWorkspaceDraft,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.services.company_research_initializer import (
-    CompanyResearchInitializer,
-    CompanyResearchPreparationService,
-)
 from app.underwriting.services.company_research_basis_recovery import (
     CompanyResearchHistoricalBasisRecovery,
+)
+from app.underwriting.services.company_research_boundary import (
+    resolve_alphabet_company_research_boundary,
 )
 from app.underwriting.services.company_research_foundation import (
     alphabet_company_research_foundation_contract,
     build_alphabet_company_research_preview_at_cutoff,
 )
-from app.underwriting.services.company_research_boundary import (
-    resolve_alphabet_company_research_boundary,
+from app.underwriting.services.company_research_initializer import (
+    CompanyResearchInitializer,
+    CompanyResearchPreparationService,
 )
 from app.underwriting.services.company_research_preparation import (
     CompanyResearchPreparationWorker,
+)
+from app.underwriting.services.company_research_sources import (
+    CompanyResearchSourceCompiler,
+    CompanyResearchSourceService,
+)
+from app.underwriting.services.company_research_workbench import (
+    CompanyResearchWorkbench,
 )
 from app.underwriting.services.market_snapshots import (
     capital_structure_snapshot_hash,
     fx_snapshot_hash,
     price_snapshot_hash,
 )
-from app.underwriting.services.company_research_workbench import (
-    CompanyResearchWorkbench,
+from app.underwriting.services.product_foundation_fixture import (
+    ProductFoundationFixtureService,
 )
-from app.underwriting.services.company_research_sources import (
-    CompanyResearchSourceCompiler,
-    CompanyResearchSourceService,
-)
-from app.underwriting.services.product_foundation_fixture import ProductFoundationFixtureService
 from app.underwriting.services.product_project import (
     ResearchProjectService,
     research_agenda_content_hash,
@@ -89,8 +90,10 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
     WorkspaceDraftService,
 )
-from app.scripts import run_company_research_worker
-
+from sqlalchemy import bindparam, create_engine, func, select, text
+from sqlalchemy import event as sa_event
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session, sessionmaker
 
 NOW = datetime(2026, 8, 26, tzinfo=UTC)
 CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
@@ -149,6 +152,26 @@ def _original_pre_market_evidence_compilation(provider_input):
 
 
 def _initialized(session, *, idempotency_key="company-worker-alphabet"):
+    """Create an explicit legacy preparation for the historical worker tests."""
+    loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
+        load_product_foundation_fixture()
+    )
+    initializer = CompanyResearchInitializer(session, now=lambda: NOW)
+    preview = initializer.preview(
+        company_id=loaded.objects["US:ALPHABET:COMPANY"].id, cutoff_at=CUTOFF
+    )
+    legacy_preview = replace(
+        preview,
+        strategy_version=LEGACY_STRATEGY_VERSION,
+        input_hash="",
+    )
+    return initializer._create_initialization(
+        preview=legacy_preview,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _mainline_initialized(session, *, idempotency_key: str):
     loaded = ProductFoundationFixtureService(session, now=lambda: NOW).load(
         load_product_foundation_fixture()
     )
@@ -173,6 +196,7 @@ def _genuine_legacy_initialized(session):
         session,
         company_id=company.id,
         cutoff_at=LEGACY_REQUEST_CUTOFF,
+        strategy_version=LEGACY_STRATEGY_VERSION,
     )
     project = ResearchProjectService(
         session, now=lambda: LEGACY_PROJECT_CREATED
@@ -185,7 +209,7 @@ def _genuine_legacy_initialized(session):
         company_id=preview.company.object_id,
         security_ids=tuple(row.object_id for row in preview.securities),
         request_hash=preview.input_hash,
-        strategy_version=preview.strategy_version,
+        strategy_version=LEGACY_STRATEGY_VERSION,
     )
     mandate = ResearchProjectService(
         session, now=lambda: LEGACY_MANDATE_CREATED
@@ -239,7 +263,7 @@ def _genuine_legacy_initialized(session):
         project_id=project.id,
         idempotency_key="genuine-pre-7707036",
         request_hash=preview.input_hash,
-        strategy_version=preview.strategy_version,
+        strategy_version=LEGACY_STRATEGY_VERSION,
         status="queued",
         current_step="evidence_index",
         progress=0,
@@ -719,6 +743,271 @@ def test_claim_is_exclusive_and_success_stops_at_evidence_review(session) -> Non
             )
         )
     } == {"evidence_index", "research_gaps"}
+
+
+def test_mainline_source_completion_queues_model_without_evidence_review(session) -> None:
+    initialized = _mainline_initialized(
+        session, idempotency_key="company-worker-mainline-auto-draft"
+    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+
+    claim = worker.claim_next()
+    assert claim is not None and claim.strategy_version == (
+        "company-research-mainline.v1"
+    )
+    assert worker.run_claim(claim) == "building_model"
+
+    preparation = session.get(CompanyResearchPreparation, initialized.preparation.id)
+    job = session.get(Job, initialized.job.id)
+    assert preparation is not None and job is not None
+    assert (preparation.status, preparation.current_step, preparation.progress) == (
+        "building_model",
+        "model_bundle",
+        25,
+    )
+    assert (job.status, job.step, job.progress, job.claim_token) == (
+        "queued",
+        "model_bundle",
+        25,
+        None,
+    )
+    evidence = CompanyResearchRepository(session).current_artifact(
+        initialized.project.id, "evidence_index"
+    )
+    assert evidence is not None
+    assert all("review_decision" not in fact for fact in evidence.payload["facts"])
+    assert all(
+        event.event_type != "evidence_reviewed"
+        for event in CompanyResearchRepository(session).events(
+            initialized.preparation.id
+        )
+    )
+
+
+def test_mainline_model_completion_atomically_appends_critical_inputs(session) -> None:
+    initialized = _mainline_initialized(
+        session, idempotency_key="company-worker-mainline-critical-inputs"
+    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "building_model"
+    model_claim = worker.claim_next()
+    assert model_claim is not None and model_claim.step == "model_bundle"
+
+    assert worker.run_claim(model_claim) == "awaiting_judgment_review"
+
+    repository = CompanyResearchRepository(session)
+    critical_inputs = repository.current_artifact(
+        initialized.project.id, "critical_inputs"
+    )
+    memo = repository.current_artifact(initialized.project.id, "memo")
+    assert critical_inputs is not None and critical_inputs.version == 1
+    assert critical_inputs.payload["inputs"]
+    assert len(critical_inputs.payload["inputs"]) == 77
+    assert {item["decision"] for item in critical_inputs.payload["inputs"]} == {
+        "pending"
+    }
+    assert memo is not None and memo.payload["candidate_status"] == "machine_draft"
+    assert memo.payload["narrative"]["generator_kind"] == "deterministic_fallback"
+    warnings = [
+        event
+        for event in repository.events(initialized.preparation.id)
+        if event.event_type == "process_warning"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].payload == {
+        "code": "ai_narrative_provider_unavailable",
+        "recoverable": True,
+        "stage": "generating_report",
+    }
+
+
+def test_mainline_model_reports_fenced_safe_progress_checkpoints(
+    session, monkeypatch
+) -> None:
+    _mainline_initialized(session, idempotency_key="company-worker-mainline-progress")
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "building_model"
+    model_claim = worker.claim_next()
+    assert model_claim is not None
+    reported: list[tuple[int, str, str, str, str]] = []
+    original = worker._repository.report_model_progress
+
+    def fenced(*args, **kwargs):
+        reported.append(
+            (
+                kwargs["progress"],
+                kwargs["checkpoint"],
+                kwargs["expected_claim_token"],
+                kwargs["expected_request_hash"],
+                kwargs["expected_strategy_version"],
+            )
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(worker._repository, "report_model_progress", fenced)
+
+    assert worker.run_claim(model_claim) == "awaiting_judgment_review"
+    assert reported == [
+        (
+            35,
+            "analyzing_company",
+            model_claim.claim_token,
+            model_claim.request_hash,
+            model_claim.strategy_version,
+        ),
+        (
+            60,
+            "building_forecast",
+            model_claim.claim_token,
+            model_claim.request_hash,
+            model_claim.strategy_version,
+        ),
+        (
+            80,
+            "generating_report",
+            model_claim.claim_token,
+            model_claim.request_hash,
+            model_claim.strategy_version,
+        ),
+    ]
+
+
+def test_mainline_model_completion_time_never_precedes_progress_time(
+    session, monkeypatch
+) -> None:
+    initialized = _mainline_initialized(
+        session, idempotency_key="company-worker-mainline-monotonic-completion"
+    )
+    clock = {"value": NOW}
+    worker = CompanyResearchPreparationWorker(
+        session, now=lambda: clock["value"]
+    )
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "building_model"
+    model_claim = worker.claim_next()
+    assert model_claim is not None
+    completion_time = NOW + timedelta(minutes=5)
+    clock["value"] = completion_time
+    progress_times: list[datetime] = []
+    completion_calls: list[dict[str, object]] = []
+    original_progress = worker._repository.report_model_progress
+    original_complete = worker._repository.complete_model_bundle
+
+    def report_progress(*args, **kwargs):
+        progress_times.append(kwargs["updated_at"])
+        return original_progress(*args, **kwargs)
+
+    def complete(*args, **kwargs):
+        completion_calls.append(dict(kwargs))
+        return original_complete(*args, **kwargs)
+
+    monkeypatch.setattr(worker._repository, "report_model_progress", report_progress)
+    monkeypatch.setattr(worker._repository, "complete_model_bundle", complete)
+
+    assert worker.run_claim(model_claim) == "awaiting_judgment_review"
+
+    assert progress_times == [completion_time, completion_time, completion_time]
+    assert len(completion_calls) == 1
+    completion = completion_calls[0]
+    assert completion["created_at"] == completion_time
+    assert completion["created_at"] >= max(progress_times)
+    assert completion["expected_claim_token"] == model_claim.claim_token
+    assert completion["expected_request_hash"] == model_claim.request_hash
+    assert completion["expected_strategy_version"] == model_claim.strategy_version
+    preparation = session.get(
+        CompanyResearchPreparation, initialized.preparation.id
+    )
+    assert preparation is not None
+    assert CompanyResearchRepository._persisted_utc(
+        preparation.updated_at
+    ) == completion_time
+    model_artifacts = tuple(
+        session.scalars(
+            select(CompanyResearchArtifactVersion).where(
+                CompanyResearchArtifactVersion.project_id == initialized.project.id,
+                CompanyResearchArtifactVersion.kind.not_in(
+                    ("evidence_index", "research_gaps")
+                ),
+            )
+        )
+    )
+    assert model_artifacts
+    assert {
+        CompanyResearchRepository._persisted_utc(artifact.created_at)
+        for artifact in model_artifacts
+    } == {completion_time}
+
+
+def test_mainline_model_completion_clamps_a_backward_clock_after_progress(
+    session, monkeypatch
+) -> None:
+    initialized = _mainline_initialized(
+        session, idempotency_key="company-worker-mainline-backward-clock"
+    )
+    worker = CompanyResearchPreparationWorker(session, now=lambda: NOW)
+    source_claim = worker.claim_next()
+    assert source_claim is not None
+    assert worker.run_claim(source_claim) == "building_model"
+    model_claim = worker.claim_next()
+    assert model_claim is not None
+    progress_time = NOW + timedelta(minutes=5)
+    regressed_completion_time = NOW + timedelta(minutes=4)
+    completion_clock = iter(
+        (
+            progress_time,
+            progress_time,
+            progress_time,
+            regressed_completion_time,
+        )
+    )
+    progress_times: list[datetime] = []
+    completion_times: list[datetime] = []
+    original_progress = worker._repository.report_model_progress
+    original_complete = worker._repository.complete_model_bundle
+    monkeypatch.setattr(worker, "_utcnow", lambda: next(completion_clock))
+
+    def report_progress(*args, **kwargs):
+        progress_times.append(kwargs["updated_at"])
+        return original_progress(*args, **kwargs)
+
+    def complete(*args, **kwargs):
+        completion_times.append(kwargs["created_at"])
+        return original_complete(*args, **kwargs)
+
+    monkeypatch.setattr(worker._repository, "report_model_progress", report_progress)
+    monkeypatch.setattr(worker._repository, "complete_model_bundle", complete)
+
+    assert worker.run_claim(model_claim) == "awaiting_judgment_review"
+
+    assert progress_times == [progress_time, progress_time, progress_time]
+    assert completion_times == [regressed_completion_time]
+    preparation = session.get(
+        CompanyResearchPreparation, initialized.preparation.id
+    )
+    assert preparation is not None
+    assert CompanyResearchRepository._persisted_utc(
+        preparation.updated_at
+    ) == progress_time
+    model_artifacts = tuple(
+        session.scalars(
+            select(CompanyResearchArtifactVersion).where(
+                CompanyResearchArtifactVersion.project_id == initialized.project.id,
+                CompanyResearchArtifactVersion.kind.not_in(
+                    ("evidence_index", "research_gaps")
+                ),
+            )
+        )
+    )
+    assert model_artifacts
+    assert {
+        CompanyResearchRepository._persisted_utc(artifact.created_at)
+        for artifact in model_artifacts
+    } == {progress_time}
 
 
 def test_worker_builds_all_model_artifacts_after_last_evidence_review(session) -> None:
@@ -3770,6 +4059,40 @@ def test_worker_run_once_claims_after_bounded_maintenance(
     )
 
     assert len(claims) == 1
+
+
+def test_worker_loop_retries_transient_sqlite_writer_contention(monkeypatch) -> None:
+    started: list[bool] = []
+    stopped: list[bool] = []
+    sleeps: list[float] = []
+
+    class Publisher:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            started.append(True)
+
+        def stop(self) -> None:
+            stopped.append(True)
+
+    calls = iter([OperationalError("BEGIN IMMEDIATE", {}, Exception("database is locked")), KeyboardInterrupt()])
+
+    def run_once() -> bool:
+        outcome = next(calls)
+        raise outcome
+
+    monkeypatch.setattr(run_company_research_worker, "WorkerHeartbeatPublisher", Publisher)
+    monkeypatch.setattr(run_company_research_worker, "run_once", run_once)
+    monkeypatch.setattr(run_company_research_worker.time, "sleep", sleeps.append)
+    monkeypatch.setattr(sys, "argv", ["company-research-worker", "--loop", "--poll-seconds", "0.1"])
+
+    with pytest.raises(KeyboardInterrupt):
+        run_company_research_worker.main()
+
+    assert started == [True]
+    assert stopped == [True]
+    assert sleeps == [0.1]
 
 
 def test_historical_basis_recovery_rejects_a_wrong_gaps_fixture_hash(

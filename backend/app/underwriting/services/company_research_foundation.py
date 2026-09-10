@@ -12,8 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import ValidationError
-from app.underwriting.adapters.company_research import AlphabetCompanyResearchAdapter
+from app.underwriting.adapters.company_research import (
+    AlphabetCompanyResearchAdapter,
+    CatlCompanyResearchAdapter,
+)
 from app.underwriting.domain.company_research import (
+    DEFAULT_STRATEGY_VERSION,
     CompanyResearchCompany,
     CompanyResearchDefaultPolicy,
     CompanyResearchIdentitySet,
@@ -21,7 +25,6 @@ from app.underwriting.domain.company_research import (
     CompanyResearchSecurity,
     build_company_research_preview,
 )
-from app.underwriting.domain.types import ResearchObjectKind
 from app.underwriting.domain.product_contracts import (
     AgendaGenerationMethod,
     AgendaGeneratorInput,
@@ -29,15 +32,17 @@ from app.underwriting.domain.product_contracts import (
     ResearchScopeInput,
     agenda_items_hash,
 )
-from app.underwriting.domain.types import InvestmentMandateInput
-from app.underwriting.persistence.models import UnderwritingMandateVersion
-from app.underwriting.persistence.models import UnderwritingResearchObject
-from app.underwriting.persistence.product_repository import ProductRepository
+from app.underwriting.domain.types import InvestmentMandateInput, ResearchObjectKind
+from app.underwriting.persistence.models import (
+    UnderwritingMandateVersion,
+    UnderwritingResearchObject,
+)
 from app.underwriting.persistence.product_models import (
     UnderwritingResearchAgendaVersion,
     UnderwritingResearchProject,
     UnderwritingResearchScopeVersion,
 )
+from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.services.product_project import (
     agenda_generator_provenance,
     product_mandate_content_hash,
@@ -51,10 +56,36 @@ from app.underwriting.services.product_project import (
 _AGENDA_TEMPLATE_KEY = "company-research-default"
 
 
-def build_alphabet_company_research_preview_at_cutoff(
-    session: Session, *, company_id: UUID, cutoff_at: datetime
+CompanyResearchFoundationAdapter = (
+    AlphabetCompanyResearchAdapter | CatlCompanyResearchAdapter
+)
+
+
+def company_research_adapter_for_company(
+    company_external_key: str,
+) -> CompanyResearchFoundationAdapter:
+    """Dispatch by an exact governed company key; never guess by ticker text."""
+    adapters: tuple[CompanyResearchFoundationAdapter, ...] = (
+        AlphabetCompanyResearchAdapter(),
+        CatlCompanyResearchAdapter(),
+    )
+    matches = tuple(
+        adapter for adapter in adapters if adapter.supports(company_external_key)
+    )
+    if len(matches) != 1:
+        raise ValidationError("company research adapter is unavailable")
+    return matches[0]
+
+
+def build_company_research_preview_at_cutoff(
+    session: Session,
+    *,
+    company_id: UUID,
+    cutoff_at: datetime,
+    strategy_version: str = DEFAULT_STRATEGY_VERSION,
+    focus_question: str | None = None,
 ) -> CompanyResearchPreview:
-    """Rebuild the exact canonical preview at a caller-supplied historical cutoff."""
+    """Rebuild a canonical preview using the exact company adapter."""
     repository = ProductRepository(session)
     company = session.scalar(
         select(UnderwritingResearchObject)
@@ -63,17 +94,18 @@ def build_alphabet_company_research_preview_at_cutoff(
     )
     if company is None or company.kind != ResearchObjectKind.COMPANY.value:
         raise ValidationError("company research foundation identity is invalid")
-    adapter = AlphabetCompanyResearchAdapter()
-    if not adapter.supports(company.external_key):
-        raise ValidationError("company research foundation identity is invalid")
+    try:
+        adapter = company_research_adapter_for_company(company.external_key)
+    except ValidationError as exc:
+        raise ValidationError(
+            "company research foundation identity is invalid"
+        ) from exc
     company_identity = repository.effective_identity(company_id, cutoff_at)
     if company_identity is None:
         raise ValidationError("company research foundation identity is invalid")
     rows = tuple(
         session.execute(
-            repository._effective_company_children_statement(
-                {company_id}, cutoff_at
-            )
+            repository._effective_company_children_statement({company_id}, cutoff_at)
             .order_by("parent_id", "id")
             .execution_options(populate_existing=True)
         ).tuples()
@@ -104,7 +136,30 @@ def build_alphabet_company_research_preview_at_cutoff(
         adapter=adapter,
         identities=identities,
         cutoff_at=cutoff_at,
+        strategy_version=strategy_version,
+        focus_question=focus_question,
     )
+
+
+def build_alphabet_company_research_preview_at_cutoff(
+    session: Session,
+    *,
+    company_id: UUID,
+    cutoff_at: datetime,
+    strategy_version: str = DEFAULT_STRATEGY_VERSION,
+    focus_question: str | None = None,
+) -> CompanyResearchPreview:
+    """Rebuild the exact canonical preview at a caller-supplied historical cutoff."""
+    preview = build_company_research_preview_at_cutoff(
+        session,
+        company_id=company_id,
+        cutoff_at=cutoff_at,
+        strategy_version=strategy_version,
+        focus_question=focus_question,
+    )
+    if preview.company.external_key != "US:ALPHABET:COMPANY":
+        raise ValidationError("company research foundation identity is invalid")
+    return preview
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,11 +184,37 @@ def alphabet_company_research_foundation_contract(
     security_ids: tuple[UUID, ...],
     request_hash: str,
     strategy_version: str,
+    focus_question: str | None = None,
 ) -> CompanyResearchFoundationContract:
     """Build the source-independent first-version Alphabet foundation."""
-    adapter = AlphabetCompanyResearchAdapter()
-    if not adapter.supports(company_external_key):
+    if company_external_key != "US:ALPHABET:COMPANY":
         raise ValidationError("company research foundation identity is invalid")
+    return company_research_foundation_contract(
+        company_external_key=company_external_key,
+        company_id=company_id,
+        security_ids=security_ids,
+        request_hash=request_hash,
+        strategy_version=strategy_version,
+        focus_question=focus_question,
+    )
+
+
+def company_research_foundation_contract(
+    *,
+    company_external_key: str,
+    company_id: UUID,
+    security_ids: tuple[UUID, ...],
+    request_hash: str,
+    strategy_version: str,
+    focus_question: str | None = None,
+) -> CompanyResearchFoundationContract:
+    """Build the source-independent foundation for one governed company."""
+    try:
+        adapter = company_research_adapter_for_company(company_external_key)
+    except ValidationError as exc:
+        raise ValidationError(
+            "company research foundation identity is invalid"
+        ) from exc
     policy = CompanyResearchDefaultPolicy(strategy_version=strategy_version)
     business_modules = adapter.business_modules(company_external_key)
     agenda_items = tuple(
@@ -153,7 +234,7 @@ def alphabet_company_research_foundation_contract(
             target_security_ids=tuple(sorted(security_ids, key=str)),
             industry_ids=(),
             covered_segments=(),
-            user_focus=None,
+            user_focus=focus_question,
             exclusions=(),
         ),
         agenda_items=agenda_items,
@@ -180,6 +261,7 @@ def authenticate_company_research_foundation(
     authenticated_legacy_request_cutoff_at: datetime | None = None,
 ) -> None:
     """Authenticate immutable hashes and the exact governed first-version values."""
+
     def invalid() -> ValidationError:
         return ValidationError("company research foundation contract is invalid")
 
@@ -346,7 +428,8 @@ def authenticate_company_research_foundation(
             project_created_at <= mandate_effective_at
             or mandate_effective_at == legacy_request_cutoff
         )
-        and mandate_effective_at <= mandate_created_at
+        and mandate_effective_at
+        <= mandate_created_at
         <= scope_created_at
         <= agenda_created_at
         <= preparation_time

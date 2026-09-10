@@ -1,4 +1,4 @@
-import type { CompanyResearchWorkspace } from "../../data/investmentResearchApi";
+import type { CompanyResearchRun, CompanyResearchWorkspace } from "../../data/investmentResearchApi";
 
 type WorkspaceArtifact = CompanyResearchWorkspace["artifacts"][number];
 type ArtifactKind = WorkspaceArtifact["kind"];
@@ -39,6 +39,84 @@ export const COMPANY_RESEARCH_MODULES = [
 ] as const;
 
 export type CompanyResearchModuleKey = typeof COMPANY_RESEARCH_MODULES[number]["key"];
+
+const RUN_STATUS_LABELS: Readonly<Record<CompanyResearchRun["status"], string>> = {
+  queued: "等待开始",
+  collecting_sources: "收集资料",
+  analyzing_company: "分析公司",
+  building_forecast: "建立预测",
+  generating_report: "生成报告",
+  completed: "已完成",
+  needs_input: "需要补充",
+  failed: "运行失败",
+};
+const RUN_STAGE_LABELS: Readonly<Record<CompanyResearchRun["stages"][number]["key"], string>> = {
+  identity: "公司识别",
+  sources: "资料收集",
+  analysis: "经营分析",
+  forecast: "建立预测",
+  report: "生成报告",
+};
+const RUN_STATUS_RANK: Readonly<Record<CompanyResearchRun["status"], number>> = {
+  queued: 0,
+  collecting_sources: 1,
+  analyzing_company: 2,
+  building_forecast: 3,
+  generating_report: 4,
+  needs_input: 5,
+  failed: 5,
+  completed: 6,
+};
+const RUN_STAGE_STATUS_RANK: Readonly<Record<CompanyResearchRun["stages"][number]["status"], number>> = {
+  pending: 0,
+  active: 1,
+  needs_input: 2,
+  failed: 2,
+  completed: 3,
+};
+
+export function researchRunStatusView(run: CompanyResearchRun) {
+  return { status: run.status, label: RUN_STATUS_LABELS[run.status], progress: run.progress };
+}
+
+export function researchRunStageView(run: CompanyResearchRun) {
+  return run.stages.map((stage) => ({ ...stage, label: RUN_STAGE_LABELS[stage.key] }));
+}
+
+export function researchRunIsActive(run: CompanyResearchRun): boolean {
+  return run.status !== "completed" && run.status !== "needs_input" && run.status !== "failed";
+}
+
+export function researchRunSnapshotIsMonotonic(current: CompanyResearchRun, next: CompanyResearchRun): boolean {
+  if (current.project_id !== next.project_id || current.company.object_id !== next.company.object_id) return false;
+  if (Date.parse(next.updated_at) < Date.parse(current.updated_at)) return false;
+  if (current.selected_revision !== null && next.selected_revision !== current.selected_revision) return false;
+  const criticalHeadAdvanced = current.critical_inputs !== null && next.critical_inputs !== null
+    && next.critical_inputs.version > current.critical_inputs.version
+    && next.critical_inputs.artifact_id !== current.critical_inputs.artifact_id;
+  const governedRebuild = current.status === "needs_input"
+    && next.status === "analyzing_company" && next.progress === 25
+    && next.selected_revision === current.selected_revision
+    && criticalHeadAdvanced
+    && next.critical_inputs!.inputs.some((input) => input.decision === "replaced_with_user_assumption" || input.decision === "marked_unknown")
+    && next.stages.map(({ key, status }) => `${key}:${status}`).join("|")
+      === "identity:completed|sources:completed|analysis:active|forecast:pending|report:pending";
+  if (governedRebuild) return true;
+  if (current.status === "failed" && next.status !== "failed") return false;
+  if (current.status === "completed" && next.status !== "completed") return false;
+  if (current.status === "needs_input" && next.status !== "needs_input" && next.status !== "completed") return false;
+  if (next.progress < current.progress || RUN_STATUS_RANK[next.status] < RUN_STATUS_RANK[current.status]) return false;
+  if (current.stages.length !== next.stages.length || current.stages.some((stage, index) => {
+    const candidate = next.stages[index];
+    return candidate === undefined || candidate.key !== stage.key
+      || RUN_STAGE_STATUS_RANK[candidate.status] < RUN_STAGE_STATUS_RANK[stage.status];
+  })) return false;
+  if (current.critical_inputs === null) return true;
+  if (next.critical_inputs === null || next.critical_inputs.version < current.critical_inputs.version) return false;
+  return next.critical_inputs.version !== current.critical_inputs.version
+    || next.critical_inputs.artifact_id === current.critical_inputs.artifact_id
+      && next.critical_inputs.content_hash === current.critical_inputs.content_hash;
+}
 
 export type CompanyResearchPublicationAction =
   | { kind: "confirm_judgment"; label: "确认当前判断" }

@@ -198,20 +198,52 @@ class AlphabetCompanyResearchAdapter:
                 CompanyResearchMetricClassification(
                     "corporate_capital_allocation", "diluted_shares", "capital"
                 ),
-                CompanyResearchMetricClassification("search_and_other_ads", "query_intensity", "revenue"),
-                CompanyResearchMetricClassification("search_and_other_ads", "ad_monetization", "revenue"),
-                CompanyResearchMetricClassification("search_and_other_ads", "traffic_acquisition_cost", "cost"),
-                CompanyResearchMetricClassification("youtube_ads_and_subscriptions", "youtube_usage", "revenue"),
-                CompanyResearchMetricClassification("youtube_ads_and_subscriptions", "youtube_ad_monetization", "revenue"),
-                CompanyResearchMetricClassification("youtube_ads_and_subscriptions", "youtube_subscription_growth", "revenue"),
-                CompanyResearchMetricClassification("google_cloud", "cloud_workload", "revenue"),
-                CompanyResearchMetricClassification("google_cloud", "cloud_revenue_growth", "revenue"),
-                CompanyResearchMetricClassification("google_cloud", "cloud_operating_margin", "cost"),
-                CompanyResearchMetricClassification("corporate_capital_allocation", "depreciation", "cost"),
-                CompanyResearchMetricClassification("corporate_capital_allocation", "infrastructure_opex", "cost"),
-                CompanyResearchMetricClassification("corporate_capital_allocation", "free_cash_flow", "capital"),
-                CompanyResearchMetricClassification("corporate_capital_allocation", "stock_based_compensation", "cost"),
-                CompanyResearchMetricClassification("corporate_capital_allocation", "share_repurchases", "capital"),
+                CompanyResearchMetricClassification(
+                    "search_and_other_ads", "query_intensity", "revenue"
+                ),
+                CompanyResearchMetricClassification(
+                    "search_and_other_ads", "ad_monetization", "revenue"
+                ),
+                CompanyResearchMetricClassification(
+                    "search_and_other_ads", "traffic_acquisition_cost", "cost"
+                ),
+                CompanyResearchMetricClassification(
+                    "youtube_ads_and_subscriptions", "youtube_usage", "revenue"
+                ),
+                CompanyResearchMetricClassification(
+                    "youtube_ads_and_subscriptions",
+                    "youtube_ad_monetization",
+                    "revenue",
+                ),
+                CompanyResearchMetricClassification(
+                    "youtube_ads_and_subscriptions",
+                    "youtube_subscription_growth",
+                    "revenue",
+                ),
+                CompanyResearchMetricClassification(
+                    "google_cloud", "cloud_workload", "revenue"
+                ),
+                CompanyResearchMetricClassification(
+                    "google_cloud", "cloud_revenue_growth", "revenue"
+                ),
+                CompanyResearchMetricClassification(
+                    "google_cloud", "cloud_operating_margin", "cost"
+                ),
+                CompanyResearchMetricClassification(
+                    "corporate_capital_allocation", "depreciation", "cost"
+                ),
+                CompanyResearchMetricClassification(
+                    "corporate_capital_allocation", "infrastructure_opex", "cost"
+                ),
+                CompanyResearchMetricClassification(
+                    "corporate_capital_allocation", "free_cash_flow", "capital"
+                ),
+                CompanyResearchMetricClassification(
+                    "corporate_capital_allocation", "stock_based_compensation", "cost"
+                ),
+                CompanyResearchMetricClassification(
+                    "corporate_capital_allocation", "share_repurchases", "capital"
+                ),
             ),
             operating_driver_bindings=operating_bindings,
             financial_driver_ownership=(
@@ -290,7 +322,7 @@ class AlphabetCompanyResearchAdapter:
             rationale=value.terminal_growth.rationale,
             equation=value.terminal_growth.equation,
         )
-        return StrategyAssumptionSet(
+        return StrategyAssumptionSet.from_legacy_alphabet(
             strategy_version=value.strategy_version,
             content_hash=value.content_hash,
             first_fiscal_year=value.first_fiscal_year,

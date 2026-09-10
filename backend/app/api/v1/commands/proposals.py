@@ -22,9 +22,6 @@ from app.api.v1.commands.common import (
     resolve_actor,
     translate_validation,
 )
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.case_tenant_access import CaseTenantAccess
-from app.services.review_tenant_access import ReviewTenantAccess
 from app.db import get_db
 from app.errors import ConflictError, NotFoundError
 from app.models.ledger import ValidationError
@@ -55,29 +52,25 @@ def list_proposals(
     case_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    if case_id is not None:
-        CaseTenantAccess(db).require_case(case_id, tenant_id)
     proposals = ProposalRepository(db).pending_for_case(
-        case_id=case_id, kind=kind, limit=limit, tenant_id=tenant_id
+        case_id=case_id, kind=kind, limit=limit
     )
-    items = []
-    for p in proposals:
-        withheld = p.kind == "evidence_link" and proposal_evidence_context(db, p).display_withheld
-        items.append(ProposalItemDTO(
+    items = [
+        ProposalItemDTO(
             id=str(p.id),
             kind=p.kind,
-            payload={} if withheld else p.payload,
-            target_context={} if withheld else p.target_context,
-            display_withheld=withheld,
+            payload=p.payload,
+            target_context=p.target_context,
             proposed_by_type=p.proposed_by_type,
             proposed_by_ref=p.proposed_by_ref,
             proposed_at=p.proposed_at.isoformat(),
             basis_cutoff=p.basis_cutoff.isoformat() if p.basis_cutoff else None,
             status=p.status,
             version=p.version,
-        ))
+        )
+        for p in proposals
+    ]
     return ReviewQueueResponse(items=items)
 
 
@@ -89,9 +82,7 @@ def list_proposals(
 def claim_proposal(
     proposal_id: uuid.UUID,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    ReviewTenantAccess(db).require_proposal(proposal_id, tenant_id)
     assignment = translate_validation(
         _claim,
         proposal_id,
@@ -133,9 +124,7 @@ def decide_proposal(
     proposal_id: uuid.UUID,
     payload: ReviewDecisionRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    ReviewTenantAccess(db).require_proposal(proposal_id, tenant_id)
     decision, published_id = translate_validation(
         _decide,
         proposal_id,
@@ -206,7 +195,6 @@ def _decide(
         task_type="review_proposal",
         ref_type="proposal",
         ref_id=proposal_id,
-        research_case_id=proposal.research_case_id if proposal is not None else None,
     )
     AutoResearchService(db).reconcile_runs_for_output(
         key="proposed_proposal_ids",

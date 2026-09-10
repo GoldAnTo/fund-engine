@@ -1,0 +1,43 @@
+{
+  "schema_version": "catl.answerable-case.strategy-assumptions.v1",
+  "content_hash": "1e1ecb439d442ae47e2525a27054ad1aa6df11ce87453ce1d0c002b6dbb85440",
+  "strategy_version": "catl-machine-candidate.v1",
+  "first_fiscal_year": 2025,
+  "driver_paths": [
+    {"driver_key":"revenue","values":["380000","410400","443232","474258.24","502713.7344"],"state":"assumption","assumption_key":"catl-machine-candidate.v1:revenue_path","rationale":"Candidate path anchored to the frozen 2024 revenue baseline; it is not issuer guidance.","equation":"prior_year_revenue * explicit_candidate_growth"},
+    {"driver_key":"operating_margin","values":["0.18","0.185","0.19","0.192","0.195"],"state":"assumption","assumption_key":"catl-machine-candidate.v1:operating_margin_path","rationale":"Candidate margin path for scenario testing; it is not a reported forecast.","equation":"explicit_candidate_operating_margin"},
+    {"driver_key":"cash_tax_rate","values":["0.15","0.15","0.15","0.15","0.15"],"state":"assumption","assumption_key":"catl-machine-candidate.v1:cash_tax_rate_path","rationale":"Candidate normalized tax rate near the frozen 2024 effective rate.","equation":"explicit_candidate_cash_tax_rate"},
+    {"driver_key":"depreciation","values":["24000","25500","27000","28500","30000"],"state":"assumption","assumption_key":"catl-machine-candidate.v1:depreciation_path","rationale":"Candidate depreciation path anchored to the frozen 2024 reported depreciation.","equation":"explicit_candidate_depreciation"},
+    {"driver_key":"capex","values":["35000","36000","37000","38000","39000"],"state":"assumption","assumption_key":"catl-machine-candidate.v1:capex_path","rationale":"Candidate cash-capex path anchored to the frozen 2024 reported cash capex.","equation":"explicit_candidate_capex"},
+    {"driver_key":"working_capital_change","values":["8000","9000","10000","11000","12000"],"state":"assumption","assumption_key":"catl-machine-candidate.v1:working_capital_path","rationale":"Conservative candidate working-capital investment path after a source-of-cash 2024 movement.","equation":"explicit_candidate_change_in_net_working_capital"}
+  ],
+  "scenario_overrides": [
+    {"scenario_id":"base","mechanism_id":"volume_growth_and_margin_normalization","driver_overrides":[
+      {"driver_key":"revenue","value":"1","state":"assumption","assumption_key":"catl-machine-candidate.v1:base_revenue","rationale":"Base preserves the candidate path.","equation":"candidate * 1"},
+      {"driver_key":"operating_margin","value":"1","state":"assumption","assumption_key":"catl-machine-candidate.v1:base_margin","rationale":"Base preserves the candidate path.","equation":"candidate * 1"},
+      {"driver_key":"cash_tax_rate","value":"1","state":"assumption","assumption_key":"catl-machine-candidate.v1:base_tax","rationale":"Base preserves the candidate path.","equation":"candidate * 1"},
+      {"driver_key":"depreciation","value":"1","state":"assumption","assumption_key":"catl-machine-candidate.v1:base_depreciation","rationale":"Base preserves the candidate path.","equation":"candidate * 1"},
+      {"driver_key":"capex","value":"1","state":"assumption","assumption_key":"catl-machine-candidate.v1:base_capex","rationale":"Base preserves the candidate path.","equation":"candidate * 1"},
+      {"driver_key":"working_capital_change","value":"1","state":"assumption","assumption_key":"catl-machine-candidate.v1:base_working_capital","rationale":"Base preserves the candidate path.","equation":"candidate * 1"}]},
+    {"scenario_id":"bull","mechanism_id":"faster_volume_growth_and_utilization","driver_overrides":[
+      {"driver_key":"revenue","value":"1.08","state":"assumption","assumption_key":"catl-machine-candidate.v1:bull_revenue","rationale":"Tests higher volume and monetization.","equation":"candidate * 1.08"},
+      {"driver_key":"operating_margin","value":"1.08","state":"assumption","assumption_key":"catl-machine-candidate.v1:bull_margin","rationale":"Tests higher utilization and mix.","equation":"candidate * 1.08"},
+      {"driver_key":"cash_tax_rate","value":"0.98","state":"assumption","assumption_key":"catl-machine-candidate.v1:bull_tax","rationale":"Tests a modestly lower normalized cash tax rate.","equation":"candidate * 0.98"},
+      {"driver_key":"depreciation","value":"1.05","state":"assumption","assumption_key":"catl-machine-candidate.v1:bull_depreciation","rationale":"Tests higher deployed asset base.","equation":"candidate * 1.05"},
+      {"driver_key":"capex","value":"1.1","state":"assumption","assumption_key":"catl-machine-candidate.v1:bull_capex","rationale":"Tests investment needed for faster growth.","equation":"candidate * 1.1"},
+      {"driver_key":"working_capital_change","value":"0.9","state":"assumption","assumption_key":"catl-machine-candidate.v1:bull_working_capital","rationale":"Tests more efficient working-capital conversion.","equation":"candidate * 0.9"}]},
+    {"scenario_id":"bear","mechanism_id":"price_pressure_and_lower_utilization","driver_overrides":[
+      {"driver_key":"revenue","value":"0.9","state":"assumption","assumption_key":"catl-machine-candidate.v1:bear_revenue","rationale":"Tests weaker volume and pricing.","equation":"candidate * 0.9"},
+      {"driver_key":"operating_margin","value":"0.82","state":"assumption","assumption_key":"catl-machine-candidate.v1:bear_margin","rationale":"Tests price pressure and lower utilization.","equation":"candidate * 0.82"},
+      {"driver_key":"cash_tax_rate","value":"1.05","state":"assumption","assumption_key":"catl-machine-candidate.v1:bear_tax","rationale":"Tests a higher normalized cash tax rate.","equation":"candidate * 1.05"},
+      {"driver_key":"depreciation","value":"0.95","state":"assumption","assumption_key":"catl-machine-candidate.v1:bear_depreciation","rationale":"Tests slower additions to depreciable assets.","equation":"candidate * 0.95"},
+      {"driver_key":"capex","value":"0.85","state":"assumption","assumption_key":"catl-machine-candidate.v1:bear_capex","rationale":"Tests curtailed investment under weaker demand.","equation":"candidate * 0.85"},
+      {"driver_key":"working_capital_change","value":"1.2","state":"assumption","assumption_key":"catl-machine-candidate.v1:bear_working_capital","rationale":"Tests weaker working-capital conversion.","equation":"candidate * 1.2"}]}
+  ],
+  "required_return":{"value":"0.1","state":"assumption","assumption_key":"catl-machine-candidate.v1:required_return","rationale":"Explicit valuation sensitivity anchor, not a market fact.","equation":"candidate_discount_rate"},
+  "terminal_growth":{"value":"0.03","state":"assumption","assumption_key":"catl-machine-candidate.v1:terminal_growth","rationale":"Explicit long-run nominal CNY growth sensitivity anchor.","equation":"candidate_terminal_growth"},
+  "sensitivity_assumptions": [
+    {"variable_key":"required_return","low":{"value":"0.09","state":"assumption","assumption_key":"catl-machine-candidate.v1:sensitivity_required_return_low","rationale":"Governed lower discount-rate sensitivity point.","equation":"revalue_base_dcf_at_governed_input"},"high":{"value":"0.11","state":"assumption","assumption_key":"catl-machine-candidate.v1:sensitivity_required_return_high","rationale":"Governed higher discount-rate sensitivity point.","equation":"revalue_base_dcf_at_governed_input"}},
+    {"variable_key":"terminal_growth","low":{"value":"0.02","state":"assumption","assumption_key":"catl-machine-candidate.v1:sensitivity_terminal_growth_low","rationale":"Governed lower terminal-growth sensitivity point.","equation":"revalue_base_dcf_at_governed_input"},"high":{"value":"0.04","state":"assumption","assumption_key":"catl-machine-candidate.v1:sensitivity_terminal_growth_high","rationale":"Governed higher terminal-growth sensitivity point.","equation":"revalue_base_dcf_at_governed_input"}}
+  ]
+}

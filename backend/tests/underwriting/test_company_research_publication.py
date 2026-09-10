@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from datetime import timedelta
-from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from hashlib import sha256
 from threading import Barrier, BrokenBarrierError
@@ -17,15 +17,19 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.models.operational import Job
-from app.underwriting.hashing import canonical_hash
 from app.underwriting.domain.company_research import (
     CompanyResearchCompany,
     CompanyResearchSecurity,
 )
-from app.underwriting.domain.product_contracts import RevisionBoundaryInput
 from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
+from app.underwriting.domain.company_research_critical_inputs import (
+    CriticalInputDecision,
+    CriticalInputSet,
+)
+from app.underwriting.domain.product_contracts import RevisionBoundaryInput
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchEvent,
@@ -35,6 +39,7 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchIntegrityError,
     CompanyResearchRepository,
 )
+from app.underwriting.persistence.models import UnderwritingResearchVersion
 from app.underwriting.persistence.product_models import (
     UnderwritingMarketCaptureEnvelope,
     UnderwritingPriceSnapshot,
@@ -45,13 +50,12 @@ from app.underwriting.persistence.product_models import (
     UnderwritingRevisionManifest,
     UnderwritingWorkspaceDraft,
 )
-from app.underwriting.persistence.models import UnderwritingResearchVersion
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.services.company_research_preparation import (
-    CompanyResearchPreparationWorker,
-)
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchPreparationService,
+)
+from app.underwriting.services.company_research_preparation import (
+    CompanyResearchPreparationWorker,
 )
 from app.underwriting.services.company_research_publication import (
     CompanyResearchJudgmentConfirmation,
@@ -62,6 +66,9 @@ from app.underwriting.services.company_research_workbench import (
 )
 from app.underwriting.services.product_project import research_project_content_hash
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
+from tests.underwriting.test_company_research_critical_input_confirmation import (
+    _ready_small_mainline_with_terminal_inputs,
+)
 from tests.underwriting.test_company_research_persistence import (
     _rebind_historical_basis_without_updating_draft_lock,
     _substitute_basis,
@@ -81,11 +88,90 @@ from tests.underwriting.test_company_research_worker import (
     _legacy_blocked_missing_basis,
 )
 
-
 CONFIRMED_AT = NOW + timedelta(minutes=5)
 FROZEN_AT = CONFIRMED_AT + timedelta(minutes=5)
 REVIEWER = "human:local-user"
 REJECTED_FACT_KEY = "fy2025_other_bets_revenue"
+
+
+def test_mainline_publication_freezes_critical_inputs_and_ignores_later_heads(
+    session,
+) -> None:
+    initialized, run = _ready_small_mainline_with_terminal_inputs(session)
+    assert run.critical_inputs is not None
+    repository = CompanyResearchRepository(session)
+    critical_head = repository.current_artifact(
+        initialized.project.id, "critical_inputs"
+    )
+    assert critical_head is not None
+    service = CompanyResearchPublicationService(
+        session, now=lambda: FROZEN_AT + timedelta(minutes=10)
+    )
+    preview = service.preview(
+        project_id=initialized.project.id,
+        expected_lock_version=run.workspace.draft.lock_version,
+    )
+
+    critical_ref = next(
+        item for item in preview.artifacts if item.kind == "critical_inputs"
+    )
+    assert critical_ref.id == critical_head.id
+    assert preview.manifest["critical_inputs"] == critical_head.payload
+
+    revision = service.publish(
+        project_id=initialized.project.id,
+        expected_lock_version=preview.expected_lock_version,
+        expected_manifest_hash=preview.manifest_hash,
+        idempotency_key="mainline-critical-input-freeze",
+    )
+    before_export = service.export(initialized.project.id, revision.id)
+    assert "## Critical Inputs" in before_export.content
+    assert service._markdown_json(critical_head.payload) in before_export.content
+    frozen_ref = next(
+        item for item in revision.artifacts if item.kind == "critical_inputs"
+    )
+    assert frozen_ref.id == critical_head.id
+
+    frozen_set = CompanyResearchArtifactCodec.decode(
+        "critical_inputs", critical_head.payload
+    )
+    assert type(frozen_set) is CriticalInputSet
+    changed = next(
+        item for item in frozen_set.inputs if item.kind.value == "ai_assumption"
+    )
+    pending = CriticalInputSet(
+        inputs=tuple(
+            replace(
+                item,
+                value=f"{item.value}|later-workspace-change",
+                decision=CriticalInputDecision.PENDING,
+                replacement=None,
+                input_fingerprint="",
+            )
+            if item.key == changed.key
+            else replace(
+                item,
+                decision=CriticalInputDecision.PENDING,
+                replacement=None,
+            )
+            for item in frozen_set.inputs
+        )
+    )
+    later = repository.append_critical_input_rebuild(
+        project_id=initialized.project.id,
+        payload=CompanyResearchArtifactCodec.encode("critical_inputs", pending),
+        expected_parent_id=critical_head.id,
+        created_at=FROZEN_AT + timedelta(minutes=20),
+    )
+    assert later.id != frozen_ref.id
+
+    replayed = service.revision(initialized.project.id, revision.id)
+    after_export = service.export(initialized.project.id, revision.id)
+    assert next(
+        item for item in replayed.artifacts if item.kind == "critical_inputs"
+    ).id == frozen_ref.id
+    assert after_export.content_hash == before_export.content_hash
+    assert after_export.content == before_export.content
 
 
 def test_company_research_publication_service_is_the_public_confirmation_seam() -> None:

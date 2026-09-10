@@ -1,4 +1,4 @@
-"""Authenticated historical boundary for the Alphabet company-research model."""
+"""Authenticated historical boundaries for governed company-research cases."""
 
 from __future__ import annotations
 
@@ -8,7 +8,10 @@ from datetime import UTC, datetime
 from enum import Enum
 
 from app.models.ledger import ValidationError
-from app.underwriting.adapters.company_research import AlphabetCompanyResearchAdapter
+from app.underwriting.adapters.company_research import (
+    AlphabetCompanyResearchAdapter,
+    CatlCompanyResearchAdapter,
+)
 from app.underwriting.domain.product_contracts import (
     ProductHistoricalBasisInput,
     product_historical_basis_content_hash,
@@ -17,8 +20,10 @@ from app.underwriting.fixtures.alphabet_golden_case import (
     LEGACY_EVIDENCE_MANIFEST_CONTENT_SHA256,
     load_alphabet_golden_case_fixture,
 )
+from app.underwriting.fixtures.catl_answerable_case import (
+    load_catl_answerable_case_fixture,
+)
 from app.underwriting.hashing import canonical_hash
-
 
 _DEFINITION_SCHEMA = "company-research.definition-bundle.v1"
 _PARSER_SCHEMA = "company-research.parser-bundle.v1"
@@ -29,6 +34,14 @@ _FIXTURE_SCHEMAS = (
     "alphabet.golden-case.source-facts.v1",
     "alphabet.golden-case.market-inputs.v1",
     "alphabet.golden-case.strategy-assumptions.v1",
+)
+_CATL_PARSER_STRATEGY = "catl-answerable-case-parser.v1"
+_CATL_FIXTURE_SCHEMAS = (
+    "catl.answerable-case.manifest.v1",
+    "catl.answerable-case.business-map.v1",
+    "catl.answerable-case.source-facts.v1",
+    "catl.answerable-case.market-inputs.v1",
+    "catl.answerable-case.strategy-assumptions.v1",
 )
 
 
@@ -68,6 +81,53 @@ class CompanyResearchHistoricalBoundary:
     basis_content_hash: str
 
 
+def _resolve_boundary(
+    *,
+    requested_cutoff_at: datetime,
+    fixture_cutoff: datetime,
+    fixture_content_hash: str,
+    source_manifest_hash: str | None,
+    model_template: object,
+    parser_strategy: str,
+    fixture_schemas: tuple[str, ...],
+    label: str,
+) -> CompanyResearchHistoricalBoundary:
+    requested_cutoff_at = _utc(requested_cutoff_at, "requested cutoff")
+    if requested_cutoff_at < fixture_cutoff:
+        raise ValidationError(
+            f"requested cutoff precedes the authenticated {label} fixture"
+        )
+    governed_source_hash = (
+        fixture_content_hash if source_manifest_hash is None else source_manifest_hash
+    )
+    if governed_source_hash != fixture_content_hash:
+        raise ValidationError(f"{label} evidence manifest is not governed")
+    definition_bundle_hash = canonical_hash(
+        {
+            "schema_version": _DEFINITION_SCHEMA,
+            "model_template": _json_contract(asdict(model_template)),
+        }
+    )
+    parser_bundle_hash = canonical_hash(
+        {
+            "schema_version": _PARSER_SCHEMA,
+            "parser_strategy": parser_strategy,
+            "fixture_schema_versions": fixture_schemas,
+        }
+    )
+    basis_input = ProductHistoricalBasisInput(
+        cutoff_at=fixture_cutoff,
+        source_manifest_hash=governed_source_hash,
+        definition_bundle_hash=definition_bundle_hash,
+        parser_bundle_hash=parser_bundle_hash,
+    )
+    return CompanyResearchHistoricalBoundary(
+        cutoff_at=fixture_cutoff,
+        basis_input=basis_input,
+        basis_content_hash=product_historical_basis_content_hash(basis_input),
+    )
+
+
 def resolve_alphabet_company_research_boundary(
     requested_cutoff_at: datetime,
     *,
@@ -80,9 +140,7 @@ def resolve_alphabet_company_research_boundary(
             "requested cutoff precedes the authenticated Alphabet fixture"
         )
     governed_source_hash = (
-        fixture.content_hash
-        if source_manifest_hash is None
-        else source_manifest_hash
+        fixture.content_hash if source_manifest_hash is None else source_manifest_hash
     )
     if governed_source_hash not in {
         fixture.content_hash,
@@ -116,3 +174,41 @@ def resolve_alphabet_company_research_boundary(
         basis_input=basis_input,
         basis_content_hash=basis_content_hash,
     )
+
+
+def resolve_catl_company_research_boundary(
+    requested_cutoff_at: datetime,
+    *,
+    source_manifest_hash: str | None = None,
+) -> CompanyResearchHistoricalBoundary:
+    fixture = load_catl_answerable_case_fixture()
+    return _resolve_boundary(
+        requested_cutoff_at=requested_cutoff_at,
+        fixture_cutoff=fixture.cutoff,
+        fixture_content_hash=fixture.content_hash,
+        source_manifest_hash=source_manifest_hash,
+        model_template=CatlCompanyResearchAdapter().model_template(),
+        parser_strategy=_CATL_PARSER_STRATEGY,
+        fixture_schemas=_CATL_FIXTURE_SCHEMAS,
+        label="CATL",
+    )
+
+
+def resolve_company_research_boundary(
+    company_external_key: str,
+    requested_cutoff_at: datetime,
+    *,
+    source_manifest_hash: str | None = None,
+) -> CompanyResearchHistoricalBoundary:
+    """Resolve an exact governed company boundary; reject unknown identities."""
+    if company_external_key == "US:ALPHABET:COMPANY":
+        return resolve_alphabet_company_research_boundary(
+            requested_cutoff_at,
+            source_manifest_hash=source_manifest_hash,
+        )
+    if company_external_key == "CN:300750:COMPANY":
+        return resolve_catl_company_research_boundary(
+            requested_cutoff_at,
+            source_manifest_hash=source_manifest_hash,
+        )
+    raise ValidationError("company research boundary is unavailable")

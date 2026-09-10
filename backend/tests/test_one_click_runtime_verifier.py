@@ -125,7 +125,7 @@ if args and args[0] == "compose":
     if command == [*exact_exec, connection_query]:
         if mode == "connections": mutate_private_directory()
         print("999" if mode == "connections" else "3"); sys.exit(0)
-    if command == [*exact_exec, revision_query]: print("0069" if mode == "revision-second" and os.path.exists(root + "/seen-revision") else "0070"); open(root + "/seen-revision", "w").write("1"); sys.exit(0)
+    if command == [*exact_exec, revision_query]: print("0070" if mode == "revision-second" and os.path.exists(root + "/seen-revision") else "0071"); open(root + "/seen-revision", "w").write("1"); sys.exit(0)
     sys.exit(97)
 if args and args[0] == "inspect":
     if "--format" in args:
@@ -253,7 +253,7 @@ def test_stability_duration_polls_without_diagnostics(tmp_path: Path) -> None:
     assert_no_lifecycle_commands(calls)
 
 
-@pytest.mark.parametrize("mode, message", [("oom-first", "OOMKilled"), ("restart-second", "restart count changed"), ("replacement-second", "container identity changed"), ("connections", "connection count"), ("revision-second", "0070"), ("legacy-revision", "0062"), ("legacy-replacement", "identity")])
+@pytest.mark.parametrize("mode, message", [("oom-first", "OOMKilled"), ("restart-second", "restart count changed"), ("replacement-second", "container identity changed"), ("connections", "connection count"), ("revision-second", "0071"), ("legacy-revision", "0062"), ("legacy-replacement", "identity")])
 def test_failures_are_safe_and_collect_bounded_diagnostics(tmp_path: Path, mode: str, message: str) -> None:
     result = run_verifier(tmp_path, "--stability-seconds", "1", mode=mode)
     calls = (tmp_path / "calls").read_text()

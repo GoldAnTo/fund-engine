@@ -7,26 +7,29 @@ from decimal import Decimal, localcontext
 
 from app.models.ledger import ValidationError
 from app.underwriting.domain.company_research import (
-    CompanyResearchAssessment,
     COMPANY_RESEARCH_DECIMAL_PRECISION,
+    SCENARIO_FINANCIAL_DRIVER_EQUATIONS,
+    SCENARIO_FINANCIAL_DRIVER_KEYS,
+    CompanyResearchAssessment,
     CompanyResearchModelInput,
     FinancialBridgeArtifact,
     FinancialBridgeRow,
-    ReverseDcfRequest,
-    ReverseDcfArtifact,
     RequiredReturnComparisonArtifact,
+    ReverseDcfArtifact,
+    ReverseDcfRequest,
+    ScenarioDcfValue,
     SecurityValuationReference,
     SecurityValueRangeArtifact,
+    SensitivitySecurityValueArtifact,
     SourceLineageReference,
-    ScenarioDcfValue,
-    SCENARIO_FINANCIAL_DRIVER_EQUATIONS,
-    SCENARIO_FINANCIAL_DRIVER_KEYS,
     ValuationSetArtifact,
+    ValuationSensitivityArtifact,
     ValueRange,
 )
 
-
 _REVERSE_TOLERANCE = Decimal("0.000001")
+
+
 @dataclass(frozen=True, slots=True)
 class ReverseDcfResult:
     driver_key: str
@@ -39,7 +42,12 @@ class ReverseDcfResult:
 class SecurityValueResult:
     security_external_key: str
     value_range: ValueRange
-    cny_return_range: ValueRange
+    base_currency_return_range: ValueRange
+
+    @property
+    def cny_return_range(self) -> ValueRange:
+        """Read-only compatibility alias for legacy Alphabet callers."""
+        return self.base_currency_return_range
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +73,9 @@ class CompanyResearchEngine:
             context.prec = COMPANY_RESEARCH_DECIMAL_PRECISION
             compiled_bridges = self._validate_model_links(model)
 
-            critical_gaps = any(gap.severity.value == "critical" for gap in model.research_gaps)
+            critical_gaps = any(
+                gap.severity.value == "critical" for gap in model.research_gaps
+            )
             judgment = model.judgment_context
             if (
                 not model.scenario_bridges
@@ -85,7 +95,9 @@ class CompanyResearchEngine:
                 )
 
             values = {
-                scenario_id: self._dcf(bridge, model.required_return, model.terminal_growth)
+                scenario_id: self._dcf(
+                    bridge, model.required_return, model.terminal_growth
+                )
                 for scenario_id, bridge in compiled_bridges.items()
             }
             reverse = (
@@ -105,6 +117,14 @@ class CompanyResearchEngine:
                     key=lambda value: value.security_external_key,
                 )
             )
+            sensitivities = tuple(
+                self._sensitivity(
+                    request=request,
+                    bridge=compiled_bridges["base"],
+                    model=model,
+                )
+                for request in model.sensitivity_requests
+            )
             valuation_set = ValuationSetArtifact(
                 scenario_dcf_values=tuple(
                     ScenarioDcfValue(scenario_id, value)
@@ -122,9 +142,10 @@ class CompanyResearchEngine:
                 ),
                 security_value_ranges=tuple(
                     SecurityValueRangeArtifact(
-                        item.security_external_key,
-                        item.value_range,
-                        item.cny_return_range,
+                        security_external_key=item.security_external_key,
+                        value_per_share=item.value_range,
+                        value_currency=model.market_bridge.financial_currency,
+                        base_currency_return=item.base_currency_return_range,
                     )
                     for item in securities
                 ),
@@ -133,18 +154,20 @@ class CompanyResearchEngine:
                     RequiredReturnComparisonArtifact(
                         security_external_key=item.security_external_key,
                         required_return=model.required_return,
-                        achieved_return_range=item.cny_return_range,
+                        achieved_return_range=item.base_currency_return_range,
                         meets_required_return=(
-                            item.cny_return_range.minimum >= model.required_return
+                            item.base_currency_return_range.minimum
+                            >= model.required_return
                         ),
                     )
                     for item in securities
                 ),
+                sensitivity_analyses=sensitivities,
             )
         return CompanyResearchModelResult(
             assessment=(
                 CompanyResearchAssessment.partially_answerable()
-                if model.research_gaps
+                if any(gap.severity.value != "low" for gap in model.research_gaps)
                 else CompanyResearchAssessment.answerable()
             ),
             financial_bridges=compiled_bridges,
@@ -155,7 +178,9 @@ class CompanyResearchEngine:
         )
 
     @staticmethod
-    def _all_references(model: CompanyResearchModelInput) -> tuple[SourceLineageReference, ...]:
+    def _all_references(
+        model: CompanyResearchModelInput,
+    ) -> tuple[SourceLineageReference, ...]:
         refs: list[SourceLineageReference] = []
         for module in model.business_map.modules:
             refs.extend(module.fact_refs)
@@ -171,7 +196,8 @@ class CompanyResearchEngine:
         if model.market_bridge is not None:
             refs.append(model.market_bridge.capital_structure.source_ref)
             refs.append(model.market_bridge.capital_structure.policy_ref)
-            refs.append(model.market_bridge.fx_ref)
+            if model.market_bridge.fx_ref is not None:
+                refs.append(model.market_bridge.fx_ref)
             for security in model.market_bridge.securities:
                 refs.extend((security.rights_ref, security.price_ref))
             for component in model.equity_components:
@@ -188,13 +214,17 @@ class CompanyResearchEngine:
             raise ValidationError("source lineage fact keys must be unique")
         for reference in self._all_references(model):
             if available.get(reference.fact_key) != reference:
-                raise ValidationError("artifact source lineage must match authenticated evidence exactly")
+                raise ValidationError(
+                    "artifact source lineage must match authenticated evidence exactly"
+                )
 
     @classmethod
     def _validate_model_links(
         cls, model: CompanyResearchModelInput
     ) -> dict[str, FinancialBridgeArtifact]:
-        mechanisms = {scenario.mechanism_id for scenario in model.scenario_set.scenarios}
+        mechanisms = {
+            scenario.mechanism_id for scenario in model.scenario_set.scenarios
+        }
         if len(mechanisms) != 3:
             raise ValidationError("scenarios must use three distinct mechanisms")
         modules = {item.module_key for item in model.business_map.modules}
@@ -204,7 +234,11 @@ class CompanyResearchEngine:
             raise ValidationError("driver references an unknown business module")
         for driver_key, equation in SCENARIO_FINANCIAL_DRIVER_EQUATIONS.items():
             driver = drivers_by_key.get(driver_key)
-            if driver is None or driver.equation != equation or driver.output_metric != driver_key:
+            if (
+                driver is None
+                or driver.equation != equation
+                or driver.output_metric != driver_key
+            ):
                 raise ValidationError(
                     "scenario financial forecast drivers must have closed named equations"
                 )
@@ -219,58 +253,82 @@ class CompanyResearchEngine:
         bridge_ids = {item.scenario_id for item in model.scenario_bridges}
         scenario_ids = {item.scenario_id for item in model.scenario_set.scenarios}
         if bridge_ids and bridge_ids != scenario_ids:
-            raise ValidationError("scenario financial bridges must exactly cover scenarios")
+            raise ValidationError(
+                "scenario financial bridges must exactly cover scenarios"
+            )
         if model.market_bridge is not None:
-            expected = {"NASDAQ:GOOG", "NASDAQ:GOOGL"}
-            actual = {item.security_external_key for item in model.market_bridge.securities}
-            if actual != expected:
-                raise ValidationError("valuation requires exact GOOGL and GOOG security references")
+            actual = {
+                item.security_external_key for item in model.market_bridge.securities
+            }
             if any(
-                item.usd_cny_rate != model.market_bridge.usd_cny_rate
+                item.quote_to_base_rate != model.market_bridge.financial_to_base_rate
                 for item in model.market_bridge.securities
             ):
-                raise ValidationError("security FX references must use the exact market FX rate")
+                raise ValidationError(
+                    "security FX references must use the exact market FX rate"
+                )
             securities = {
-                item.security_external_key: item for item in model.market_bridge.securities
+                item.security_external_key: item
+                for item in model.market_bridge.securities
             }
-            class_a, class_b, class_c = model.equity_components
             capital = model.market_bridge.capital_structure
-            if (
-                class_a.price_proxy_security_external_key != "NASDAQ:GOOGL"
-                or class_b.price_proxy_security_external_key != "NASDAQ:GOOGL"
-                or class_c.price_proxy_security_external_key != "NASDAQ:GOOG"
-                or class_a.economic_units
-                != securities["NASDAQ:GOOGL"].listed_class_economic_units
-                or class_c.economic_units
-                != securities["NASDAQ:GOOG"].listed_class_economic_units
-                or class_a.unit_source_ref != securities["NASDAQ:GOOGL"].rights_ref
-                or class_c.unit_source_ref != securities["NASDAQ:GOOG"].rights_ref
-                or class_a.price_ref != securities["NASDAQ:GOOGL"].price_ref
-                or class_b.price_ref != securities["NASDAQ:GOOGL"].price_ref
-                or class_c.price_ref != securities["NASDAQ:GOOG"].price_ref
-                or class_b.economic_units
-                != capital.basic_shares
-                - class_a.economic_units
-                - class_c.economic_units
-                or class_b.unit_source_ref.fact_key != "economic_units_class_b"
-                or class_b.votes_per_unit != Decimal("10")
-                or class_b.conversion_to_security_external_key != "NASDAQ:GOOGL"
-                or class_b.conversion_ratio != Decimal("1")
-                or class_b.dividend_rights_per_unit != Decimal("1")
-                or class_b.economic_rights_per_unit != Decimal("1")
-                or class_b.legal_rights_ref is None
-                or class_b.legal_rights_ref.fact_key != "security_rights_class_b"
-                or class_b.price_proxy_ref is None
-                or class_b.price_proxy_ref.fact_key != "market_price_proxy_class_b"
-                or class_b.price_proxy_policy_version
-                != "alphabet_class_b_googl_proxy.v1"
-            ):
-                raise ValidationError("valuation requires exact Class A-B-C components")
+            if actual == {"NASDAQ:GOOG", "NASDAQ:GOOGL"}:
+                class_a, class_b, class_c = model.equity_components
+                if (
+                    class_a.price_proxy_security_external_key != "NASDAQ:GOOGL"
+                    or class_b.price_proxy_security_external_key != "NASDAQ:GOOGL"
+                    or class_c.price_proxy_security_external_key != "NASDAQ:GOOG"
+                    or class_a.economic_units
+                    != securities["NASDAQ:GOOGL"].listed_class_economic_units
+                    or class_c.economic_units
+                    != securities["NASDAQ:GOOG"].listed_class_economic_units
+                    or class_a.unit_source_ref != securities["NASDAQ:GOOGL"].rights_ref
+                    or class_c.unit_source_ref != securities["NASDAQ:GOOG"].rights_ref
+                    or class_a.price_ref != securities["NASDAQ:GOOGL"].price_ref
+                    or class_b.price_ref != securities["NASDAQ:GOOGL"].price_ref
+                    or class_c.price_ref != securities["NASDAQ:GOOG"].price_ref
+                    or class_b.economic_units
+                    != capital.basic_shares
+                    - class_a.economic_units
+                    - class_c.economic_units
+                    or class_b.unit_source_ref.fact_key != "economic_units_class_b"
+                    or class_b.votes_per_unit != Decimal("10")
+                    or class_b.conversion_to_security_external_key != "NASDAQ:GOOGL"
+                    or class_b.conversion_ratio != Decimal("1")
+                    or class_b.dividend_rights_per_unit != Decimal("1")
+                    or class_b.economic_rights_per_unit != Decimal("1")
+                    or class_b.legal_rights_ref is None
+                    or class_b.legal_rights_ref.fact_key != "security_rights_class_b"
+                    or class_b.price_proxy_ref is None
+                    or class_b.price_proxy_ref.fact_key != "market_price_proxy_class_b"
+                    or class_b.price_proxy_policy_version
+                    != "alphabet_class_b_googl_proxy.v1"
+                ):
+                    raise ValidationError(
+                        "valuation requires exact Class A-B-C components"
+                    )
+            elif actual == {"SZSE:300750"}:
+                if (
+                    len(model.equity_components) != 1
+                    or model.equity_components[0].component_key != "listed_common"
+                    or model.equity_components[0].economic_units != capital.basic_shares
+                    or model.equity_components[0].price_ref
+                    != securities["SZSE:300750"].price_ref
+                    or model.equity_components[0].unit_source_ref
+                    != securities["SZSE:300750"].rights_ref
+                ):
+                    raise ValidationError(
+                        "valuation requires exact CATL listed-common component"
+                    )
+            else:
+                raise ValidationError("valuation company is unsupported")
             if model.reverse_dcf is not None:
                 market_equity = sum(
                     (
                         item.economic_units
-                        * securities[item.price_proxy_security_external_key].market_price_usd
+                        * securities[
+                            item.price_proxy_security_external_key
+                        ].market_price
                         for item in model.equity_components
                     ),
                     start=Decimal("0"),
@@ -313,7 +371,9 @@ class CompanyResearchEngine:
                         "scenario forecast provenance must match its driver state"
                     )
         for scenario_id, scenario in scenarios_by_id.items():
-            override_keys = {override.driver_key for override in scenario.driver_overrides}
+            override_keys = {
+                override.driver_key for override in scenario.driver_overrides
+            }
             if override_keys != set(SCENARIO_FINANCIAL_DRIVER_KEYS):
                 raise ValidationError(
                     "scenario overrides must target every named financial forecast driver"
@@ -321,13 +381,14 @@ class CompanyResearchEngine:
             if scenario_id == "base" and any(
                 override.value != Decimal("1") for override in scenario.driver_overrides
             ):
-                raise ValidationError("base scenario overrides must preserve named financial drivers")
+                raise ValidationError(
+                    "base scenario overrides must preserve named financial drivers"
+                )
 
         with localcontext() as context:
             context.prec = COMPANY_RESEARCH_DECIMAL_PRECISION
             baseline_signatures = {
-                cls._forecast_signature(bridge)
-                for bridge in bridges_by_id.values()
+                cls._forecast_signature(bridge) for bridge in bridges_by_id.values()
             }
             if len(baseline_signatures) != 1:
                 raise ValidationError(
@@ -340,7 +401,9 @@ class CompanyResearchEngine:
                 )
                 for scenario_id in ("base", "bull", "bear")
             }
-        if len({cls._bridge_signature(bridge) for bridge in compiled.values()}) != len(compiled):
+        if len({cls._bridge_signature(bridge) for bridge in compiled.values()}) != len(
+            compiled
+        ):
             raise ValidationError(
                 "scenario overrides must produce distinct mechanism-specific financial forecasts"
             )
@@ -360,7 +423,8 @@ class CompanyResearchEngine:
                 str,
                 str | None,
                 str | None,
-            ], ...
+            ],
+            ...,
         ],
     ]:
         return (
@@ -382,7 +446,9 @@ class CompanyResearchEngine:
         )
 
     @staticmethod
-    def _bridge_signature(bridge: FinancialBridgeArtifact) -> tuple[tuple[Decimal, ...], ...]:
+    def _bridge_signature(
+        bridge: FinancialBridgeArtifact,
+    ) -> tuple[tuple[Decimal, ...], ...]:
         return tuple(
             (
                 row.revenue,
@@ -439,8 +505,7 @@ class CompanyResearchEngine:
                     * overrides["cash_tax_rate"]
                 )
                 depreciation = (
-                    forecasts["depreciation"].values[offset]
-                    * overrides["depreciation"]
+                    forecasts["depreciation"].values[offset] * overrides["depreciation"]
                 )
                 capex = forecasts["capex"].values[offset] * overrides["capex"]
                 working_capital_change = (
@@ -499,12 +564,18 @@ class CompanyResearchEngine:
             present_value = Decimal("0")
             for year, row in enumerate(bridge.rows, start=1):
                 self._validate_financial_closure(row)
-                present_value += row.fcff * multiplier / ((Decimal("1") + required_return) ** year)
+                present_value += (
+                    row.fcff * multiplier / ((Decimal("1") + required_return) ** year)
+                )
             final_fcff = bridge.rows[-1].fcff * multiplier
-            terminal_value = final_fcff * (Decimal("1") + terminal_growth) / (
-                required_return - terminal_growth
+            terminal_value = (
+                final_fcff
+                * (Decimal("1") + terminal_growth)
+                / (required_return - terminal_growth)
             )
-            return +(present_value + terminal_value / ((Decimal("1") + required_return) ** 5))
+            return +(
+                present_value + terminal_value / ((Decimal("1") + required_return) ** 5)
+            )
 
     def _reverse_dcf(
         self,
@@ -523,8 +594,14 @@ class CompanyResearchEngine:
                 bridge, required_return, terminal_growth, multiplier=request.upper_bound
             )
             target = request.target_enterprise_value
-            if not min(lower_value, upper_value) <= target <= max(lower_value, upper_value):
-                raise ValidationError("reverse DCF target is outside the bounded driver range")
+            if (
+                not min(lower_value, upper_value)
+                <= target
+                <= max(lower_value, upper_value)
+            ):
+                raise ValidationError(
+                    "reverse DCF target is outside the bounded driver range"
+                )
             lower, upper = request.lower_bound, request.upper_bound
             midpoint = lower
             residual = lower_value - target
@@ -562,7 +639,9 @@ class CompanyResearchEngine:
         with localcontext() as context:
             context.prec = COMPANY_RESEARCH_DECIMAL_PRECISION
             market = model.market_bridge
-            assert market is not None  # narrowed by compile before this method is called
+            assert (
+                market is not None
+            )  # narrowed by compile before this method is called
             capital = market.capital_structure
             equity_values = tuple(
                 value
@@ -583,11 +662,63 @@ class CompanyResearchEngine:
                 value / capital.diluted_shares * rights_factor
                 for value in equity_values
             )
-            cny_values = tuple(value * market.usd_cny_rate for value in per_share)
-            market_cny = security.market_price_usd * market.usd_cny_rate
+            cny_values = tuple(
+                value * market.financial_to_base_rate for value in per_share
+            )
+            market_cny = security.market_price * market.financial_to_base_rate
             returns = tuple(value / market_cny - Decimal("1") for value in cny_values)
             return SecurityValueResult(
                 security_external_key=security.security_external_key,
                 value_range=ValueRange(min(per_share), max(per_share)),
-                cny_return_range=ValueRange(min(returns), max(returns)),
+                base_currency_return_range=ValueRange(min(returns), max(returns)),
             )
+
+    def _sensitivity(
+        self,
+        *,
+        request,
+        bridge: FinancialBridgeArtifact,
+        model: CompanyResearchModelInput,
+    ) -> ValuationSensitivityArtifact:
+        market = model.market_bridge
+        assert market is not None
+
+        def enterprise_value(value: Decimal) -> Decimal:
+            required_return = (
+                value if request.variable_key == "required_return" else model.required_return
+            )
+            terminal_growth = (
+                value if request.variable_key == "terminal_growth" else model.terminal_growth
+            )
+            return self._dcf(bridge, required_return, terminal_growth)
+
+        low_enterprise_value = enterprise_value(request.low_value)
+        high_enterprise_value = enterprise_value(request.high_value)
+        security_values = tuple(
+            SensitivitySecurityValueArtifact(
+                security_external_key=security.security_external_key,
+                low_input_value_per_share=self._security_value(
+                    security,
+                    {"base": low_enterprise_value},
+                    model,
+                ).value_range.minimum,
+                high_input_value_per_share=self._security_value(
+                    security,
+                    {"base": high_enterprise_value},
+                    model,
+                ).value_range.minimum,
+            )
+            for security in sorted(
+                market.securities,
+                key=lambda item: item.security_external_key,
+            )
+        )
+        return ValuationSensitivityArtifact(
+            variable_key=request.variable_key,
+            low_input=request.low_value,
+            high_input=request.high_value,
+            low_assumption_key=request.low_assumption_key,
+            high_assumption_key=request.high_assumption_key,
+            security_values=security_values,
+            value_currency=market.financial_currency,
+        )

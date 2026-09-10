@@ -8,7 +8,6 @@ from collections.abc import Mapping, Sequence
 from app.models.ledger import ValidationError
 from app.underwriting.domain.company_research import SourceLineageReference
 
-
 SOURCE_REF_FIELDS = (
     "source_role",
     "source_url",
@@ -69,3 +68,34 @@ def evidence_payload_source_refs(
             raise ValidationError("evidence index source refs are invalid")
         refs.append({key: fact.get(key) for key in SOURCE_REF_FIELDS})
     return canonical_source_refs(refs, field_name="evidence index source refs")
+
+
+def critical_inputs_payload_source_refs(
+    payload: object,
+) -> tuple[dict[str, str], ...]:
+    """Derive artifact-level source identities from typed critical inputs."""
+
+    inputs = payload.get("inputs") if isinstance(payload, Mapping) else None
+    if not isinstance(inputs, list):
+        raise ValidationError("critical inputs source refs are invalid")
+    refs: list[dict[str, object]] = []
+    for value in inputs:
+        if not isinstance(value, Mapping):
+            raise ValidationError("critical inputs source refs are invalid")
+        reference = value.get("source_ref")
+        if reference is None:
+            continue
+        if not isinstance(reference, Mapping) or set(reference) != {
+            "fact_key",
+            *SOURCE_REF_FIELDS,
+        }:
+            raise ValidationError("critical inputs source refs are invalid")
+        fact_key = reference.get("fact_key")
+        if (
+            not isinstance(fact_key, str)
+            or not fact_key
+            or fact_key != fact_key.strip()
+        ):
+            raise ValidationError("critical inputs source refs are invalid")
+        refs.append({key: reference.get(key) for key in SOURCE_REF_FIELDS})
+    return canonical_source_refs(refs, field_name="critical inputs source refs")

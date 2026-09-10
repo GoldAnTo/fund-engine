@@ -9,13 +9,14 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
-
 from app.underwriting.adapters.company_research.alphabet import (
     ALPHABET_BUSINESS_MODULES,
     AlphabetCompanyResearchAdapter,
 )
 from app.underwriting.domain.company_research import (
     DEFAULT_MODULES,
+    DEFAULT_STRATEGY_VERSION,
+    LEGACY_STRATEGY_VERSION,
     CompanyResearchCompany,
     CompanyResearchDefaultPolicy,
     CompanyResearchIdentitySet,
@@ -76,7 +77,7 @@ def test_alphabet_default_policy_is_recomputable(alphabet_identity_set) -> None:
     )
 
     assert first == second
-    assert first.strategy_version == "company-research-default.v1"
+    assert first.strategy_version == "company-research-mainline.v1"
     assert first.horizon_years == 5
     assert first.base_currency == "CNY"
     assert first.required_return == Decimal("0.12")
@@ -86,6 +87,8 @@ def test_alphabet_default_policy_is_recomputable(alphabet_identity_set) -> None:
 
 
 def test_default_module_and_alphabet_business_module_orders_are_fixed() -> None:
+    assert DEFAULT_STRATEGY_VERSION == "company-research-mainline.v1"
+    assert LEGACY_STRATEGY_VERSION == "company-research-default.v1"
     assert DEFAULT_MODULES == (
         "overview",
         "business_map",
@@ -211,6 +214,14 @@ def test_preview_canonicalizes_security_input_order(alphabet_identity_set) -> No
 def test_default_policy_rejects_overrides(kwargs) -> None:
     with pytest.raises(CompanyResearchValidationError):
         CompanyResearchDefaultPolicy(**kwargs)
+
+
+def test_legacy_policy_version_remains_explicitly_constructible() -> None:
+    policy = CompanyResearchDefaultPolicy(
+        strategy_version="company-research-default.v1"
+    )
+
+    assert policy.strategy_version == "company-research-default.v1"
 
 
 @pytest.mark.parametrize("horizon_years", [5.0, Decimal("5"), True, "5"])

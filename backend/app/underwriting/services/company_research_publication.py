@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import re
 import json
+import re
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -12,22 +13,27 @@ from html import escape as html_escape
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
 from app.underwriting.domain.company_research import (
+    DEFAULT_STRATEGY_VERSION,
     CompanyResearchCompany,
     CompanyResearchMemoArtifact,
     CompanyResearchSecurity,
 )
-from app.underwriting.domain.product_contracts import RevisionBoundaryInput
-from app.underwriting.domain.company_research_market_contracts import (
-    FrozenMarketSnapshotRole,
-)
 from app.underwriting.domain.company_research_artifact_codec import (
     CompanyResearchArtifactCodec,
 )
+from app.underwriting.domain.company_research_critical_inputs import (
+    CriticalInputDecision,
+    CriticalInputSet,
+)
+from app.underwriting.domain.company_research_market_contracts import (
+    FrozenMarketSnapshotRole,
+)
+from app.underwriting.domain.product_contracts import RevisionBoundaryInput
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchEvent,
@@ -38,15 +44,15 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
     reconcile_company_research_evidence_audit,
 )
-from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.persistence.product_repository import ProductRepository
+from app.underwriting.persistence.repository import StaleParentError
 from app.underwriting.services.company_research_boundary import (
-    resolve_alphabet_company_research_boundary,
+    resolve_company_research_boundary,
 )
 from app.underwriting.services.company_research_foundation import (
-    alphabet_company_research_foundation_contract,
     authenticate_company_research_foundation,
-    build_alphabet_company_research_preview_at_cutoff,
+    build_company_research_preview_at_cutoff,
+    company_research_foundation_contract,
 )
 from app.underwriting.services.company_research_sources import (
     CompanyResearchEvidenceCompilation,
@@ -54,13 +60,13 @@ from app.underwriting.services.company_research_sources import (
     authenticate_governed_reviewed_evidence,
 )
 from app.underwriting.services.company_research_workbench import (
-    CompanyResearchWorkspace,
     CompanyResearchWorkbench,
+    CompanyResearchWorkspace,
 )
+from app.underwriting.services.kernel import canonical_hash
 from app.underwriting.services.product_project import (
     research_project_security_content_hash,
 )
-from app.underwriting.services.kernel import canonical_hash
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _REVIEWER = "human:local-user"
@@ -88,6 +94,7 @@ _FROZEN_ARTIFACT_KINDS = (
     "valuation_set",
     "judgment_context",
     "memo",
+    "critical_inputs",
 )
 _REQUIRED_MODEL_KINDS = frozenset(
     {
@@ -334,7 +341,7 @@ class CompanyResearchPublicationService:
         if (
             evidence_chain is None
             or gaps_chain is None
-            or len(gaps_chain) not in {1, 2}
+            or not gaps_chain
             or gaps_chain[0].version != 1
             or gaps_chain[0].supersedes_id is not None
             or state.artifact_heads.get("evidence_index") != evidence_chain[-1]
@@ -367,14 +374,18 @@ class CompanyResearchPublicationService:
                 "company research governed evidence closure is invalid"
             ) from exc
         facts = evidence_chain[-1].payload.get("facts")
-        if (
-            not isinstance(facts, list)
-            or not facts
-            or any(
-                not isinstance(fact, dict)
-                or fact.get("review_decision") not in {"confirmed", "rejected"}
-                for fact in facts
+        automated_draft = (
+            state.preparation.strategy_version == DEFAULT_STRATEGY_VERSION
+        )
+        if not isinstance(facts, list) or not facts or any(
+            not isinstance(fact, dict)
+            or fact.get("review_decision")
+            not in (
+                {None, "confirmed", "rejected"}
+                if automated_draft
+                else {"confirmed", "rejected"}
             )
+            for fact in facts
         ):
             raise CompanyResearchIntegrityError(
                 "company research reviewed evidence is incomplete"
@@ -442,10 +453,17 @@ class CompanyResearchPublicationService:
             state.mandate.effective_at,
             "company research mandate effective_at",
         )
-        preview = build_alphabet_company_research_preview_at_cutoff(
+        stored_focus_question = (
+            state.scope.payload.get("user_focus")
+            if isinstance(state.scope.payload, dict)
+            else None
+        )
+        preview = build_company_research_preview_at_cutoff(
             self._session,
             company_id=state.company.id,
             cutoff_at=cutoff,
+            strategy_version=state.preparation.strategy_version,
+            focus_question=stored_focus_question,
         )
         expected_security_ids = tuple(sorted(security_ids, key=str))
 
@@ -463,10 +481,12 @@ class CompanyResearchPublicationService:
 
         authenticated_legacy_request_cutoff = None
         if not preview_matches_request():
-            preview = build_alphabet_company_research_preview_at_cutoff(
+            preview = build_company_research_preview_at_cutoff(
                 self._session,
                 company_id=state.company.id,
                 cutoff_at=mandate_effective_at,
+                strategy_version=state.preparation.strategy_version,
+                focus_question=stored_focus_question,
             )
             authenticated_legacy_request_cutoff = mandate_effective_at
         if not preview_matches_request():
@@ -483,12 +503,13 @@ class CompanyResearchPublicationService:
             raise CompanyResearchIntegrityError(
                 "company research foundation boundary is incomplete"
             )
-        contract = alphabet_company_research_foundation_contract(
+        contract = company_research_foundation_contract(
             company_external_key=state.company.external_key,
             company_id=state.company.id,
             security_ids=security_ids,
             request_hash=state.preparation.request_hash,
             strategy_version=state.preparation.strategy_version,
+            focus_question=preview.focus_question,
         )
         try:
             authenticate_company_research_foundation(
@@ -502,7 +523,8 @@ class CompanyResearchPublicationService:
                     authenticated_legacy_request_cutoff
                 ),
             )
-            boundary = resolve_alphabet_company_research_boundary(
+            boundary = resolve_company_research_boundary(
+                state.company.external_key,
                 cutoff,
                 source_manifest_hash=source_contract.input_hash,
             )
@@ -636,6 +658,88 @@ class CompanyResearchPublicationService:
                         "company research artifact parent chronology is invalid"
                     )
 
+    def _authenticate_frozen_critical_model_boundary(
+        self,
+        *,
+        project_id: UUID,
+        artifact_rows: Mapping[str, CompanyResearchArtifactVersion],
+        frozen_critical: CompanyResearchArtifactVersion,
+    ) -> None:
+        """Bind a frozen model bundle to one ancestor critical-input decision set."""
+
+        model_rows = tuple(
+            artifact_rows[kind]
+            for kind in (*sorted(_REQUIRED_MODEL_KINDS), "valuation_set")
+            if kind in artifact_rows
+        )
+        boundary_refs: list[dict[str, object] | None] = []
+        for row in model_rows:
+            lineage = row.payload.get("_lineage")
+            refs = lineage.get("artifact_refs") if isinstance(lineage, dict) else None
+            critical_refs = (
+                [
+                    ref
+                    for ref in refs
+                    if isinstance(ref, dict)
+                    and ref.get("artifact_kind") == "critical_inputs"
+                ]
+                if isinstance(refs, list)
+                else []
+            )
+            if len(critical_refs) > 1:
+                raise CompanyResearchIntegrityError(
+                    "company research frozen critical model boundary is invalid"
+                )
+            boundary_refs.append(critical_refs[0] if critical_refs else None)
+        if not boundary_refs or all(ref is None for ref in boundary_refs):
+            return
+        if any(ref is None for ref in boundary_refs):
+            raise CompanyResearchIntegrityError(
+                "company research frozen critical model boundary is invalid"
+            )
+        first = boundary_refs[0]
+        assert first is not None
+        if any(ref != first for ref in boundary_refs[1:]):
+            raise CompanyResearchIntegrityError(
+                "company research frozen critical model boundary is invalid"
+            )
+        try:
+            boundary_id = UUID(str(first["artifact_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CompanyResearchIntegrityError(
+                "company research frozen critical model boundary is invalid"
+            ) from exc
+        boundary = self._repository.artifact(boundary_id, fresh=True)
+        if (
+            boundary is None
+            or boundary.project_id != project_id
+            or boundary.kind != "critical_inputs"
+            or first.get("content_hash") != boundary.content_hash
+        ):
+            raise CompanyResearchIntegrityError(
+                "company research frozen critical model boundary is invalid"
+            )
+        current = frozen_critical
+        seen: set[UUID] = set()
+        while current.id != boundary.id and current.id not in seen:
+            seen.add(current.id)
+            if current.supersedes_id is None:
+                break
+            parent = self._repository.artifact(current.supersedes_id, fresh=True)
+            if (
+                parent is None
+                or parent.project_id != project_id
+                or parent.kind != "critical_inputs"
+                or self._stored_utc(parent.created_at, "critical input created_at")
+                > self._stored_utc(current.created_at, "critical input created_at")
+            ):
+                break
+            current = parent
+        if current.id != boundary.id:
+            raise CompanyResearchIntegrityError(
+                "company research frozen critical model boundary is invalid"
+            )
+
     def _authenticate_lifecycle_chronology(
         self, state: CompanyResearchPublicationState
     ) -> None:
@@ -720,6 +824,52 @@ class CompanyResearchPublicationService:
             legacy_request_cutoff_at=legacy_request_cutoff_at,
         )
 
+    @staticmethod
+    def _terminal_critical_inputs(
+        authenticated: _AuthenticatedPublication,
+    ) -> tuple[CompanyResearchArtifactVersion, CriticalInputSet] | None:
+        state = authenticated.state
+        if state.preparation.strategy_version != DEFAULT_STRATEGY_VERSION:
+            return None
+        artifact = state.artifact_heads.get("critical_inputs")
+        if artifact is None:
+            raise CompanyResearchIntegrityError(
+                "mainline publication requires critical inputs"
+            )
+        decoded = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", artifact.payload
+        )
+        if type(decoded) is not CriticalInputSet:
+            raise CompanyResearchIntegrityError(
+                "mainline publication critical inputs are invalid"
+            )
+        if any(
+            item.decision is CriticalInputDecision.PENDING
+            for item in decoded.inputs
+        ):
+            raise ConflictError("mainline publication critical inputs are pending")
+        non_confirmed = tuple(
+            item
+            for item in decoded.inputs
+            if item.decision is not CriticalInputDecision.CONFIRMED
+        )
+        accepted_gap_keys = {
+            item.gap_key
+            for item in non_confirmed
+            if item.decision is CriticalInputDecision.ACCEPTED_GAP
+            and item.gap_key is not None
+        }
+        memo = authenticated.decoded_memo
+        if non_confirmed and (
+            memo.assessment_status != "not_answerable"
+            or not memo.gap_keys
+            or not accepted_gap_keys.issubset(set(memo.gap_keys))
+        ):
+            raise ConflictError(
+                "mainline publication critical inputs conflict with memo answerability"
+            )
+        return artifact, decoded
+
     def _validate_model_claim_audit(
         self,
         *,
@@ -735,9 +885,40 @@ class CompanyResearchPublicationService:
             machine_memo.created_at,
             "company research machine memo created_at",
         )
+        expected_claim_payload: dict[str, object] = {
+            "stage": "model_bundle",
+            "attempt": state.job.attempt,
+        }
+        lineage = machine_memo.payload.get("_lineage")
+        refs = lineage.get("artifact_refs") if isinstance(lineage, dict) else None
+        critical_refs = (
+            [
+                ref
+                for ref in refs
+                if isinstance(ref, dict)
+                and ref.get("artifact_kind") == "critical_inputs"
+            ]
+            if isinstance(refs, list)
+            else []
+        )
+        if len(critical_refs) > 1:
+            raise CompanyResearchIntegrityError(
+                "company research model audit boundary is incomplete"
+            )
+        if critical_refs:
+            expected_claim_payload.update(
+                {
+                    "critical_inputs_artifact_id": critical_refs[0].get(
+                        "artifact_id"
+                    ),
+                    "critical_inputs_content_hash": critical_refs[0].get(
+                        "content_hash"
+                    ),
+                }
+            )
         if (
             claim.event_type != "model_stage_claimed"
-            or claim.payload != {"stage": "model_bundle", "attempt": state.job.attempt}
+            or claim.payload != expected_claim_payload
             or claim_time
             != self._stored_utc(
                 state.job.started_at, "company research model job started_at"
@@ -771,7 +952,7 @@ class CompanyResearchPublicationService:
         if "valuation_set" in state.artifact_heads:
             bundle_kinds.append("valuation_set")
         gaps_chain = state.artifact_chains.get("research_gaps", ())
-        if len(gaps_chain) == 2:
+        if len(gaps_chain) >= 2:
             bundle_kinds.append("research_gaps")
         if any(
             self._stored_utc(
@@ -804,10 +985,31 @@ class CompanyResearchPublicationService:
             raise CompanyResearchIntegrityError(
                 "company research judgment confirmation audit is inconsistent"
             )
+        model_claim = next(
+            (
+                event
+                for event in reversed(state.events)
+                if event.event_type == "model_stage_claimed"
+            ),
+            None,
+        )
+        if model_claim is None:
+            raise CompanyResearchIntegrityError(
+                "company research model audit boundary is incomplete"
+            )
+        allowed_after_model = {
+            "process_warning",
+            "critical_input_decided",
+        }
+        following = state.events[model_claim.sequence :]
+        if any(event.event_type not in allowed_after_model for event in following):
+            raise CompanyResearchIntegrityError(
+                "company research critical input audit is inconsistent"
+            )
         self._validate_model_claim_audit(
             state=state,
             machine_memo=authenticated.machine_or_confirmed_memo,
-            claim=state.events[-1],
+            claim=model_claim,
             allow_legacy_completion_delay=(
                 authenticated.legacy_request_cutoff_at is not None
             ),
@@ -815,7 +1017,10 @@ class CompanyResearchPublicationService:
         self._validate_model_bundle_chronology(
             state=state,
             machine_memo=authenticated.machine_or_confirmed_memo,
-            require_preparation_time=True,
+            require_preparation_time=not any(
+                event.event_type == "critical_input_decided"
+                for event in following
+            ),
         )
 
     def _confirmation_result(
@@ -916,10 +1121,31 @@ class CompanyResearchPublicationService:
             raise CompanyResearchIntegrityError(
                 "company research judgment confirmation audit is inconsistent"
             )
+        preceding = state.events[: event.sequence - 1]
+        model_claim = next(
+            (
+                candidate
+                for candidate in reversed(preceding)
+                if candidate.event_type == "model_stage_claimed"
+            ),
+            None,
+        )
+        if model_claim is None or any(
+            candidate.event_type not in {
+                "process_warning",
+                "critical_input_decided",
+            }
+            for candidate in state.events[
+                model_claim.sequence : event.sequence - 1
+            ]
+        ):
+            raise CompanyResearchIntegrityError(
+                "company research judgment confirmation audit is inconsistent"
+            )
         self._validate_model_claim_audit(
             state=state,
             machine_memo=machine_memo,
-            claim=state.events[event.sequence - 2],
+            claim=model_claim,
             allow_legacy_completion_delay=(
                 authenticated.legacy_request_cutoff_at is not None
             ),
@@ -1043,6 +1269,11 @@ class CompanyResearchPublicationService:
     ) -> CompanyResearchPublicationPreview:
         state = authenticated.state
         memo = authenticated.decoded_memo
+        mainline = state.preparation.strategy_version == DEFAULT_STRATEGY_VERSION
+        critical_inputs_payload: dict[str, object] | None = None
+        critical_inputs = self._terminal_critical_inputs(authenticated)
+        if critical_inputs is not None:
+            critical_inputs_payload = deepcopy(critical_inputs[0].payload)
         if (
             state.draft.lock_version != expected_lock_version
             or memo.candidate_status != "human_confirmed"
@@ -1147,6 +1378,8 @@ class CompanyResearchPublicationService:
             if kind in state.artifact_heads
         )
         required_kinds = set(_FROZEN_ARTIFACT_KINDS) - {"valuation_set"}
+        if not mainline:
+            required_kinds.discard("critical_inputs")
         if {item.kind for item in artifacts} != required_kinds | (
             {"valuation_set"} if "valuation_set" in state.artifact_heads else set()
         ):
@@ -1202,6 +1435,8 @@ class CompanyResearchPublicationService:
             "memo_markdown": memo.markdown,
             "artifacts": [self._artifact_payload(item) for item in artifacts],
         }
+        if critical_inputs_payload is not None:
+            manifest["critical_inputs"] = critical_inputs_payload
         return CompanyResearchPublicationPreview(
             project_id=state.project.id,
             expected_lock_version=expected_lock_version,
@@ -1396,6 +1631,11 @@ class CompanyResearchPublicationService:
                 "idempotency_key",
                 "published_at",
             }
+            mainline = (
+                manifest.get("strategy_version") == DEFAULT_STRATEGY_VERSION
+            )
+            if mainline:
+                expected_manifest_keys.add("critical_inputs")
             if (
                 set(manifest) != expected_manifest_keys
                 or manifest.get("schema_version") != _MANIFEST_SCHEMA
@@ -1694,6 +1934,7 @@ class CompanyResearchPublicationService:
             expected_kinds = tuple(
                 kind
                 for kind in _FROZEN_ARTIFACT_KINDS
+                if (kind != "critical_inputs" or mainline)
                 if kind != "valuation_set"
                 or any(item.kind == "valuation_set" for item in artifact_tuple)
             )
@@ -1707,6 +1948,32 @@ class CompanyResearchPublicationService:
             ):
                 raise CompanyResearchIntegrityError(
                     "company research frozen artifact closure is invalid"
+                )
+            if mainline:
+                critical_row = artifact_rows.get("critical_inputs")
+                frozen_critical_payload = manifest.get("critical_inputs")
+                if (
+                    critical_row is None
+                    or not isinstance(frozen_critical_payload, dict)
+                    or frozen_critical_payload != critical_row.payload
+                ):
+                    raise CompanyResearchIntegrityError(
+                        "company research frozen critical inputs are invalid"
+                    )
+                decoded_critical = CompanyResearchArtifactCodec.decode(
+                    "critical_inputs", frozen_critical_payload
+                )
+                if type(decoded_critical) is not CriticalInputSet or any(
+                    item.decision is CriticalInputDecision.PENDING
+                    for item in decoded_critical.inputs
+                ):
+                    raise CompanyResearchIntegrityError(
+                        "company research frozen critical inputs are invalid"
+                    )
+                self._authenticate_frozen_critical_model_boundary(
+                    project_id=project_id,
+                    artifact_rows=artifact_rows,
+                    frozen_critical=critical_row,
                 )
             judgment = artifact_rows["judgment_context"]
             judgment_lineage = judgment.payload.get("_lineage")
@@ -2010,6 +2277,12 @@ class CompanyResearchPublicationService:
             {key: value for key, value in scenario_payload.items() if key != "_lineage"}
         )
         json_fence = self._markdown_json_fence(scenario_json)
+        critical_row = artifacts.get("critical_inputs")
+        critical_json = (
+            self._markdown_json(critical_row.payload)
+            if critical_row is not None
+            else None
+        )
         lines = [
             f"# {text_value(frozen.company.canonical_name)} Company Research",
             "",
@@ -2125,11 +2398,21 @@ class CompanyResearchPublicationService:
                 f"{json_fence}json",
                 scenario_json,
                 json_fence,
-                "",
-                "## Strongest Counterevidence",
-                "",
             ]
         )
+        if critical_json is not None:
+            critical_fence = self._markdown_json_fence(critical_json)
+            lines.extend(
+                [
+                    "",
+                    "## Critical Inputs",
+                    "",
+                    f"{critical_fence}json",
+                    critical_json,
+                    critical_fence,
+                ]
+            )
+        lines.extend(["", "## Strongest Counterevidence", ""])
         lines.extend(
             f"- {text_value(value['fact_key'])} — "
             f"{text_value(value['source_locator'])} "
@@ -2378,6 +2661,7 @@ class CompanyResearchPublicationService:
                         expected_memo_content_hash=expected_memo_content_hash,
                         markdown=normalized_markdown,
                     )
+                self._terminal_critical_inputs(authenticated)
                 if (
                     state.preparation.status != "awaiting_judgment_review"
                     or state.preparation.current_step != "judgment_context"

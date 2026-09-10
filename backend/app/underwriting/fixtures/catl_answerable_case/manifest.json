@@ -1,0 +1,14 @@
+{
+  "schema_version": "catl.answerable-case.manifest.v1",
+  "content_hash": "eb0db3d454580ce27b91b309080a4bff854fe1446b2f80c67df4f3dcbff009f2",
+  "cutoff": "2025-11-06T15:59:59+00:00",
+  "company_external_key": "CN:300750:COMPANY",
+  "security_external_keys": ["SZSE:300750"],
+  "base_currency": "CNY",
+  "files": [
+    {"name":"business_map.json","content_hash":"63bdd8a7cba54e423df29829b6b6ed5b761df51ec313e36238851083e3a74f30"},
+    {"name":"source_facts.json","content_hash":"e6767850a727c82afb204dbe3818f88398c65761d9be9918dcc068b0014f5aab"},
+    {"name":"strategy_assumptions.json","content_hash":"c861d589dcb57b6ece2cb699b853602f0708d197b9844e2895b5422350b3b0ad"},
+    {"name":"market_inputs.json","content_hash":"fe78c8ef17fb6c3500258f98208047c104a2c836c4f505190c62d89c41030178"}
+  ]
+}

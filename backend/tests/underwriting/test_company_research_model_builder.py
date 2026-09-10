@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
-import hashlib
 from uuid import UUID
 
 import pytest
@@ -19,37 +19,45 @@ from app.underwriting.domain.company_research import (
     DriverInput,
     MarketBridgeArtifact,
     ModelInputState,
+    ResearchGapSeverity,
     ReverseDcfRequest,
     ScenarioDriverOverride,
     SecurityValuationReference,
     SourceLineageReference,
 )
+from app.underwriting.domain.company_research_contracts import StrategyAssumptionValue
+from app.underwriting.domain.company_research_critical_inputs import (
+    CRITICAL_DEPENDENCY_SURFACE_ORDER,
+    CriticalDependencyGraph,
+    CriticalInputKind,
+    select_critical_inputs,
+)
 from app.underwriting.fixtures.alphabet_golden_case import (
     load_alphabet_golden_case_fixture,
 )
 from app.underwriting.hashing import canonical_hash
-from app.underwriting.domain.company_research_contracts import StrategyAssumptionValue
 from app.underwriting.services.company_research_model_builder import (
-    CompanyResearchDriverBinding,
     CompanyResearchBuildInput,
+    CompanyResearchDriverBinding,
     CompanyResearchMetricClassification,
+    CompanyResearchModelBuilder,
     CompanyResearchModelModule,
     CompanyResearchModelTemplate,
-    CompanyResearchModelBuilder,
-    CompanyResearchOperatingDriverBinding,
     CompanyResearchOperatingBaselineRequirement,
+    CompanyResearchOperatingDriverBinding,
     CompanyResearchScenarioMechanism,
+    EvidenceBuildMode,
     FrozenMarketContext,
     FrozenMarketEquityComponent,
     FrozenMarketSnapshotBinding,
     FrozenMarketSnapshotRole,
     ScenarioAssumption,
     StrategyAssumptionSet,
+    validate_company_research_evidence_payload_for_read,
 )
 from app.underwriting.services.company_research_sources import (
     CompanyResearchSourceCompiler,
 )
-
 
 CUTOFF = datetime(2026, 8, 25, 23, 59, 59, tzinfo=UTC)
 
@@ -557,6 +565,50 @@ def test_builder_rejects_an_evidence_fact_without_review_decision() -> None:
         )
 
 
+def test_authenticated_ai_draft_builds_directly_from_undecided_source_facts() -> None:
+    value = _build_input()
+    payload = deepcopy(value.evidence_payload)
+    for fact in payload["facts"]:
+        fact.pop("review_decision")
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=payload,
+            evidence_content_hash=canonical_hash(payload),
+            evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+        )
+    )
+
+    assert result.business_map.modules
+    assert all("review_decision" not in fact for fact in payload["facts"])
+
+
+def test_authenticated_ai_draft_excludes_explicitly_rejected_facts() -> None:
+    value = _build_input()
+    payload = deepcopy(value.evidence_payload)
+    rejected_key = payload["facts"][0]["fact_key"]
+    for fact in payload["facts"]:
+        fact.pop("review_decision")
+    payload["facts"][0]["review_decision"] = "rejected"
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=payload,
+            evidence_content_hash=canonical_hash(payload),
+            evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+        )
+    )
+
+    used_fact_keys = {
+        ref.fact_key
+        for module in result.business_map.modules
+        for ref in module.fact_refs
+    }
+    assert rejected_key not in used_fact_keys
+
+
 def test_builder_keeps_missing_market_inputs_as_blocking_gaps() -> None:
     result = CompanyResearchModelBuilder().build(
         replace(_build_input(), market_context=None)
@@ -625,6 +677,505 @@ def test_builder_uses_exact_frozen_market_refs_for_both_alphabet_securities() ->
     assert result.market_snapshot_ids == tuple(
         sorted(value.market_context.snapshot_ids, key=str)  # type: ignore[union-attr]
     )
+
+
+def test_builder_emits_complete_explicit_critical_input_dependency_graph() -> None:
+    value = _build_input()
+
+    result = CompanyResearchModelBuilder().build(value)
+
+    graph = result.critical_input_dependency_graph
+    assert type(graph) is CriticalDependencyGraph
+    assert tuple(node.surface for node in graph.surface_nodes) == (
+        CRITICAL_DEPENDENCY_SURFACE_ORDER
+    )
+    consumers = {edge.consumer_key for edge in graph.edges}
+    assert {node.key for node in graph.surface_nodes} <= consumers
+    selected = select_critical_inputs(graph)
+    selected_source_keys = {
+        item.key
+        for item in selected.inputs
+        if item.key.startswith("fact:")
+        if item.kind
+        in {CriticalInputKind.SOURCE_FACT, CriticalInputKind.MANAGEMENT_GUIDANCE}
+    }
+    assert selected_source_keys == {
+        f"fact:{fact['fact_key']}"
+        for fact in value.evidence_payload["facts"]
+        if fact["review_decision"] == "confirmed"
+    }
+    assert all(
+        item.source_ref is not None
+        for item in selected.inputs
+        if item.kind
+        in {CriticalInputKind.SOURCE_FACT, CriticalInputKind.MANAGEMENT_GUIDANCE}
+    )
+
+
+def test_dependency_graph_excludes_a_redundant_authenticated_fact() -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    redundant = deepcopy(evidence["facts"][0])
+    redundant["fact_key"] = "aaa_redundant_operating_expense"
+    redundant["business_module"] = "corporate_capital_allocation"
+    redundant["metric_key"] = "operating_expense"
+    redundant["source_locator"] = "aaa_redundant_operating_expense"
+    redundant["raw_hash"] = hashlib.sha256(
+        b"aaa_redundant_operating_expense"
+    ).hexdigest()
+    evidence["facts"].append(redundant)
+    source_refs = tuple(
+        sorted(
+            (
+                *value.source_refs,
+                {
+                    key: redundant[key]
+                    for key in (
+                        "source_role",
+                        "source_url",
+                        "source_locator",
+                        "raw_hash",
+                    )
+                },
+            ),
+            key=lambda item: tuple(item[key] for key in sorted(item)),
+        )
+    )
+
+    selected = select_critical_inputs(
+        CompanyResearchModelBuilder()
+        .build(
+            replace(
+                value,
+                evidence_payload=evidence,
+                evidence_content_hash=canonical_hash(evidence),
+                source_refs=source_refs,
+            )
+        )
+        .critical_input_dependency_graph
+    )
+
+    assert "fact:aaa_redundant_operating_expense" not in {
+        item.key for item in selected.inputs
+    }
+
+
+def test_dependency_graph_rejects_ambiguous_required_fact_matches() -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    duplicate = deepcopy(evidence["facts"][0])
+    duplicate["fact_key"] = "aaa_duplicate_search_revenue"
+    duplicate["source_locator"] = "aaa_duplicate_search_revenue"
+    duplicate["raw_hash"] = hashlib.sha256(
+        b"aaa_duplicate_search_revenue"
+    ).hexdigest()
+    evidence["facts"].append(duplicate)
+    source_refs = tuple(
+        sorted(
+            (
+                *value.source_refs,
+                {
+                    key: duplicate[key]
+                    for key in (
+                        "source_role",
+                        "source_url",
+                        "source_locator",
+                        "raw_hash",
+                    )
+                },
+            ),
+            key=lambda item: tuple(item[key] for key in sorted(item)),
+        )
+    )
+
+    with pytest.raises(ValidationError, match="ambiguous critical fact dependency"):
+        CompanyResearchModelBuilder().build(
+            replace(
+                value,
+                evidence_payload=evidence,
+                evidence_content_hash=canonical_hash(evidence),
+                source_refs=source_refs,
+            )
+        )
+
+
+def test_dependency_graph_maps_management_guidance_as_guidance() -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    evidence["facts"][-1]["value_kind"] = "management_guidance"
+
+    selected = select_critical_inputs(
+        CompanyResearchModelBuilder()
+        .build(
+            replace(
+                value,
+                evidence_payload=evidence,
+                evidence_content_hash=canonical_hash(evidence),
+            )
+        )
+        .critical_input_dependency_graph
+    )
+
+    baseline = next(
+        item
+        for item in selected.inputs
+        if item.key == "fact:q4_2025_consolidated_revenue"
+    )
+    assert baseline.kind is CriticalInputKind.MANAGEMENT_GUIDANCE
+
+
+def test_dependency_graph_preserves_supported_derived_fact_equation_and_parents() -> (
+    None
+):
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    baseline = evidence["facts"][-1]
+    parent_fact_keys = tuple(
+        sorted(
+            fact["fact_key"]
+            for fact in evidence["facts"]
+            if fact["metric_key"] == "revenue"
+            and fact["business_module"] != "corporate_capital_allocation"
+        )
+    )
+    baseline["value_kind"] = "derived"
+    baseline["equation_id"] = "sum_segment_revenue.v1"
+    baseline["parent_fact_keys"] = list(parent_fact_keys)
+
+    graph = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+        )
+    ).critical_input_dependency_graph
+    derived = next(
+        node.candidate
+        for node in graph.calculation_nodes
+        if node.key == "fact:q4_2025_consolidated_revenue"
+    )
+
+    assert derived.kind is CriticalInputKind.DERIVED_CALCULATION
+    assert derived.equation_id == "sum_segment_revenue.v1"
+    assert derived.parent_input_keys == tuple(
+        f"fact:{fact_key}" for fact_key in parent_fact_keys
+    )
+
+
+def test_mainline_quarantines_incomplete_derived_fact_and_continues_draft() -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    unsupported = evidence["facts"][-1]
+    unsupported["fact_key"] = "unsupported_derived_revenue"
+    unsupported["value"] = "987654321"
+    unsupported["value_kind"] = "derived"
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+        )
+    )
+
+    artifact_fact_keys = {
+        ref.fact_key
+        for module in result.business_map.modules
+        for ref in module.fact_refs
+    } | {
+        ref.fact_key
+        for driver in result.driver_map.drivers
+        for ref in driver.fact_refs
+    }
+    artifact_values = {
+        str(item.value)
+        for module in result.business_map.modules
+        for item in module.classified_evidence
+    } | {
+        str(item)
+        for driver in result.driver_map.drivers
+        for item in driver.values
+    }
+    gap_key = "builder_generated_unsupported_derived_unsupported_derived_revenue"
+    graph = result.critical_input_dependency_graph
+
+    assert "unsupported_derived_revenue" not in artifact_fact_keys
+    assert "987654321" not in artifact_values
+    assert all(
+        "987654321"
+        not in {
+            str(row.revenue),
+            str(row.operating_income),
+            str(row.fcff),
+        }
+        for row in result.financial_bridge.rows
+    )
+    assert result.financial_bridge.rows
+    assert not result.judgment_context.operating_baseline_available
+    assert result.valuation_set is None
+    assert result.memo.candidate_status == "machine_draft"
+    assert gap_key in {gap.code for gap in result.gaps}
+    assert f"unknown:{gap_key}" in {node.key for node in graph.unknown_nodes}
+    assert "fact:unsupported_derived_revenue" not in {
+        node.key for node in (*graph.input_nodes, *graph.calculation_nodes)
+    }
+    assert {
+        edge.consumer_key
+        for edge in graph.edges
+        if edge.parent_key == f"unknown:{gap_key}"
+    } == {
+        "surface:answerability",
+        "surface:security_value",
+        "surface:security_return",
+        "surface:direction",
+    }
+
+
+def test_mainline_quarantines_derived_fact_with_unavailable_parent() -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    baseline = evidence["facts"][-1]
+    baseline["value_kind"] = "derived"
+    baseline["equation_id"] = "sum_segment_revenue.v1"
+    baseline["parent_fact_keys"] = ["missing_parent_fact"]
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+        )
+    )
+
+    assert "builder_generated_unsupported_derived_q4_2025_consolidated_revenue" in {
+        gap.code for gap in result.gaps
+    }
+
+
+def test_mainline_redundant_unsupported_derived_fact_only_blocks_answerability() -> (
+    None
+):
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    redundant = deepcopy(evidence["facts"][0])
+    redundant.update(
+        {
+            "fact_key": "redundant_unsupported_derived_revenue",
+            "value": "987654321",
+            "value_kind": "derived",
+        }
+    )
+    evidence["facts"].append(redundant)
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+        )
+    )
+
+    gap_key = (
+        "builder_generated_unsupported_derived_"
+        "redundant_unsupported_derived_revenue"
+    )
+    gap = next(item for item in result.gaps if item.code == gap_key)
+    graph = result.critical_input_dependency_graph
+    assert gap.severity is ResearchGapSeverity.HIGH
+    assert result.judgment_context.operating_baseline_available
+    assert result.valuation_set is not None
+    assert {
+        edge.consumer_key
+        for edge in graph.edges
+        if edge.parent_key == f"unknown:{gap_key}"
+    } == {"surface:answerability"}
+
+
+@pytest.mark.parametrize(
+    ("field", "conflict"),
+    (("currency", "CNY"), ("unit", "billions")),
+)
+def test_mainline_quarantine_precedes_cross_fact_currency_and_unit_consistency(
+    field: str,
+    conflict: str,
+) -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    redundant = deepcopy(evidence["facts"][0])
+    redundant.update(
+        {
+            "fact_key": f"inconsistent_unsupported_derived_{field}",
+            "value": "987654321",
+            "value_kind": "derived",
+            field: conflict,
+        }
+    )
+    evidence["facts"].append(redundant)
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+        )
+    )
+
+    gap_key = (
+        "builder_generated_unsupported_derived_"
+        f"inconsistent_unsupported_derived_{field}"
+    )
+    assert gap_key in {gap.code for gap in result.gaps}
+    assert result.valuation_set is not None
+
+
+def test_mainline_quarantines_cyclic_derived_fact_provenance() -> None:
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    first, second = evidence["facts"][:2]
+    first["value_kind"] = "derived"
+    first["equation_id"] = "cyclic_revenue.v1"
+    first["parent_fact_keys"] = [second["fact_key"]]
+    second["value_kind"] = "derived"
+    second["equation_id"] = "cyclic_revenue.v1"
+    second["parent_fact_keys"] = [first["fact_key"]]
+
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            evidence_build_mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+        )
+    )
+
+    expected = {
+        f"builder_generated_unsupported_derived_{first['fact_key']}",
+        f"builder_generated_unsupported_derived_{second['fact_key']}",
+    }
+    assert expected.issubset({gap.code for gap in result.gaps})
+
+
+def test_legacy_human_reviewed_derived_fact_without_provenance_remains_readable() -> (
+    None
+):
+    value = _build_input()
+    evidence = deepcopy(value.evidence_payload)
+    legacy = evidence["facts"][-1]
+    legacy["value_kind"] = "derived"
+
+    validate_company_research_evidence_payload_for_read(evidence)
+    result = CompanyResearchModelBuilder().build(
+        replace(
+            value,
+            evidence_payload=evidence,
+            evidence_content_hash=canonical_hash(evidence),
+            evidence_build_mode=EvidenceBuildMode.HUMAN_REVIEWED,
+        )
+    )
+
+    assert any(
+        item.fact_ref.fact_key == legacy["fact_key"]
+        and str(item.value) == legacy["value"]
+        for module in result.business_map.modules
+        for item in module.classified_evidence
+    )
+    legacy_dependency = next(
+        node.candidate
+        for node in result.critical_input_dependency_graph.input_nodes
+        if node.key == f"fact:{legacy['fact_key']}"
+    )
+    assert legacy_dependency.kind is CriticalInputKind.SOURCE_FACT
+    assert legacy_dependency.source_ref is not None
+    assert legacy_dependency.source_ref.fact_key == legacy["fact_key"]
+
+
+def test_blocked_terminal_surfaces_end_at_exact_unknown_nodes() -> None:
+    result = CompanyResearchModelBuilder().build(
+        replace(_build_input(), market_context=None)
+    )
+    graph = result.critical_input_dependency_graph
+    unknown_keys = {node.key for node in graph.unknown_nodes}
+
+    blocked_surfaces = {
+        "surface:capital_structure",
+        "surface:security_value",
+        "surface:security_return",
+        "surface:direction",
+    }
+    assert {
+        edge.parent_key
+        for edge in graph.edges
+        if edge.consumer_key in blocked_surfaces
+    } == {"unknown:market_security_bridge_unavailable"}
+    assert "unknown:market_security_bridge_unavailable" in unknown_keys
+
+
+def test_market_dependency_edges_follow_exact_value_return_and_direction_equations() -> (
+    None
+):
+    graph = CompanyResearchModelBuilder().build(
+        _build_input()
+    ).critical_input_dependency_graph
+    edges = {(edge.parent_key, edge.consumer_key) for edge in graph.edges}
+
+    assert (
+        "market:fx:usd_cny",
+        "calculation:security_return",
+    ) in edges
+    assert (
+        "market:fx:usd_cny",
+        "calculation:security_value",
+    ) not in edges
+    assert (
+        "assumption:required_return",
+        "calculation:direction",
+    ) in edges
+    assert (
+        "calculation:security_return",
+        "calculation:direction",
+    ) in edges
+    assert not any(
+        parent.startswith("market:rights:")
+        and consumer == "calculation:capital_structure"
+        for parent, consumer in edges
+    )
+    scenario_assumptions = {
+        node.candidate.key: node.candidate.assumption_key
+        for node in graph.input_nodes
+        if node.candidate.key.startswith("scenario:")
+    }
+    assert scenario_assumptions["scenario:bull:revenue"] == (
+        "alphabet-candidate.v1:bull:revenue"
+    )
+
+
+def test_critical_input_selection_preserves_every_capital_structure_field() -> None:
+    graph = CompanyResearchModelBuilder().build(
+        _build_input()
+    ).critical_input_dependency_graph
+
+    selected = select_critical_inputs(graph)
+
+    assert {
+        item.key
+        for item in selected.inputs
+        if item.key.startswith("market:capital:")
+    } == {
+        "market:capital:cash",
+        "market:capital:debt",
+        "market:capital:minority_interest",
+        "market:capital:investments",
+        "market:capital:pension_liabilities",
+        "market:capital:other_adjustments",
+        "market:capital:basic_shares",
+        "market:capital:diluted_shares",
+        "market:capital:bridge_policy",
+    }
 
 
 def test_builder_rejects_unknown_evidence_fields() -> None:

@@ -1,0 +1,34 @@
+{
+  "schema_version": "catl.answerable-case.market-inputs.v1",
+  "content_hash": "a3f7baf5ea984205cd5b27729475f4b5173787e0dae68e1ea5cf8b677732769f",
+  "company_external_key": "CN:300750:COMPANY",
+  "security_external_keys": ["SZSE:300750"],
+  "base_currency": "CNY",
+  "price": {
+    "security_external_key": "SZSE:300750",
+    "value": "394.68",
+    "currency": "CNY",
+    "unit": "per_share",
+    "price_type": "official_close",
+    "adjustment_basis": "unadjusted",
+    "market_at": "2025-11-06T07:00:00+00:00",
+    "available_at": "2025-11-06T07:05:00+00:00",
+    "source_role": "official_exchange",
+    "source_url": "https://www.szse.cn/api/market/ssjjhq/getHistoryData?cycleType=32&marketId=1&code=300750",
+    "source_locator": "picupdata row 2025-11-06; fields date/open/close/low/high/change/pct/volume/turnover",
+    "raw_hash": "7803f03004c09aac7d13c42495828b6875a4d089e8cf31378d3b02f24038e4fd",
+    "normalized_record": {"date":"2025-11-06","open":"390.00","close":"394.68","low":"388.70","high":"399.49","change":"5.98","percent_change":"1.54","volume_lots":"234475","turnover_cny":"9261688312.0"}
+  },
+  "capital_structure": {
+    "cash_fact_key": "cash_2024",
+    "debt_fact_key": "debt_2024",
+    "share_count_fact_key": "basic_shares_2024",
+    "cash": "303511.993",
+    "debt": "136401.592",
+    "shares": "4403.466",
+    "currency": "CNY",
+    "monetary_unit": "CNY million",
+    "share_unit": "million shares",
+    "policy_version": "catl-equity-bridge.v1"
+  }
+}

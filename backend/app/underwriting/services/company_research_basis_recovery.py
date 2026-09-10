@@ -24,13 +24,17 @@ from app.underwriting.services.company_research_boundary import (
     CompanyResearchHistoricalBoundary,
     resolve_alphabet_company_research_boundary,
 )
-from app.underwriting.services.company_research_market_inputs import (
-    CompanyResearchMarketInputs,
-)
 from app.underwriting.services.company_research_foundation import (
     alphabet_company_research_foundation_contract,
     authenticate_company_research_foundation,
     build_alphabet_company_research_preview_at_cutoff,
+)
+from app.underwriting.services.company_research_market_inputs import (
+    CompanyResearchMarketInputs,
+)
+from app.underwriting.services.company_research_sources import (
+    CompanyResearchProviderInput,
+    authenticate_governed_reviewed_evidence,
 )
 from app.underwriting.services.market_snapshots import (
     MarketSnapshotService,
@@ -39,10 +43,6 @@ from app.underwriting.services.market_snapshots import (
 from app.underwriting.services.product_project import (
     ResearchProjectService,
     research_project_security_content_hash,
-)
-from app.underwriting.services.company_research_sources import (
-    CompanyResearchProviderInput,
-    authenticate_governed_reviewed_evidence,
 )
 from app.underwriting.services.workspace_draft import (
     WorkspaceDraftPatch,
@@ -321,10 +321,17 @@ class CompanyResearchHistoricalBasisRecovery:
                     "company research initialization request history is invalid"
                 )
             mandate_effective_at = self._stored_utc(state.mandate.effective_at)
+            stored_focus_question = (
+                state.scope.payload.get("user_focus")
+                if isinstance(state.scope.payload, dict)
+                else None
+            )
             legacy_preview = build_alphabet_company_research_preview_at_cutoff(
                 self._session,
                 company_id=state.company.id,
                 cutoff_at=mandate_effective_at,
+                strategy_version=state.preparation.strategy_version,
+                focus_question=stored_focus_question,
             )
             authenticated_legacy_cutoff = (
                 mandate_effective_at
@@ -347,6 +354,7 @@ class CompanyResearchHistoricalBasisRecovery:
                 security_ids=tuple(row.id for row in state.securities),
                 request_hash=state.preparation.request_hash,
                 strategy_version=state.preparation.strategy_version,
+                focus_question=legacy_preview.focus_question,
             )
             authenticate_company_research_foundation(
                 project=state.project,

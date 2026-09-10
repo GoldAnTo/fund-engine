@@ -5,28 +5,6 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/ready": {
-      "get": {
-        "tags": [
-          "health"
-        ],
-        "summary": "Readiness",
-        "operationId": "readiness_ready_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "503": {
-            "description": "Database or schema is not ready"
-          }
-        }
-      }
-    },
     "/api/research-cases/{case_id}/workbench": {
       "get": {
         "tags": [
@@ -61,22 +39,6 @@
                 }
               ],
               "title": "Cutoff"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -205,27 +167,7 @@
           "research-case-commands-v1"
         ],
         "summary": "Create Case",
-        "description": "Reject the retired source-free intake instead of creating an orphan Case.",
         "operationId": "create_case_api_v1_research_cases_post",
-        "deprecated": true,
-        "parameters": [
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -237,12 +179,12 @@
           }
         },
         "responses": {
-          "409": {
+          "201": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
+                  "$ref": "#/components/schemas/CreateCaseResponse"
                 }
               }
             }
@@ -888,22 +830,6 @@
               ],
               "title": "Cursor"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -956,39 +882,6 @@
               "type": "boolean",
               "default": false,
               "title": "Research Mode"
-            }
-          },
-          {
-            "name": "case_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Case Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -1897,22 +1790,6 @@
               "format": "uuid",
               "title": "Case Id"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "requestBody": {
@@ -1985,22 +1862,6 @@
               "default": 50,
               "title": "Limit"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -2043,22 +1904,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Link Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -2113,22 +1958,6 @@
               "format": "uuid",
               "title": "Assessment Id"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "requestBody": {
@@ -2182,22 +2011,6 @@
               "format": "uuid",
               "title": "Thesis Id"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -2242,22 +2055,6 @@
               "format": "uuid",
               "title": "Thesis Id"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -2301,22 +2098,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Document Version Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -2371,39 +2152,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Document Version Id"
-            }
-          },
-          {
-            "name": "case_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Case Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -2760,22 +2508,6 @@
               "format": "uuid",
               "title": "Thesis Id"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "requestBody": {
@@ -2828,22 +2560,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Thesis Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -2951,22 +2667,6 @@
               "format": "uuid",
               "title": "Job Id"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -3033,22 +2733,6 @@
               "default": 50,
               "title": "Limit"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -3092,22 +2776,6 @@
               "format": "uuid",
               "title": "Job Id"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -3150,22 +2818,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Job Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -3257,8 +2909,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string",
-                  "format": "uuid"
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -3279,22 +2930,6 @@
               "minimum": 1,
               "default": 50,
               "title": "Limit"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -3354,8 +2989,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string",
-                  "format": "uuid"
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -3376,22 +3010,6 @@
               "minimum": 1,
               "default": 50,
               "title": "Limit"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -3426,24 +3044,6 @@
         ],
         "summary": "Create Task",
         "operationId": "create_task_api_v1_tasks_post",
-        "parameters": [
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -3540,8 +3140,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string",
-                  "format": "uuid"
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -3562,22 +3161,6 @@
               "minimum": 1,
               "default": 50,
               "title": "Limit"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -3621,22 +3204,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Task Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -3719,23 +3286,6 @@
               "minimum": 1,
               "default": 100,
               "title": "Limit"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cursor"
             }
           },
           {
@@ -4362,17 +3912,6 @@
             }
           },
           {
-            "name": "after_seq",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "After Seq"
-            }
-          },
-          {
             "name": "authorization",
             "in": "header",
             "required": false,
@@ -4455,124 +3994,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ResearchRunResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research-runs/{run_id}/ai-usage": {
-      "get": {
-        "tags": [
-          "auto-research-v1"
-        ],
-        "summary": "Get Run Ai Usage",
-        "operationId": "get_run_ai_usage_api_v1_research_runs__run_id__ai_usage_get",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Run Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunAIUsageDTO"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research-cases/{case_id}/ai-usage": {
-      "get": {
-        "tags": [
-          "auto-research-v1"
-        ],
-        "summary": "Get Case Ai Usage",
-        "operationId": "get_case_ai_usage_api_v1_research_cases__case_id__ai_usage_get",
-        "parameters": [
-          {
-            "name": "case_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Case Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CaseAIUsageDTO"
                 }
               }
             }
@@ -4839,24 +4260,6 @@
         "operationId": "create_event_research_api_v1_event_research_post",
         "parameters": [
           {
-            "name": "idempotency-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Idempotency-Key"
-            }
-          },
-          {
             "name": "authorization",
             "in": "header",
             "required": false,
@@ -5022,35 +4425,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Case Id"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 100,
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "maxLength": 2048
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cursor"
             }
           },
           {
@@ -6371,23 +5745,6 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/StartManualMonitorRunRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Request"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": "Successful Response",
@@ -8473,22 +7830,6 @@
               "default": 50,
               "title": "Limit"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -8532,22 +7873,6 @@
               "format": "uuid",
               "title": "Proposal Id"
             }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
           }
         ],
         "responses": {
@@ -8590,22 +7915,6 @@
               "type": "string",
               "format": "uuid",
               "title": "Proposal Id"
-            }
-          },
-          {
-            "name": "authorization",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           }
         ],
@@ -11895,6 +11204,148 @@
         }
       }
     },
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/run": {
+      "get": {
+        "tags": [
+          "underwriting-v1",
+          "company-research-v1"
+        ],
+        "summary": "Get Company Research Run",
+        "operationId": "get_company_research_run_api_underwriting_v1_product_company_research_projects__project_id__run_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "include_process",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "true",
+                "false"
+              ],
+              "type": "string",
+              "default": "false",
+              "title": "Include Process"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyResearchRunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        }
+      }
+    },
+    "/api/underwriting/v1/product/company-research/projects/{project_id}/critical-input-decisions": {
+      "post": {
+        "tags": [
+          "underwriting-v1",
+          "company-research-v1"
+        ],
+        "summary": "Decide Company Research Critical Input",
+        "operationId": "decide_company_research_critical_input_api_underwriting_v1_product_company_research_projects__project_id__critical_input_decisions_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideCompanyResearchCriticalInputRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyResearchRunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnderwritingErrorEnvelope"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        }
+      }
+    },
     "/api/underwriting/v1/product/company-research/projects/{project_id}/workspace": {
       "get": {
         "tags": [
@@ -14231,22 +13682,6 @@
             },
             "type": "array",
             "title": "Items"
-          },
-          "has_more": {
-            "type": "boolean",
-            "title": "Has More",
-            "default": false
-          },
-          "next_cursor": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Next Cursor"
           }
         },
         "additionalProperties": false,
@@ -16116,72 +15551,6 @@
         ],
         "title": "CapitalStructureSnapshotResponse"
       },
-      "CaseAIUsageDTO": {
-        "properties": {
-          "coverage": {
-            "type": "string",
-            "title": "Coverage",
-            "default": "recorded_attributed_operations_only"
-          },
-          "operation_count": {
-            "type": "integer",
-            "title": "Operation Count"
-          },
-          "reported_attempt_count": {
-            "type": "integer",
-            "title": "Reported Attempt Count"
-          },
-          "unavailable_attempt_count": {
-            "type": "integer",
-            "title": "Unavailable Attempt Count"
-          },
-          "unavailable_operation_count": {
-            "type": "integer",
-            "title": "Unavailable Operation Count"
-          },
-          "reported_prompt_tokens": {
-            "type": "integer",
-            "title": "Reported Prompt Tokens"
-          },
-          "reported_completion_tokens": {
-            "type": "integer",
-            "title": "Reported Completion Tokens"
-          },
-          "reported_total_tokens": {
-            "type": "integer",
-            "title": "Reported Total Tokens"
-          },
-          "recorded_total_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recorded Total Tokens"
-          },
-          "case_id": {
-            "type": "string",
-            "title": "Case Id"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "operation_count",
-          "reported_attempt_count",
-          "unavailable_attempt_count",
-          "unavailable_operation_count",
-          "reported_prompt_tokens",
-          "reported_completion_tokens",
-          "reported_total_tokens",
-          "recorded_total_tokens",
-          "case_id"
-        ],
-        "title": "CaseAIUsageDTO"
-      },
       "CaseCompareResponse": {
         "properties": {
           "case_id": {
@@ -17591,19 +16960,6 @@
             "additionalProperties": {
               "type": "integer"
             },
-            "propertyNames": {
-              "enum": [
-                "evidence_index",
-                "research_gaps",
-                "business_map",
-                "driver_map",
-                "financial_bridge",
-                "scenario_set",
-                "valuation_set",
-                "judgment_context",
-                "memo"
-              ]
-            },
             "type": "object",
             "title": "Artifact Versions"
           },
@@ -17759,6 +17115,16 @@
             "type": "array",
             "title": "Next Verification Events"
           },
+          "narrative": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchMemoNarrativeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "_lineage": {
             "$ref": "#/components/schemas/CompanyResearchArtifactLineageResponse"
           },
@@ -17797,6 +17163,535 @@
           "markdown"
         ],
         "title": "CompanyResearchConfirmedMemoPayloadResponse"
+      },
+      "CompanyResearchCriticalInputCandidateResponse": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Key"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "source_fact",
+              "management_guidance",
+              "consensus",
+              "ai_assumption",
+              "user_assumption",
+              "derived_calculation",
+              "unknown"
+            ],
+            "title": "Kind"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "value_type": {
+            "type": "string",
+            "enum": [
+              "decimal",
+              "text",
+              "none"
+            ],
+            "title": "Value Type"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchLineageSourceReferenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "available_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available At"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "assumption_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assumption Key"
+          },
+          "equation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equation Id"
+          },
+          "parent_input_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Parent Input Keys"
+          },
+          "unknown_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unknown Reason"
+          },
+          "gap_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "kind",
+          "value",
+          "value_type",
+          "period",
+          "unit",
+          "currency",
+          "source_ref",
+          "provider",
+          "available_at",
+          "coverage",
+          "rationale",
+          "assumption_key",
+          "equation_id",
+          "parent_input_keys",
+          "unknown_reason",
+          "gap_key"
+        ],
+        "title": "CompanyResearchCriticalInputCandidateResponse"
+      },
+      "CompanyResearchCriticalInputImpactResponse": {
+        "properties": {
+          "surfaces": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "revenue",
+                "operating_profit",
+                "fcff",
+                "capital_structure",
+                "discount_terminal",
+                "scenario",
+                "security_value",
+                "security_return",
+                "answerability",
+                "direction",
+                "strongest_counterevidence"
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Surfaces"
+          },
+          "dependency_paths": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Dependency Paths"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "surfaces",
+          "dependency_paths"
+        ],
+        "title": "CompanyResearchCriticalInputImpactResponse"
+      },
+      "CompanyResearchCriticalInputResponse": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Key"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "source_fact",
+              "management_guidance",
+              "consensus",
+              "ai_assumption",
+              "user_assumption",
+              "derived_calculation",
+              "unknown"
+            ],
+            "title": "Kind"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "value_type": {
+            "type": "string",
+            "enum": [
+              "decimal",
+              "text",
+              "none"
+            ],
+            "title": "Value Type"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchLineageSourceReferenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "available_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available At"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "assumption_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assumption Key"
+          },
+          "equation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equation Id"
+          },
+          "parent_input_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Parent Input Keys"
+          },
+          "unknown_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unknown Reason"
+          },
+          "gap_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Key"
+          },
+          "impact": {
+            "$ref": "#/components/schemas/CompanyResearchCriticalInputImpactResponse"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "confirmed",
+              "replaced_with_user_assumption",
+              "marked_unknown",
+              "accepted_gap"
+            ],
+            "title": "Decision"
+          },
+          "replacement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchCriticalInputCandidateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Fingerprint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "kind",
+          "value",
+          "value_type",
+          "period",
+          "unit",
+          "currency",
+          "source_ref",
+          "provider",
+          "available_at",
+          "coverage",
+          "rationale",
+          "assumption_key",
+          "equation_id",
+          "parent_input_keys",
+          "unknown_reason",
+          "gap_key",
+          "impact",
+          "decision",
+          "replacement",
+          "input_fingerprint"
+        ],
+        "title": "CompanyResearchCriticalInputResponse"
+      },
+      "CompanyResearchCriticalInputSetResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "artifact_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Artifact Id"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version"
+          },
+          "input_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Hash"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchCriticalInputResponse"
+            },
+            "type": "array",
+            "title": "Inputs"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "artifact_id",
+          "version",
+          "input_hash",
+          "content_hash",
+          "inputs"
+        ],
+        "title": "CompanyResearchCriticalInputSetResponse"
       },
       "CompanyResearchDriverMapArtifactResponse": {
         "properties": {
@@ -17978,6 +17873,36 @@
         ],
         "title": "CompanyResearchDriverResponse"
       },
+      "CompanyResearchEvidenceDerivationNumericSourceResponse": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "evidence_derivation",
+            "title": "Kind"
+          },
+          "equation_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Equation Id"
+          },
+          "parent_fact_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Parent Fact Keys"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "equation_id",
+          "parent_fact_keys"
+        ],
+        "title": "CompanyResearchEvidenceDerivationNumericSourceResponse"
+      },
       "CompanyResearchEvidenceIndexArtifactResponse": {
         "properties": {
           "schema_version": {
@@ -18025,7 +17950,15 @@
             "title": "Kind"
           },
           "payload": {
-            "$ref": "#/components/schemas/CompanyResearchEvidenceIndexPayloadResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchGovernedEvidenceIndexPayloadResponse"
+              },
+              {
+                "$ref": "#/components/schemas/CompanyResearchEvidenceIndexPayloadResponse"
+              }
+            ],
+            "title": "Payload"
           }
         },
         "additionalProperties": false,
@@ -18313,17 +18246,25 @@
             "default": "underwriting.v1"
           },
           "kind": {
-            "type": "string",
-            "enum": [
-              "evidence_index",
-              "research_gaps",
-              "business_map",
-              "driver_map",
-              "financial_bridge",
-              "scenario_set",
-              "valuation_set",
-              "judgment_context",
-              "memo"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "evidence_index",
+                  "research_gaps",
+                  "business_map",
+                  "driver_map",
+                  "financial_bridge",
+                  "scenario_set",
+                  "valuation_set",
+                  "judgment_context",
+                  "memo"
+                ]
+              },
+              {
+                "type": "string",
+                "const": "critical_inputs"
+              }
             ],
             "title": "Kind"
           },
@@ -18585,7 +18526,7 @@
               "$ref": "#/components/schemas/CompanyResearchFrozenArtifactDescriptorResponse"
             },
             "type": "array",
-            "maxItems": 9,
+            "maxItems": 10,
             "minItems": 8,
             "title": "Artifacts"
           },
@@ -18805,6 +18746,338 @@
           "payload"
         ],
         "title": "CompanyResearchGapsArtifactResponse"
+      },
+      "CompanyResearchGovernedEvidenceIndexPayloadResponse": {
+        "properties": {
+          "fixture_content_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Fixture Content Hash"
+          },
+          "cutoff": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Cutoff"
+          },
+          "company_external_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Company External Key"
+          },
+          "security_external_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Security External Keys"
+          },
+          "facts": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CompanyResearchGovernedReviewedEvidenceFactResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/CompanyResearchGovernedUnreviewedEvidenceFactResponse"
+                }
+              ]
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Facts"
+          },
+          "counterevidence_fact_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Counterevidence Fact Keys"
+          },
+          "next_verification_events": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Next Verification Events"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fixture_content_hash",
+          "cutoff",
+          "company_external_key",
+          "security_external_keys",
+          "facts",
+          "counterevidence_fact_keys",
+          "next_verification_events"
+        ],
+        "title": "CompanyResearchGovernedEvidenceIndexPayloadResponse"
+      },
+      "CompanyResearchGovernedEvidenceObservationResponse": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Key"
+          },
+          "value": {
+            "type": "string",
+            "pattern": "^(?:0|-?(?:0\\.\\d*[1-9]|[1-9]\\d*(?:\\.\\d*[1-9])?))$",
+            "title": "Value"
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Unit"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "period": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Period"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "reported",
+              "derived"
+            ],
+            "title": "State"
+          },
+          "source_ref": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchExternalNumericSourceResponse"
+              },
+              {
+                "$ref": "#/components/schemas/CompanyResearchEvidenceDerivationNumericSourceResponse"
+              }
+            ],
+            "title": "Source Ref",
+            "discriminator": {
+              "propertyName": "kind",
+              "mapping": {
+                "evidence_derivation": "#/components/schemas/CompanyResearchEvidenceDerivationNumericSourceResponse",
+                "external": "#/components/schemas/CompanyResearchExternalNumericSourceResponse"
+              }
+            }
+          },
+          "gap_key": {
+            "type": "null",
+            "title": "Gap Key"
+          },
+          "assumption_key": {
+            "type": "null",
+            "title": "Assumption Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "value",
+          "unit",
+          "currency",
+          "period",
+          "state",
+          "source_ref",
+          "gap_key",
+          "assumption_key"
+        ],
+        "title": "CompanyResearchGovernedEvidenceObservationResponse"
+      },
+      "CompanyResearchGovernedReviewedEvidenceFactResponse": {
+        "properties": {
+          "fact_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Fact Key"
+          },
+          "company_external_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Company External Key"
+          },
+          "business_module": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Business Module"
+          },
+          "metric_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Metric Key"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/CompanyResearchGovernedEvidenceObservationResponse"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Period Start"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Period End"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_role": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Role"
+          },
+          "source_url": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Url"
+          },
+          "source_locator": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Locator"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          },
+          "review_decision": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "rejected"
+            ],
+            "title": "Review Decision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fact_key",
+          "company_external_key",
+          "business_module",
+          "metric_key",
+          "observation",
+          "period_start",
+          "period_end",
+          "published_at",
+          "available_at",
+          "source_role",
+          "source_url",
+          "source_locator",
+          "raw_hash",
+          "review_decision"
+        ],
+        "title": "CompanyResearchGovernedReviewedEvidenceFactResponse"
+      },
+      "CompanyResearchGovernedUnreviewedEvidenceFactResponse": {
+        "properties": {
+          "fact_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Fact Key"
+          },
+          "company_external_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Company External Key"
+          },
+          "business_module": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Business Module"
+          },
+          "metric_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Metric Key"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/CompanyResearchGovernedEvidenceObservationResponse"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Period Start"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Period End"
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Published At"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Available At"
+          },
+          "source_role": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Role"
+          },
+          "source_url": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Url"
+          },
+          "source_locator": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Locator"
+          },
+          "raw_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Raw Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fact_key",
+          "company_external_key",
+          "business_module",
+          "metric_key",
+          "observation",
+          "period_start",
+          "period_end",
+          "published_at",
+          "available_at",
+          "source_role",
+          "source_url",
+          "source_locator",
+          "raw_hash"
+        ],
+        "title": "CompanyResearchGovernedUnreviewedEvidenceFactResponse"
       },
       "CompanyResearchIdentityResponse": {
         "properties": {
@@ -19214,6 +19487,16 @@
             "type": "array",
             "title": "Next Verification Events"
           },
+          "narrative": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchMemoNarrativeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "_lineage": {
             "$ref": "#/components/schemas/CompanyResearchArtifactLineageResponse"
           },
@@ -19465,6 +19748,138 @@
         ],
         "title": "CompanyResearchMemoArtifactResponse"
       },
+      "CompanyResearchMemoNarrativeResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "enum": [
+              "company-research-memo-narrative.v1",
+              "company-research-memo-narrative.v2"
+            ],
+            "title": "Schema Version"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/CompanyResearchNarrativeClaimResponse"
+          },
+          "business_explanation": {
+            "$ref": "#/components/schemas/CompanyResearchNarrativeClaimResponse"
+          },
+          "driver_explanations": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchNarrativeDriverResponse"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Driver Explanations"
+          },
+          "counterevidence": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchNarrativeClaimResponse"
+            },
+            "type": "array",
+            "title": "Counterevidence"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchNarrativeClaimResponse"
+            },
+            "type": "array",
+            "title": "Gaps"
+          },
+          "next_checks": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchNarrativeClaimResponse"
+            },
+            "type": "array",
+            "title": "Next Checks"
+          },
+          "generator_kind": {
+            "type": "string",
+            "enum": [
+              "authenticated_ai",
+              "deterministic_fallback"
+            ],
+            "title": "Generator Kind"
+          },
+          "prompt_version": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Prompt Version"
+          },
+          "input_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Input Hash"
+          },
+          "output_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Output Hash"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "prompt_hash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Hash"
+          },
+          "provider_model_identifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Model Identifier"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema_version",
+          "summary",
+          "business_explanation",
+          "driver_explanations",
+          "counterevidence",
+          "gaps",
+          "next_checks",
+          "generator_kind",
+          "prompt_version",
+          "input_hash",
+          "output_hash"
+        ],
+        "title": "CompanyResearchMemoNarrativeResponse"
+      },
       "CompanyResearchModelGapsPayloadResponse": {
         "properties": {
           "gaps": {
@@ -19485,6 +19900,60 @@
           "_lineage"
         ],
         "title": "CompanyResearchModelGapsPayloadResponse"
+      },
+      "CompanyResearchNarrativeClaimResponse": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          },
+          "citations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Citations"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "citations"
+        ],
+        "title": "CompanyResearchNarrativeClaimResponse"
+      },
+      "CompanyResearchNarrativeDriverResponse": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Text"
+          },
+          "citations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Citations"
+          },
+          "driver_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Driver Key"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "citations",
+          "driver_key"
+        ],
+        "title": "CompanyResearchNarrativeDriverResponse"
       },
       "CompanyResearchNumericObservationResponse": {
         "properties": {
@@ -19763,6 +20232,17 @@
             "type": "string",
             "format": "date-time",
             "title": "Cutoff At"
+          },
+          "focus_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus Question"
           }
         },
         "additionalProperties": false,
@@ -19821,6 +20301,17 @@
             "format": "date-time",
             "title": "Cutoff At"
           },
+          "focus_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus Question"
+          },
           "agenda": {
             "items": {
               "$ref": "#/components/schemas/CompanyResearchAgendaModuleResponse"
@@ -19847,6 +20338,7 @@
           "required_return",
           "permanent_loss_limit",
           "cutoff_at",
+          "focus_question",
           "agenda",
           "preview_hash"
         ],
@@ -20058,7 +20550,7 @@
               "$ref": "#/components/schemas/CompanyResearchFrozenArtifactDescriptorResponse"
             },
             "type": "array",
-            "maxItems": 9,
+            "maxItems": 10,
             "minItems": 8,
             "title": "Artifacts"
           },
@@ -20300,6 +20792,230 @@
           "review_decision"
         ],
         "title": "CompanyResearchReviewedEvidenceFactResponse"
+      },
+      "CompanyResearchRunProcessEntryResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Message"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Occurred At"
+          },
+          "retry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchRunRetryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "occurred_at",
+          "retry"
+        ],
+        "title": "CompanyResearchRunProcessEntryResponse"
+      },
+      "CompanyResearchRunResponse": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "company": {
+            "$ref": "#/components/schemas/CompanyResearchIdentityResponse"
+          },
+          "securities": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchSecurityIdentityResponse"
+            },
+            "type": "array",
+            "title": "Securities"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "collecting_sources",
+              "analyzing_company",
+              "building_forecast",
+              "generating_report",
+              "completed",
+              "needs_input",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "progress": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchRunStageResponse"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 5,
+            "title": "Stages"
+          },
+          "recent_process": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchRunProcessEntryResponse"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Recent Process"
+          },
+          "workspace": {
+            "$ref": "#/components/schemas/CompanyResearchWorkspaceResponse"
+          },
+          "critical_inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompanyResearchCriticalInputSetResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selected_revision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "project_id",
+          "company",
+          "securities",
+          "status",
+          "progress",
+          "started_at",
+          "updated_at",
+          "stages",
+          "recent_process",
+          "workspace",
+          "critical_inputs",
+          "selected_revision"
+        ],
+        "title": "CompanyResearchRunResponse"
+      },
+      "CompanyResearchRunRetryResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "retryable": {
+            "type": "boolean",
+            "title": "Retryable"
+          },
+          "next_attempt_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Attempt At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "retryable",
+          "next_attempt_at"
+        ],
+        "title": "CompanyResearchRunRetryResponse"
+      },
+      "CompanyResearchRunStageResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "key": {
+            "type": "string",
+            "enum": [
+              "identity",
+              "sources",
+              "analysis",
+              "forecast",
+              "report"
+            ],
+            "title": "Key"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "active",
+              "completed",
+              "needs_input",
+              "failed"
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "status"
+        ],
+        "title": "CompanyResearchRunStageResponse"
       },
       "CompanyResearchScenarioDcfValueResponse": {
         "properties": {
@@ -20550,10 +21266,15 @@
             "minLength": 1,
             "title": "Security External Key"
           },
-          "usd_per_share": {
+          "value_per_share": {
             "$ref": "#/components/schemas/CompanyResearchValueRangeResponse"
           },
-          "cny_return": {
+          "value_currency": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Value Currency"
+          },
+          "base_currency_return": {
             "$ref": "#/components/schemas/CompanyResearchValueRangeResponse"
           }
         },
@@ -20561,10 +21282,34 @@
         "type": "object",
         "required": [
           "security_external_key",
-          "usd_per_share",
-          "cny_return"
+          "value_per_share",
+          "value_currency",
+          "base_currency_return"
         ],
         "title": "CompanyResearchSecurityValueRangeResponse"
+      },
+      "CompanyResearchSensitivitySecurityValueResponse": {
+        "properties": {
+          "security_external_key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Security External Key"
+          },
+          "low_input_value_per_share": {
+            "$ref": "#/components/schemas/CompanyResearchNumericObservationResponse"
+          },
+          "high_input_value_per_share": {
+            "$ref": "#/components/schemas/CompanyResearchNumericObservationResponse"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_external_key",
+          "low_input_value_per_share",
+          "high_input_value_per_share"
+        ],
+        "title": "CompanyResearchSensitivitySecurityValueResponse"
       },
       "CompanyResearchSourceReferenceResponse": {
         "properties": {
@@ -20684,6 +21429,53 @@
         ],
         "title": "CompanyResearchUnreviewedEvidenceFactResponse"
       },
+      "CompanyResearchValuationSensitivityResponse": {
+        "properties": {
+          "variable_key": {
+            "type": "string",
+            "enum": [
+              "required_return",
+              "terminal_growth"
+            ],
+            "title": "Variable Key"
+          },
+          "low_input": {
+            "$ref": "#/components/schemas/CompanyResearchNumericObservationResponse"
+          },
+          "high_input": {
+            "$ref": "#/components/schemas/CompanyResearchNumericObservationResponse"
+          },
+          "security_values": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchSensitivitySecurityValueResponse"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Security Values"
+          },
+          "value_currency": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Value Currency"
+          },
+          "equation_id": {
+            "type": "string",
+            "const": "dcf_sensitivity.v1",
+            "title": "Equation Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "variable_key",
+          "low_input",
+          "high_input",
+          "security_values",
+          "value_currency",
+          "equation_id"
+        ],
+        "title": "CompanyResearchValuationSensitivityResponse"
+      },
       "CompanyResearchValuationSetArtifactResponse": {
         "properties": {
           "schema_version": {
@@ -20788,6 +21580,13 @@
             "minItems": 1,
             "title": "Required Return Comparisons"
           },
+          "sensitivity_analyses": {
+            "items": {
+              "$ref": "#/components/schemas/CompanyResearchValuationSensitivityResponse"
+            },
+            "type": "array",
+            "title": "Sensitivity Analyses"
+          },
           "_lineage": {
             "$ref": "#/components/schemas/CompanyResearchArtifactLineageResponse"
           }
@@ -20800,6 +21599,7 @@
           "security_value_ranges",
           "required_return",
           "required_return_comparisons",
+          "sensitivity_analyses",
           "_lineage"
         ],
         "title": "CompanyResearchValuationSetPayloadResponse"
@@ -22147,6 +22947,28 @@
         ],
         "title": "CreateCaseRequest",
         "description": "Create a research case with its research question + initial theses."
+      },
+      "CreateCaseResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "theses": {
+            "items": {
+              "$ref": "#/components/schemas/CreatedThesisDTO"
+            },
+            "type": "array",
+            "title": "Theses"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_id",
+          "theses"
+        ],
+        "title": "CreateCaseResponse"
       },
       "CreateCausalEdgeRequest": {
         "properties": {
@@ -23806,6 +24628,87 @@
         "additionalProperties": false,
         "type": "object",
         "title": "CursorPage"
+      },
+      "DecideCompanyResearchCriticalInputRequest": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "underwriting.v1",
+            "title": "Schema Version",
+            "default": "underwriting.v1"
+          },
+          "critical_input_key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Critical Input Key"
+          },
+          "expected_artifact_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Expected Artifact Id"
+          },
+          "expected_input_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Input Fingerprint"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "marked_unknown",
+              "accepted_gap",
+              "replaced_with_user_assumption"
+            ],
+            "title": "Decision"
+          },
+          "replacement_value": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Value"
+          },
+          "replacement_unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Unit"
+          },
+          "replacement_rationale": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacement Rationale"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "critical_input_key",
+          "expected_artifact_id",
+          "expected_input_fingerprint",
+          "decision"
+        ],
+        "title": "DecideCompanyResearchCriticalInputRequest"
       },
       "DerivedFromDTO": {
         "properties": {
@@ -25511,11 +26414,6 @@
           "can_accept": {
             "type": "boolean",
             "title": "Can Accept"
-          },
-          "display_withheld": {
-            "type": "boolean",
-            "title": "Display Withheld",
-            "default": false
           },
           "proposal_reason": {
             "type": "string",
@@ -28883,6 +29781,17 @@
             "type": "string",
             "format": "date-time",
             "title": "Cutoff At"
+          },
+          "focus_question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus Question"
           },
           "preview_hash": {
             "type": "string",
@@ -36384,72 +37293,6 @@
         ],
         "title": "RoleReviewDTO"
       },
-      "RunAIUsageDTO": {
-        "properties": {
-          "coverage": {
-            "type": "string",
-            "title": "Coverage",
-            "default": "recorded_attributed_operations_only"
-          },
-          "operation_count": {
-            "type": "integer",
-            "title": "Operation Count"
-          },
-          "reported_attempt_count": {
-            "type": "integer",
-            "title": "Reported Attempt Count"
-          },
-          "unavailable_attempt_count": {
-            "type": "integer",
-            "title": "Unavailable Attempt Count"
-          },
-          "unavailable_operation_count": {
-            "type": "integer",
-            "title": "Unavailable Operation Count"
-          },
-          "reported_prompt_tokens": {
-            "type": "integer",
-            "title": "Reported Prompt Tokens"
-          },
-          "reported_completion_tokens": {
-            "type": "integer",
-            "title": "Reported Completion Tokens"
-          },
-          "reported_total_tokens": {
-            "type": "integer",
-            "title": "Reported Total Tokens"
-          },
-          "recorded_total_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Recorded Total Tokens"
-          },
-          "run_id": {
-            "type": "string",
-            "title": "Run Id"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "operation_count",
-          "reported_attempt_count",
-          "unavailable_attempt_count",
-          "unavailable_operation_count",
-          "reported_prompt_tokens",
-          "reported_completion_tokens",
-          "reported_total_tokens",
-          "recorded_total_tokens",
-          "run_id"
-        ],
-        "title": "RunAIUsageDTO"
-      },
       "RunListResponse": {
         "properties": {
           "next_cursor": {
@@ -36968,18 +37811,6 @@
       },
       "SetCaseMonitorStatusRequest": {
         "properties": {
-          "expected_version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expected Version"
-          },
           "actor": {
             "type": "string",
             "maxLength": 128,
@@ -37423,42 +38254,6 @@
           "requested_by"
         ],
         "title": "StartKeyFactorCandidateRunRequest"
-      },
-      "StartManualMonitorRunRequest": {
-        "properties": {
-          "actor": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Actor"
-          },
-          "change_reason": {
-            "type": "string",
-            "maxLength": 2000,
-            "minLength": 1,
-            "title": "Change Reason"
-          },
-          "expected_version": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Expected Version"
-          },
-          "idempotency_key": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Idempotency Key"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "actor",
-          "change_reason",
-          "expected_version",
-          "idempotency_key"
-        ],
-        "title": "StartManualMonitorRunRequest"
       },
       "StartResearchRunRequest": {
         "properties": {
@@ -39120,18 +39915,6 @@
       },
       "UpdateCaseMonitorRequest": {
         "properties": {
-          "expected_version": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 0.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expected Version"
-          },
           "actor": {
             "type": "string",
             "maxLength": 128,

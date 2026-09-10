@@ -6,6 +6,11 @@ from collections.abc import Callable
 from threading import Event, Thread, current_thread
 
 from app.services.research_worker_heartbeat import WorkerHeartbeatService
+from sqlalchemy.exc import OperationalError
+
+
+def _is_transient_sqlite_writer_contention(error: Exception) -> bool:
+    return isinstance(error, OperationalError) and "database is locked" in str(error).lower()
 
 
 class WorkerHeartbeatPublisher:
@@ -63,6 +68,8 @@ class WorkerHeartbeatPublisher:
         while not self._stop.wait(self._interval_seconds):
             try:
                 self._touch()
-            except Exception:
+            except Exception as error:
+                if _is_transient_sqlite_writer_contention(error):
+                    continue
                 self._fatal_exit(1)
                 return

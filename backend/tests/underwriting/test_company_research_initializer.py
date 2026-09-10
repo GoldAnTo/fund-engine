@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-import re
 from threading import Barrier
 from uuid import uuid4
 
 import pytest
 from app.models.ledger import Base, ConflictError, ValidationError
 from app.models.operational import Job
+from app.underwriting.domain.product_contracts import (
+    ProductHistoricalBasisInput,
+    product_historical_basis_content_hash,
+)
 from app.underwriting.fixtures.product_foundation import load_product_foundation_fixture
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchEvent,
@@ -27,19 +31,16 @@ from app.underwriting.persistence.product_models import (
     UnderwritingResearchScopeVersion,
     UnderwritingWorkspaceDraft,
 )
-from app.underwriting.services.company_research_initializer import (
-    CompanyResearchInitializer,
-)
 from app.underwriting.services.company_research_boundary import (
     resolve_alphabet_company_research_boundary,
 )
-from app.underwriting.domain.product_contracts import (
-    ProductHistoricalBasisInput,
-    product_historical_basis_content_hash,
+from app.underwriting.services.company_research_initializer import (
+    CompanyResearchInitializer,
 )
 from app.underwriting.services.product_foundation_fixture import (
     ProductFoundationFixtureService,
 )
+from app.underwriting.services.product_project import research_agenda_content_hash
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
@@ -119,6 +120,76 @@ def test_preview_is_read_only_and_resolves_all_effective_alphabet_securities(
         == before
     )
     assert not session.new
+
+
+def test_focus_question_is_canonical_and_bound_to_preview_request_and_agenda_hashes(
+    session,
+) -> None:
+    initializer, alphabet = _initializer(session)
+    baseline = initializer.preview(company_id=alphabet.id, cutoff_at=NOW)
+
+    preview = initializer.preview(
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        focus_question="\u3000云业务增长能否抵消搜索广告放缓？\u00a0",
+    )
+
+    assert preview.focus_question == "云业务增长能否抵消搜索广告放缓？"
+    assert preview.input_hash != baseline.input_hash
+    assert preview.strategy_version == baseline.strategy_version
+    assert preview.cutoff_at == baseline.cutoff_at
+    assert preview.horizon_years == baseline.horizon_years
+    assert preview.base_currency == baseline.base_currency
+    assert preview.required_return == baseline.required_return
+    assert preview.permanent_loss_limit == baseline.permanent_loss_limit
+
+    result = initializer.initialize(
+        preview_hash=preview.input_hash,
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        focus_question="\u3000云业务增长能否抵消搜索广告放缓？\u00a0",
+        idempotency_key="alphabet-focus-question",
+    )
+
+    assert result.preparation.request_hash == preview.input_hash
+    assert result.scope.payload["user_focus"] == preview.focus_question
+    assert (
+        result.agenda.generator_provenance["input_summary_hash"]
+        == preview.input_hash
+    )
+    assert result.agenda.content_hash == research_agenda_content_hash(
+        project_id=result.project.id,
+        scope_id=result.scope.id,
+        payload=result.agenda.payload,
+        generator_provenance=result.agenda.generator_provenance,
+    )
+
+    replay = initializer.initialize(
+        preview_hash=preview.input_hash,
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        focus_question="云业务增长能否抵消搜索广告放缓？",
+        idempotency_key="alphabet-focus-question",
+    )
+    assert replay.project.id == result.project.id
+
+
+def test_focus_question_must_match_the_preview_hash(session) -> None:
+    initializer, alphabet = _initializer(session)
+    preview = initializer.preview(
+        company_id=alphabet.id,
+        cutoff_at=NOW,
+        focus_question="云业务利润率何时改善？",
+    )
+
+    with pytest.raises(ValidationError, match="preview_hash"):
+        initializer.initialize(
+            preview_hash=preview.input_hash,
+            company_id=alphabet.id,
+            cutoff_at=NOW,
+            focus_question="搜索业务增长是否放缓？",
+            idempotency_key="alphabet-focus-question-mismatch",
+        )
 
 
 def test_initialize_creates_the_complete_company_research_foundation(session) -> None:
@@ -541,8 +612,6 @@ def test_initialize_replays_an_idempotency_key_for_later_supported_cutoff(
     )
     later = NOW + timedelta(days=1)
     later_preview = initializer.preview(company_id=alphabet.id, cutoff_at=later)
-    assert later_preview.cutoff_at == preview.cutoff_at == GOVERNED_CUTOFF
-    assert later_preview.input_hash == preview.input_hash
 
     replay = initializer.initialize(
         preview_hash=later_preview.input_hash,

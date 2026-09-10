@@ -12,14 +12,15 @@ import json
 import os
 import subprocess
 import sys
-from uuid import UUID
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
-import sqlalchemy as sa
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import registry, sessionmaker
 
 from tests.legacy_market_conflicts import (
@@ -27,17 +28,6 @@ from tests.legacy_market_conflicts import (
     clone_conflicting_insert_sql,
     seed_0067_market_conflicts,
 )
-
-
-def _expected_head() -> str:
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-    backend = Path(__file__).parents[1]
-    config = Config(str(backend / "alembic.ini"))
-    config.set_main_option("script_location", str(backend / "alembic"))
-    head = ScriptDirectory.from_config(config).get_current_head()
-    assert head is not None
-    return head
 
 
 WAVE2_TABLES = {
@@ -195,7 +185,7 @@ def test_fresh_sqlite_database_upgrades_to_alembic_head(tmp_path) -> None:
             connection.execute(
                 sa.text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            == _expected_head()
+            == "0071"
         )
         event_columns = {
             column["name"]: column
@@ -1353,7 +1343,7 @@ def test_0070_repairs_a_stamped_0069_database_without_event_triggers(
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == _expected_head()
+        ).scalar_one() == "0071"
         for statement in (
             "UPDATE uw_company_research_events SET event_type = 'changed' "
             f"WHERE id = '{event_id}'",
@@ -1364,6 +1354,206 @@ def test_0070_repairs_a_stamped_0069_database_without_event_triggers(
                 connection.exec_driver_sql(statement)
             connection.rollback()
     engine.dispose()
+
+
+def test_0071_adds_and_downgrades_the_critical_inputs_artifact_kind(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "critical-input-artifact-kind.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    initial = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "0070"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initial.returncode == 0, initial.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+
+    def artifact_kind_check() -> str:
+        with engine.connect() as connection:
+            checks = {
+                value["name"]: value["sqltext"]
+                for value in sa.inspect(connection).get_check_constraints(
+                    "uw_company_research_artifact_versions"
+                )
+            }
+        return checks["ck_uw_company_research_artifact_kind"]
+
+    assert "critical_inputs" not in artifact_kind_check()
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    with engine.connect() as connection:
+        assert connection.execute(
+            sa.text("SELECT version_num FROM alembic_version")
+        ).scalar_one() == "0071"
+        trigger_names = {
+            row[0]
+            for row in connection.execute(
+                sa.text(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                    "AND tbl_name = 'uw_company_research_artifact_versions'"
+                )
+            )
+        }
+    assert "critical_inputs" in artifact_kind_check()
+    assert trigger_names == {
+        "no_update_uw_company_research_artifact_versions",
+        "no_delete_uw_company_research_artifact_versions",
+    }
+
+    downgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0070"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+    assert "critical_inputs" not in artifact_kind_check()
+    engine.dispose()
+
+
+def test_0071_refuses_a_populated_downgrade_without_mutating_schema_or_data(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "critical-input-preservation.db"
+    backend = Path(__file__).parents[1]
+    environment = {**os.environ, "DATABASE_URL": f"sqlite:///{database_path}"}
+    upgraded = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=backend,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    engine = sa.create_engine(environment["DATABASE_URL"])
+    artifact_id = "11111111111111111111111111111111"
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            sa.text(
+                "INSERT INTO uw_company_research_artifact_versions ("
+                "id, project_id, kind, version, supersedes_id, "
+                "parent_content_hash, input_hash, payload, source_refs, "
+                "content_hash, created_at) VALUES ("
+                ":id, :project_id, 'critical_inputs', 1, NULL, NULL, "
+                ":input_hash, :payload, :source_refs, :content_hash, :created_at)"
+            ),
+            {
+                "id": artifact_id,
+                "project_id": "22222222222222222222222222222222",
+                "input_hash": "a" * 64,
+                "payload": "{}",
+                "source_refs": "[]",
+                "content_hash": "b" * 64,
+                "created_at": "2026-09-01 00:00:00",
+            },
+        )
+
+    expected_error = (
+        "cannot downgrade 0071 while critical_inputs artifacts require preservation"
+    )
+    for _attempt in range(2):
+        downgraded = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "0070"],
+            cwd=backend,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert downgraded.returncode != 0
+        assert expected_error in downgraded.stderr
+        with engine.connect() as connection:
+            assert connection.scalar(
+                sa.text("SELECT version_num FROM alembic_version")
+            ) == "0071"
+            assert connection.execute(
+                sa.text(
+                    "SELECT id, kind, input_hash, payload, source_refs, content_hash "
+                    "FROM uw_company_research_artifact_versions WHERE id = :id"
+                ),
+                {"id": artifact_id},
+            ).one() == (
+                artifact_id,
+                "critical_inputs",
+                "a" * 64,
+                "{}",
+                "[]",
+                "b" * 64,
+            )
+            assert {
+                row[0]
+                for row in connection.execute(
+                    sa.text(
+                        "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                        "AND tbl_name = 'uw_company_research_artifact_versions'"
+                    )
+                )
+            } == {
+                "no_update_uw_company_research_artifact_versions",
+                "no_delete_uw_company_research_artifact_versions",
+            }
+            assert connection.scalar(
+                sa.text(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE name LIKE '_alembic_tmp_%'"
+                )
+            ) == 0
+    engine.dispose()
+
+
+def test_0071_downgrade_preflight_uses_postgresql_compatible_bound_sql() -> None:
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "0071_company_research_critical_inputs.py"
+    )
+    module_spec = importlib.util.spec_from_file_location(
+        "migration_0071_postgresql_preservation", migration_path
+    )
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    migration = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(migration)
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    class PopulatedPostgreSQLBind:
+        dialect = postgresql.dialect()
+
+        def scalar(self, statement, parameters):
+            calls.append((statement, parameters))
+            return True
+
+    migration.op = SimpleNamespace(
+        get_bind=lambda: PopulatedPostgreSQLBind(),
+    )
+
+    with pytest.raises(RuntimeError, match="critical_inputs artifacts"):
+        migration.downgrade()
+
+    assert len(calls) == 1
+    statement, parameters = calls[0]
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "SELECT EXISTS" in compiled
+    assert "uw_company_research_artifact_versions" in compiled
+    assert "kind = %(kind)s" in compiled
+    assert parameters == {"kind": "critical_inputs"}
 
 
 @pytest.mark.parametrize(
@@ -1468,7 +1658,7 @@ def test_0070_authenticates_populated_stamped_0069_histories(
         with engine.connect() as connection:
             assert connection.scalar(
                 sa.text("SELECT version_num FROM alembic_version")
-            ) == _expected_head()
+            ) == "0071"
             assert tuple(
                 connection.scalars(
                     sa.text(
@@ -2100,7 +2290,7 @@ with SessionLocal() as session:
 
     engine = sa.create_engine(environment["DATABASE_URL"])
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0071"
         assert {
             "research_preparations",
             "research_preparation_artifacts",
@@ -2864,7 +3054,7 @@ def test_upgrade_recovers_when_0048_columns_exist_but_revision_is_stale(tmp_path
 
     assert upgraded.returncode == 0, upgraded.stderr
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0071"
 
 
 def test_live_case_runner_bootstraps_its_database_before_materializing(
@@ -2928,7 +3118,7 @@ def test_adopts_a_complete_legacy_orm_database_without_losing_rows(tmp_path) -> 
 
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT COUNT(*) FROM research_cases")).scalar_one() == 1
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == _expected_head()
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == "0071"
         assert {
             row[0]
             for row in connection.execute(
@@ -3134,7 +3324,7 @@ def test_unmanaged_adoption_installs_the_0070_company_worker_index(
     with engine.connect() as connection:
         assert connection.scalar(
             sa.text("SELECT version_num FROM alembic_version")
-        ) == _expected_head()
+        ) == "0071"
         index = {
             row["name"]: row
             for row in sa.inspect(connection).get_indexes("jobs")
@@ -3383,7 +3573,7 @@ def test_upgrade_from_0051_backfills_source_contract_research_type(tmp_path) -> 
     with engine.connect() as connection:
         assert connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
-        ).scalar_one() == _expected_head()
+        ).scalar_one() == "0071"
         assert connection.execute(
             sa.text(
                 "SELECT research_source_type FROM source_contracts WHERE id = :id"
@@ -3473,21 +3663,3 @@ with SessionLocal() as session:
         cwd=backend, env=environment, text=True, capture_output=True, check=False,
     )
     assert verified.returncode == 0, verified.stderr + verified.stdout
-
-
-def test_unmanaged_adoption_installs_ai_scope_index(tmp_path):
-    import app.models  # noqa: F401
-    from app.db_migrations import upgrade_database_to_head
-    from app.models.ledger import Base
-    url = f"sqlite:///{tmp_path / 'unmanaged-ai-scope.db'}"
-    engine = sa.create_engine(url)
-    try:
-        Base.metadata.create_all(engine)
-        with engine.begin() as connection:
-            connection.exec_driver_sql('DROP INDEX ix_ai_runs_research_scope')
-        upgrade_database_to_head(url)
-        with engine.connect() as connection:
-            indexes = connection.exec_driver_sql("PRAGMA index_list('ai_runs')").all()
-            assert any(row[1] == 'ix_ai_runs_research_scope' for row in indexes)
-    finally:
-        engine.dispose()

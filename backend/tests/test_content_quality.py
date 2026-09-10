@@ -87,14 +87,10 @@ def _freeze_with_text(document_service, text: str, url: str):
     return version
 
 
-def test_documents_list_flags_degenerate_content(api_client, document_service, session, research_service):
+def test_documents_list_flags_degenerate_content(api_client, document_service):
     version = _freeze_with_text(
         document_service, "相关研究", "https://example.test/degenerate"
     )
-    from tests.tenant_admission import admit_case
-
-    case = research_service.add_case(title="quality", industry_topic="test", created_by="u")
-    admit_case(session, case.id, document_version_id=version.id)
     response = api_client.get("/api/v1/documents")
     assert response.status_code == 200
     (item,) = [
@@ -104,11 +100,7 @@ def test_documents_list_flags_degenerate_content(api_client, document_service, s
     assert any(r.startswith("content_too_short") for r in item["quality_reasons"])
 
 
-def test_documents_list_marks_normal_content_ok(api_client, document, span, session, research_service):
-    from tests.tenant_admission import admit_case
-
-    case = research_service.add_case(title="quality", industry_topic="test", created_by="u")
-    admit_case(session, case.id, document_version_id=document.id)
+def test_documents_list_marks_normal_content_ok(api_client, document, span):
     response = api_client.get("/api/v1/documents")
     assert response.status_code == 200
     (item,) = [

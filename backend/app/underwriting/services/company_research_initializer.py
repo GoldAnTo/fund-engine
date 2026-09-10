@@ -13,15 +13,26 @@ from sqlalchemy.orm import Session
 
 from app.models.ledger import ConflictError, ValidationError
 from app.models.operational import Job
-from app.underwriting.adapters.company_research import AlphabetCompanyResearchAdapter
+from app.underwriting.adapters.company_research import (
+    AlphabetCompanyResearchAdapter,
+    CatlCompanyResearchAdapter,
+)
 from app.underwriting.domain.company_research import (
+    DEFAULT_STRATEGY_VERSION,
     CompanyResearchCompany,
     CompanyResearchIdentitySet,
     CompanyResearchPreview,
     CompanyResearchSecurity,
     build_company_research_preview,
+    normalize_focus_question,
 )
 from app.underwriting.domain.types import ResearchObjectKind
+from app.underwriting.fixtures.alphabet_golden_case import (
+    load_alphabet_golden_case_fixture,
+)
+from app.underwriting.fixtures.catl_answerable_case import (
+    load_catl_answerable_case_fixture,
+)
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
@@ -38,6 +49,23 @@ from app.underwriting.persistence.product_models import (
     UnderwritingResearchScopeVersion,
 )
 from app.underwriting.persistence.product_repository import ProductRepository
+from app.underwriting.services.company_research_basis_recovery import (
+    CompanyResearchHistoricalBasisRecovery,
+)
+from app.underwriting.services.company_research_boundary import (
+    resolve_company_research_boundary,
+)
+from app.underwriting.services.company_research_foundation import (
+    company_research_foundation_contract,
+)
+from app.underwriting.services.company_research_market_inputs import (
+    CompanyResearchMarketInputs,
+)
+from app.underwriting.services.company_research_model_builder import (
+    CompanyResearchModelTemplate,
+    FrozenMarketContext,
+    StrategyAssumptionSet,
+)
 from app.underwriting.services.product_project import (
     ResearchProjectService,
     ResearchProjectView,
@@ -46,26 +74,6 @@ from app.underwriting.services.workspace_draft import (
     WorkspaceDraftContent,
     WorkspaceDraftService,
     WorkspaceDraftView,
-)
-from app.underwriting.fixtures.alphabet_golden_case import (
-    load_alphabet_golden_case_fixture,
-)
-from app.underwriting.services.company_research_market_inputs import (
-    CompanyResearchMarketInputs,
-)
-from app.underwriting.services.company_research_boundary import (
-    resolve_alphabet_company_research_boundary,
-)
-from app.underwriting.services.company_research_basis_recovery import (
-    CompanyResearchHistoricalBasisRecovery,
-)
-from app.underwriting.services.company_research_foundation import (
-    alphabet_company_research_foundation_contract,
-)
-from app.underwriting.services.company_research_model_builder import (
-    CompanyResearchModelTemplate,
-    FrozenMarketContext,
-    StrategyAssumptionSet,
 )
 
 _PREPARE_JOB_KIND = "prepare_company_research"
@@ -113,7 +121,10 @@ class CompanyResearchInitializer:
         self._product_repository = ProductRepository(session)
         self._company_repository = CompanyResearchRepository(session)
         self._drafts = WorkspaceDraftService(session, now=now)
-        self._adapters = (AlphabetCompanyResearchAdapter(),)
+        self._adapters = (
+            AlphabetCompanyResearchAdapter(),
+            CatlCompanyResearchAdapter(),
+        )
 
     @staticmethod
     def _uuid(value: object, field: str) -> UUID:
@@ -147,7 +158,11 @@ class CompanyResearchInitializer:
         raise ValidationError("Company is not supported for company research")
 
     def _preview(
-        self, *, company_id: UUID, cutoff_at: datetime
+        self,
+        *,
+        company_id: UUID,
+        cutoff_at: datetime,
+        focus_question: str | None = None,
     ) -> CompanyResearchPreview:
         company_id = self._uuid(company_id, "company_id")
         requested_cutoff = self._utc(cutoff_at, "cutoff_at")
@@ -157,7 +172,9 @@ class CompanyResearchInitializer:
             if company is None or company.kind != ResearchObjectKind.COMPANY.value:
                 raise ValidationError("company_id must identify a Company")
             adapter = self._adapter_for(company.external_key)
-            boundary = resolve_alphabet_company_research_boundary(requested_cutoff)
+            boundary = resolve_company_research_boundary(
+                company.external_key, requested_cutoff
+            )
             company_identity = self._products.effective_identity(
                 company_id, boundary.cutoff_at
             )
@@ -197,6 +214,8 @@ class CompanyResearchInitializer:
                 adapter=adapter,
                 identities=identities,
                 cutoff_at=boundary.cutoff_at,
+                strategy_version=DEFAULT_STRATEGY_VERSION,
+                focus_question=normalize_focus_question(focus_question),
             )
 
     def preview(
@@ -204,8 +223,13 @@ class CompanyResearchInitializer:
         *,
         company_id: UUID,
         cutoff_at: datetime,
+        focus_question: str | None = None,
     ) -> CompanyResearchPreview:
-        return self._preview(company_id=company_id, cutoff_at=cutoff_at)
+        return self._preview(
+            company_id=company_id,
+            cutoff_at=cutoff_at,
+            focus_question=focus_question,
+        )
 
     def _reserve_initialization(self, company_id: UUID) -> None:
         """Serialize same-company initialization without owning the transaction."""
@@ -233,7 +257,7 @@ class CompanyResearchInitializer:
         self,
         preparation: CompanyResearchPreparation,
         *,
-        cutoff_at: datetime,
+        preview: CompanyResearchPreview,
     ) -> CompanyResearchInitialization:
         project = self._products.project(preparation.project_id)
         if project is None:
@@ -253,11 +277,27 @@ class CompanyResearchInitializer:
         agenda = self._products.agenda(project.id, draft.content.agenda_id)
         basis = self._products.historical_basis(draft.content.historical_basis_id)
         job = self._company_repository.prepare_job(preparation.id)
-        if mandate is None or scope is None or agenda is None or basis is None or job is None:
+        if (
+            mandate is None
+            or scope is None
+            or agenda is None
+            or basis is None
+            or job is None
+        ):
             raise ConflictError(
                 "company research initialization foundation is incomplete"
             )
-        boundary = resolve_alphabet_company_research_boundary(cutoff_at)
+        if (
+            not isinstance(scope.payload, dict)
+            or scope.payload.get("user_focus") != preview.focus_question
+            or not isinstance(agenda.generator_provenance, dict)
+            or agenda.generator_provenance.get("input_summary_hash")
+            != preparation.request_hash
+        ):
+            raise ConflictError("company research initialization foundation is invalid")
+        boundary = resolve_company_research_boundary(
+            preview.company.external_key, preview.cutoff_at
+        )
         try:
             self._company_repository.authenticate_governed_historical_basis(
                 basis,
@@ -285,10 +325,15 @@ class CompanyResearchInitializer:
         preview_hash: str,
         company_id: UUID,
         cutoff_at: datetime,
+        focus_question: str | None,
         idempotency_key: str,
     ) -> CompanyResearchInitialization:
         idempotency_key = self._text(idempotency_key, "idempotency_key")
-        preview = self._preview(company_id=company_id, cutoff_at=cutoff_at)
+        preview = self._preview(
+            company_id=company_id,
+            cutoff_at=cutoff_at,
+            focus_question=focus_question,
+        )
         if preview_hash != preview.input_hash:
             raise ValidationError("preview_hash does not match the current preview")
         self._reserve_initialization(company_id)
@@ -303,7 +348,7 @@ class CompanyResearchInitializer:
                 )
             return self._existing_result(
                 existing_by_key,
-                cutoff_at=preview.cutoff_at,
+                preview=preview,
             )
 
         existing_by_request = self._session.scalar(
@@ -327,19 +372,22 @@ class CompanyResearchInitializer:
         preview: CompanyResearchPreview,
         idempotency_key: str,
     ) -> CompanyResearchInitialization:
-        boundary = resolve_alphabet_company_research_boundary(preview.cutoff_at)
+        boundary = resolve_company_research_boundary(
+            preview.company.external_key, preview.cutoff_at
+        )
         project = self._products.create_project(
             primary_company_id=preview.company.object_id,
             target_security_ids=tuple(
                 security.object_id for security in preview.securities
             ),
         )
-        foundation = alphabet_company_research_foundation_contract(
+        foundation = company_research_foundation_contract(
             company_external_key=preview.company.external_key,
             company_id=preview.company.object_id,
             security_ids=tuple(security.object_id for security in preview.securities),
             request_hash=preview.input_hash,
             strategy_version=preview.strategy_version,
+            focus_question=preview.focus_question,
         )
         basis = self._products.create_historical_basis(boundary.basis_input)
         mandate = self._products.append_product_mandate(
@@ -423,12 +471,14 @@ class CompanyResearchInitializer:
         preview_hash: str,
         company_id: UUID,
         cutoff_at: datetime,
+        focus_question: str | None = None,
         idempotency_key: str,
     ) -> CompanyResearchInitialization:
         return self._initialize(
             preview_hash=preview_hash,
             company_id=company_id,
             cutoff_at=cutoff_at,
+            focus_question=focus_question,
             idempotency_key=idempotency_key,
         )
 
@@ -448,7 +498,12 @@ class CompanyResearchInitializer:
         if company is None:
             raise ValidationError("company research project Company is missing")
         adapter = self._adapter_for(company.external_key)
-        fixture = load_alphabet_golden_case_fixture()
+        if company.external_key == "US:ALPHABET:COMPANY":
+            fixture = load_alphabet_golden_case_fixture()
+        elif company.external_key == "CN:300750:COMPANY":
+            fixture = load_catl_answerable_case_fixture()
+        else:
+            raise ValidationError("Company is not supported for company research")
         if fixture.cutoff != cutoff:
             raise ValidationError("governed inputs require the exact fixture cutoff")
         strategy = adapter.strategy_assumptions(fixture.strategy_assumptions)
@@ -484,9 +539,7 @@ class CompanyResearchPreparationService:
         self._now = now
         self._products = ResearchProjectService(session, now=now)
         self._company_repository = CompanyResearchRepository(session)
-        self._basis_recovery = CompanyResearchHistoricalBasisRecovery(
-            session, now=now
-        )
+        self._basis_recovery = CompanyResearchHistoricalBasisRecovery(session, now=now)
 
     def _now_utc(self) -> datetime:
         return CompanyResearchInitializer._utc(self._now(), "clock")
@@ -494,7 +547,9 @@ class CompanyResearchPreparationService:
     @staticmethod
     def _stored_utc(value: datetime) -> datetime:
         """SQLite returns timezone columns as naive values; they are stored UTC."""
-        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        return (
+            value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+        )
 
     def status(self, *, project_id: UUID) -> CompanyResearchProjectStatus:
         project_id = CompanyResearchInitializer._uuid(project_id, "project_id")
@@ -536,6 +591,4 @@ class CompanyResearchPreparationService:
                 payload={"attempt": preparation.attempt},
                 created_at=retry_at,
             )
-        return CompanyResearchProjectStatus(
-            project=project, preparation=preparation
-        )
+        return CompanyResearchProjectStatus(project=project, preparation=preparation)

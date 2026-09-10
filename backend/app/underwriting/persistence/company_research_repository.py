@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -17,14 +17,35 @@ from sqlalchemy.orm import Session
 from app.models.ledger import ConflictError, ValidationError
 from app.models.operational import Job
 from app.underwriting.domain.company_research import (
+    DEFAULT_STRATEGY_VERSION,
+    LEGACY_STRATEGY_VERSION,
     BusinessMapArtifact,
     CompanyResearchMemoArtifact,
+    CompanyResearchProcessWarning,
     JudgmentContextArtifact,
     ResearchGap,
     SourceLineageReference,
 )
+from app.underwriting.domain.company_research_artifact_codec import (
+    MODEL_ARTIFACT_KINDS,
+    CompanyResearchArtifactCodec,
+)
+from app.underwriting.domain.company_research_critical_inputs import (
+    CriticalInputDecision,
+    CriticalInputSet,
+    carry_forward_critical_input_decisions,
+    critical_input_successor_change,
+    validate_initial_critical_input_set,
+)
+from app.underwriting.domain.company_research_market_contracts import (
+    FrozenMarketSnapshotBinding,
+    FrozenMarketSnapshotRole,
+    FrozenRawComponentReference,
+)
 from app.underwriting.domain.company_research_provenance import (
+    SOURCE_REF_FIELDS,
     canonical_source_refs,
+    critical_inputs_payload_source_refs,
     evidence_payload_source_refs,
     source_record,
 )
@@ -32,8 +53,10 @@ from app.underwriting.domain.product_contracts import (
     ProductHistoricalBasisInput,
     product_historical_basis_content_hash,
 )
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
     COMPANY_RESEARCH_ARTIFACT_KINDS,
+    COMPANY_RESEARCH_ARTIFACT_ORDER,
     COMPANY_RESEARCH_PREPARATION_STATUSES,
     COMPANY_RESEARCH_PREPARATION_STEPS,
     CompanyResearchArtifactVersion,
@@ -59,15 +82,9 @@ from app.underwriting.persistence.product_models import (
 )
 from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.repository import StaleParentError
-from app.underwriting.hashing import canonical_hash
-from app.underwriting.domain.company_research_market_contracts import (
-    FrozenMarketSnapshotBinding,
-    FrozenMarketSnapshotRole,
-    FrozenRawComponentReference,
-)
-from app.underwriting.domain.company_research_artifact_codec import (
-    CompanyResearchArtifactCodec,
-    MODEL_ARTIFACT_KINDS,
+from app.underwriting.services.company_research_model_builder import (
+    EvidenceBuildMode,
+    partition_company_research_evidence,
 )
 from app.underwriting.services.market_snapshots import (
     capital_structure_snapshot_hash,
@@ -111,7 +128,6 @@ def validate_company_research_derived_gap_semantics(
     if (
         (require_embedded_memo_gaps and memo.research_gaps != gaps)
         or tuple(gap.code for gap in gaps) != memo.gap_keys
-        or tuple(gap.message for gap in gaps) != judgment.next_verification_events
         or memo.next_verification_events != judgment.next_verification_events
         or memo.strongest_counterevidence != judgment.strongest_counterevidence
         or actual != expected
@@ -330,6 +346,10 @@ class CompanyResearchPersistedBundle:
     memo: Mapping[str, object]
     source_refs: tuple[dict[str, str], ...]
     market_snapshot_bindings: tuple[FrozenMarketSnapshotBinding, ...]
+    critical_inputs_artifact_id: UUID | None = None
+    critical_inputs_content_hash: str | None = None
+    critical_inputs: Mapping[str, object] | None = None
+    process_warnings: tuple[CompanyResearchProcessWarning, ...] = ()
 
     def __post_init__(self) -> None:
         required = (
@@ -347,6 +367,31 @@ class CompanyResearchPersistedBundle:
             self.valuation_set, Mapping
         ):
             raise ValidationError("company research model bundle valuation is invalid")
+        if self.critical_inputs is not None and not isinstance(
+            self.critical_inputs, Mapping
+        ):
+            raise ValidationError(
+                "company research model bundle critical inputs are invalid"
+            )
+        if any(
+            value is not None
+            for value in (
+                self.critical_inputs_artifact_id,
+                self.critical_inputs_content_hash,
+            )
+        ) and (
+            type(self.critical_inputs_artifact_id) is not UUID
+            or not isinstance(self.critical_inputs_content_hash, str)
+            or _HASH.fullmatch(self.critical_inputs_content_hash) is None
+        ):
+            raise ValidationError(
+                "company research model bundle critical boundary is invalid"
+            )
+        if not isinstance(self.process_warnings, tuple) or not all(
+            type(warning) is CompanyResearchProcessWarning
+            for warning in self.process_warnings
+        ):
+            raise ValidationError("company research process warnings are invalid")
         if (
             type(self.evidence_artifact_id) is not UUID
             or type(self.research_gaps_artifact_id) is not UUID
@@ -369,8 +414,10 @@ class CompanyResearchPersistedBundle:
             raise ValidationError(
                 "company research model bundle valuation market refs are invalid"
             )
-        if any(
-            "_lineage" in payload for payload in (*required, self.valuation_set or {})
+        if (
+            any("_lineage" in payload for payload in required)
+            or (self.valuation_set is not None and "_lineage" in self.valuation_set)
+            or (self.critical_inputs is not None and "_lineage" in self.critical_inputs)
         ):
             raise ValidationError("company research model bundle lineage is reserved")
         if not isinstance(self.source_refs, tuple):
@@ -448,9 +495,20 @@ class CompanyResearchPersistedBundle:
             has_valuation=self.valuation_set is not None,
             require_embedded_memo_gaps=True,
         )
-        if (
-            bool(self.market_snapshot_bindings)
-            != judgment.market_security_bridge_available
+        critical_payloads = (
+            self.critical_inputs.get("inputs")
+            if isinstance(self.critical_inputs, Mapping)
+            else None
+        )
+        governed_unknown = isinstance(critical_payloads, list) and any(
+            isinstance(item, Mapping)
+            and item.get("kind") == "unknown"
+            and isinstance(item.get("gap_key"), str)
+            and str(item["gap_key"]).startswith("critical_input_marked_unknown_")
+            for item in critical_payloads
+        )
+        if bool(self.market_snapshot_bindings) != (
+            judgment.market_security_bridge_available or governed_unknown
         ):
             raise ValidationError(
                 "company research bundle market availability is inconsistent"
@@ -925,6 +983,7 @@ class CompanyResearchRepository:
         kind: str,
         payload: Mapping[str, object],
         supersedes_id: UUID | None,
+        read_compatibility: bool = False,
     ) -> None:
         if kind not in MODEL_ARTIFACT_KINDS:
             return
@@ -977,10 +1036,375 @@ class CompanyResearchRepository:
         )
         if legacy_business_map or source_gap_contract:
             return
-        CompanyResearchArtifactCodec.validate_payload(
-            kind,
-            {key: value for key, value in payload.items() if key != "_lineage"},
+        typed_payload = {
+            key: value for key, value in payload.items() if key != "_lineage"
+        }
+        if read_compatibility:
+            CompanyResearchArtifactCodec.normalize_payload_for_read(
+                kind, typed_payload
+            )
+        else:
+            CompanyResearchArtifactCodec.validate_for_write(kind, typed_payload)
+
+    @staticmethod
+    def _critical_input_payload(payload: Mapping[str, object]) -> dict[str, object]:
+        if "_lineage" in payload:
+            raise ValidationError(
+                "critical inputs cannot carry reconstructed artifact lineage"
+            )
+        return CompanyResearchArtifactCodec.validate_payload("critical_inputs", payload)
+
+    @classmethod
+    def critical_input_successor_input_hash(
+        cls,
+        *,
+        parent_content_hash: str,
+        input_key: str,
+        input_fingerprint: str,
+        decision: CriticalInputDecision,
+        replacement: Mapping[str, object] | None,
+    ) -> str:
+        cls._require_hash(parent_content_hash, "parent_content_hash")
+        cls._require_hash(input_fingerprint, "input_fingerprint")
+        if not isinstance(input_key, str) or not input_key:
+            raise ValidationError("critical input key is invalid")
+        if type(decision) is not CriticalInputDecision:
+            raise ValidationError("critical input decision is invalid")
+        if replacement is not None and not isinstance(replacement, Mapping):
+            raise ValidationError("critical input replacement is invalid")
+        return canonical_hash(
+            {
+                "schema_version": "company-research-critical-input-decision.v1",
+                "parent_content_hash": parent_content_hash,
+                "input_key": input_key,
+                "input_fingerprint": input_fingerprint,
+                "decision": decision.value,
+                "replacement": replacement,
+            }
         )
+
+    @classmethod
+    def _critical_input_successor_binding(
+        cls,
+        *,
+        parent: CompanyResearchArtifactVersion,
+        payload: Mapping[str, object],
+    ) -> tuple[dict[str, object], str]:
+        canonical_payload = cls._critical_input_payload(payload)
+        parent_set = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", parent.payload
+        )
+        successor_set = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", canonical_payload
+        )
+        if (
+            type(parent_set) is not CriticalInputSet
+            or type(successor_set) is not CriticalInputSet
+        ):
+            raise ValidationError("critical_inputs payload is invalid")
+        try:
+            changed = critical_input_successor_change(parent_set, successor_set)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        input_payloads = canonical_payload.get("inputs")
+        if not isinstance(input_payloads, list):
+            raise ValidationError("critical_inputs payload is invalid")
+        changed_payload = next(
+            (
+                value
+                for value in input_payloads
+                if isinstance(value, Mapping) and value.get("key") == changed.key
+            ),
+            None,
+        )
+        if changed_payload is None:
+            raise ValidationError("critical_inputs payload is invalid")
+        binding_hash = cls.critical_input_successor_input_hash(
+            parent_content_hash=parent.content_hash,
+            input_key=changed.key,
+            input_fingerprint=changed.input_fingerprint,
+            decision=changed.decision,
+            replacement=changed_payload.get("replacement"),
+        )
+        return canonical_payload, binding_hash
+
+    @classmethod
+    def _critical_input_rebuild_binding(
+        cls,
+        *,
+        parent: CompanyResearchArtifactVersion,
+        payload: Mapping[str, object],
+        source_refs: Sequence[Mapping[str, object]],
+    ) -> tuple[dict[str, object], str]:
+        candidate_payload = cls._critical_input_payload(payload)
+        parent_set = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", parent.payload
+        )
+        candidate_set = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", candidate_payload
+        )
+        if (
+            type(parent_set) is not CriticalInputSet
+            or type(candidate_set) is not CriticalInputSet
+        ):
+            raise ValidationError("critical_inputs payload is invalid")
+        pending = CriticalInputSet(
+            inputs=tuple(
+                replace(
+                    item,
+                    decision=CriticalInputDecision.PENDING,
+                    replacement=None,
+                )
+                for item in candidate_set.inputs
+            )
+        )
+        pending_payload = CompanyResearchArtifactCodec.encode(
+            "critical_inputs", pending
+        )
+        pending_input_payloads = pending_payload.get("inputs")
+        if not isinstance(pending_input_payloads, list) or not all(
+            isinstance(item, Mapping) for item in pending_input_payloads
+        ):
+            raise ValidationError("critical_inputs payload is invalid")
+        exact_source_refs = critical_inputs_payload_source_refs(pending_payload)
+        if tuple(source_refs) != exact_source_refs:
+            raise ValidationError(
+                "critical inputs source refs must exactly match typed inputs"
+            )
+        if cls._critical_input_rebuild_is_noop(
+            parent=parent,
+            payload=candidate_payload,
+            source_refs=exact_source_refs,
+        ):
+            raise ValidationError("critical input rebuild must change selected inputs")
+        expected = carry_forward_critical_input_decisions(parent_set, pending)
+        canonical_payload = CompanyResearchArtifactCodec.encode(
+            "critical_inputs", expected
+        )
+        model_boundary_hash = canonical_hash(
+            {
+                "schema_version": "company-research-critical-input-model-boundary.v1",
+                "selected_inputs": tuple(
+                    {
+                        "input_fingerprint": item.input_fingerprint,
+                        "impact": item_payload["impact"],
+                    }
+                    for item, item_payload in zip(
+                        pending.inputs, pending_input_payloads, strict=True
+                    )
+                ),
+            }
+        )
+        return canonical_payload, canonical_hash(
+            {
+                "schema_version": "company-research-critical-input-rebuild.v2",
+                "parent_content_hash": parent.content_hash,
+                "model_boundary_hash": model_boundary_hash,
+                "payload": canonical_payload,
+                "source_refs": exact_source_refs,
+            }
+        )
+
+    @classmethod
+    def _legacy_critical_input_rebuild_binding(
+        cls,
+        *,
+        parent: CompanyResearchArtifactVersion,
+        payload: Mapping[str, object],
+    ) -> tuple[dict[str, object], str]:
+        """Authenticate persisted v1 rebuilds without permitting new v1 writes."""
+
+        candidate_payload = cls._critical_input_payload(payload)
+        parent_set = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", parent.payload
+        )
+        candidate_set = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", candidate_payload
+        )
+        if (
+            type(parent_set) is not CriticalInputSet
+            or type(candidate_set) is not CriticalInputSet
+        ):
+            raise ValidationError("critical_inputs payload is invalid")
+        pending = CriticalInputSet(
+            inputs=tuple(
+                replace(
+                    item,
+                    decision=CriticalInputDecision.PENDING,
+                    replacement=None,
+                )
+                for item in candidate_set.inputs
+            )
+        )
+        parent_fingerprints = tuple(
+            item.input_fingerprint for item in parent_set.inputs
+        )
+        pending_fingerprints = tuple(item.input_fingerprint for item in pending.inputs)
+        if len(set(parent_fingerprints)) != len(parent_fingerprints) or len(
+            set(pending_fingerprints)
+        ) != len(pending_fingerprints):
+            raise ValidationError(
+                "legacy critical input rebuild requires unique fingerprints"
+            )
+        # Persisted v1 rebuild hashes predate key-aware carry-forward.  Keep
+        # their historical validation semantics read-only; all new v2 writes
+        # use the key-and-fingerprint identity enforced by the domain helper.
+        previous_by_fingerprint = {
+            item.input_fingerprint: item for item in parent_set.inputs
+        }
+        expected = CriticalInputSet(
+            inputs=tuple(
+                replace(
+                    candidate,
+                    decision=prior.decision,
+                    replacement=(
+                        replace(prior.replacement, key=candidate.key)
+                        if prior.replacement is not None
+                        and prior.replacement.key != candidate.key
+                        else prior.replacement
+                    ),
+                )
+                if (
+                    (prior := previous_by_fingerprint.get(candidate.input_fingerprint))
+                    is not None
+                    and prior.decision is not CriticalInputDecision.PENDING
+                )
+                else candidate
+                for candidate in pending.inputs
+            )
+        )
+        canonical_payload = CompanyResearchArtifactCodec.encode(
+            "critical_inputs", expected
+        )
+        return canonical_payload, canonical_hash(
+            {
+                "schema_version": "company-research-critical-input-rebuild.v1",
+                "parent_content_hash": parent.content_hash,
+                "selected_fingerprints": tuple(
+                    item.input_fingerprint for item in pending.inputs
+                ),
+                "payload": canonical_payload,
+            }
+        )
+
+    @classmethod
+    def _critical_input_rebuild_is_noop(
+        cls,
+        *,
+        parent: CompanyResearchArtifactVersion,
+        payload: Mapping[str, object],
+        source_refs: Sequence[Mapping[str, object]],
+    ) -> bool:
+        parent_set = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", parent.payload
+        )
+        candidate_set = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", cls._critical_input_payload(payload)
+        )
+        if (
+            type(parent_set) is not CriticalInputSet
+            or type(candidate_set) is not CriticalInputSet
+        ):
+            raise ValidationError("critical_inputs payload is invalid")
+
+        def pending(value: CriticalInputSet) -> CriticalInputSet:
+            return CriticalInputSet(
+                inputs=tuple(
+                    replace(
+                        item,
+                        decision=CriticalInputDecision.PENDING,
+                        replacement=None,
+                    )
+                    for item in value.inputs
+                )
+            )
+
+        return pending(parent_set) == pending(candidate_set) and tuple(
+            source_refs
+        ) == tuple(parent.source_refs)
+
+    @classmethod
+    def _validate_critical_input_append(
+        cls,
+        *,
+        parent: CompanyResearchArtifactVersion | None,
+        payload: Mapping[str, object],
+        source_refs: Sequence[Mapping[str, object]],
+        input_hash: str,
+        allow_legacy_rebuild: bool = False,
+    ) -> None:
+        if parent is None:
+            canonical_payload = cls._critical_input_payload(payload)
+            expected_hash = None
+        else:
+            canonical_payload = cls._critical_input_payload(payload)
+            expected_hash = None
+            decision_error: Exception | None = None
+            try:
+                decision_payload, decision_hash = cls._critical_input_successor_binding(
+                    parent=parent,
+                    payload=payload,
+                )
+            except (ValidationError, ValueError) as exc:
+                decision_payload = None
+                decision_hash = None
+                decision_error = exc
+            try:
+                rebuild_payload, rebuild_hash = cls._critical_input_rebuild_binding(
+                    parent=parent,
+                    payload=payload,
+                    source_refs=source_refs,
+                )
+            except (ValidationError, ValueError):
+                rebuild_payload = None
+                rebuild_hash = None
+            if (
+                input_hash == decision_hash
+                and decision_payload == canonical_payload
+                and tuple(source_refs) == tuple(parent.source_refs)
+            ):
+                expected_hash = decision_hash
+            elif input_hash == rebuild_hash and rebuild_payload == canonical_payload:
+                expected_hash = rebuild_hash
+            elif allow_legacy_rebuild:
+                try:
+                    legacy_payload, legacy_hash = (
+                        cls._legacy_critical_input_rebuild_binding(
+                            parent=parent,
+                            payload=payload,
+                        )
+                    )
+                except (ValidationError, ValueError):
+                    legacy_payload = None
+                    legacy_hash = None
+                if (
+                    input_hash == legacy_hash
+                    and legacy_payload == canonical_payload
+                    and tuple(source_refs) == tuple(parent.source_refs)
+                ):
+                    expected_hash = legacy_hash
+        expected_refs = critical_inputs_payload_source_refs(canonical_payload)
+        if tuple(source_refs) != expected_refs:
+            raise ValidationError(
+                "critical inputs source refs must exactly match typed inputs"
+            )
+        if parent is None:
+            successor = CompanyResearchArtifactCodec.decode(
+                "critical_inputs", canonical_payload
+            )
+            if type(successor) is not CriticalInputSet:
+                raise ValidationError("critical_inputs payload is invalid")
+            try:
+                validate_initial_critical_input_set(successor)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+            return
+        if expected_hash is None or input_hash != expected_hash:
+            if parent is not None and decision_error is not None:
+                raise ValidationError(str(decision_error)) from decision_error
+            raise ValidationError(
+                "critical input successor input hash does not match decision or rebuild binding"
+            )
 
     @staticmethod
     def _require_nonempty_text(value: str, field: str, maximum: int) -> str:
@@ -1408,7 +1832,9 @@ class CompanyResearchRepository:
             rows_by_kind.setdefault(row.kind, []).append(row)
         artifact_heads: dict[str, CompanyResearchArtifactVersion] = {}
         artifact_chains: dict[str, tuple[CompanyResearchArtifactVersion, ...]] = {}
-        for kind in sorted(rows_by_kind):
+        for kind in COMPANY_RESEARCH_ARTIFACT_ORDER:
+            if kind not in rows_by_kind:
+                continue
             try:
                 head = self.current_artifact(project_id, kind, lock=lock)
             except ConflictError as exc:
@@ -1836,15 +2262,27 @@ class CompanyResearchRepository:
                 expected_parent_id=None,
                 created_at=when,
             )
-            preparation.status = "awaiting_evidence_review"
-            preparation.current_step = "research_gaps"
+            if preparation.strategy_version not in {
+                DEFAULT_STRATEGY_VERSION,
+                LEGACY_STRATEGY_VERSION,
+            }:
+                raise ValidationError(
+                    "company research preparation strategy is unsupported"
+                )
+            automated_draft = preparation.strategy_version == DEFAULT_STRATEGY_VERSION
+            preparation.status = (
+                "building_model" if automated_draft else "awaiting_evidence_review"
+            )
+            preparation.current_step = (
+                "model_bundle" if automated_draft else "research_gaps"
+            )
             preparation.progress = 25
             preparation.next_attempt_at = None
             preparation.last_error_code = None
             preparation.updated_at = when
-            job.status = "waiting_for_review"
+            job.status = "queued" if automated_draft else "waiting_for_review"
             job.progress = 25
-            job.step = "research_gaps"
+            job.step = "model_bundle" if automated_draft else "research_gaps"
             job.error = None
             job.finished_at = None
             job.claim_token = None
@@ -2145,13 +2583,36 @@ class CompanyResearchRepository:
             securities = dict(frozen_security_ids)
         else:
             raise ValidationError("company research market snapshot binding is invalid")
+        company = self._session.get(UnderwritingResearchObject, company_id)
+        if company is None or company.kind != "company":
+            raise ValidationError("company research market snapshot binding is invalid")
+        if company.external_key == "US:ALPHABET:COMPANY":
+            market_currency = "USD"
+            fx_contract = ("USD", "CNY")
+            capital_fact_key = "capital_structure_usd"
+            price_fact_keys = {
+                key: "market_price_usd_" + key.lower().replace(":", "_")
+                for key in securities
+            }
+        elif company.external_key == "CN:300750:COMPANY":
+            market_currency = "CNY"
+            fx_contract = None
+            capital_fact_key = "capital_structure_cny"
+            price_fact_keys = {
+                key: "market_price_cny_" + key.lower().replace(":", "_")
+                for key in securities
+            }
+        else:
+            raise ValidationError("company research market snapshot binding is invalid")
         expected_roles = (
             {(FrozenMarketSnapshotRole.PRICE, key) for key in securities}
             | {(FrozenMarketSnapshotRole.SECURITY_RIGHTS, key) for key in securities}
-            | {
-                (FrozenMarketSnapshotRole.FX, None),
-                (FrozenMarketSnapshotRole.CAPITAL_STRUCTURE, None),
-            }
+            | {(FrozenMarketSnapshotRole.CAPITAL_STRUCTURE, None)}
+            | (
+                {(FrozenMarketSnapshotRole.FX, None)}
+                if fx_contract is not None
+                else set()
+            )
         )
         actual_roles = {
             (binding.role, binding.security_external_key) for binding in bindings
@@ -2159,15 +2620,12 @@ class CompanyResearchRepository:
         if actual_roles != expected_roles or len(bindings) != len(expected_roles):
             raise ValidationError("company research market snapshot binding is invalid")
         expected_fact_keys = {
-            (FrozenMarketSnapshotRole.FX, None): "usd_cny_fx",
             (
                 FrozenMarketSnapshotRole.CAPITAL_STRUCTURE,
                 None,
-            ): "capital_structure_usd",
+            ): capital_fact_key,
             **{
-                (FrozenMarketSnapshotRole.PRICE, key): (
-                    "market_price_usd_" + key.lower().replace(":", "_")
-                )
+                (FrozenMarketSnapshotRole.PRICE, key): price_fact_keys[key]
                 for key in securities
             },
             **{
@@ -2177,6 +2635,8 @@ class CompanyResearchRepository:
                 for key in securities
             },
         }
+        if fx_contract is not None:
+            expected_fact_keys[(FrozenMarketSnapshotRole.FX, None)] = "usd_cny_fx"
         role_contracts = {
             FrozenMarketSnapshotRole.PRICE: (
                 UnderwritingPriceSnapshot,
@@ -2241,7 +2701,7 @@ class CompanyResearchRepository:
             if binding.role is FrozenMarketSnapshotRole.PRICE and (
                 row.security_identity_id
                 != securities.get(binding.security_external_key)
-                or row.currency != "USD"
+                or row.currency != market_currency
                 or row.price_type != "official_close"
                 or row.adjustment_basis != "unadjusted"
             ):
@@ -2256,15 +2716,16 @@ class CompanyResearchRepository:
                     "company research market snapshot binding is invalid"
                 )
             if binding.role is FrozenMarketSnapshotRole.FX and (
-                row.base_currency != "USD"
-                or row.quote_currency != "CNY"
+                fx_contract is None
+                or row.base_currency != fx_contract[0]
+                or row.quote_currency != fx_contract[1]
                 or row.quote_direction != "quote_per_base"
             ):
                 raise ValidationError(
                     "company research market snapshot binding is invalid"
                 )
             if binding.role is FrozenMarketSnapshotRole.CAPITAL_STRUCTURE and (
-                row.company_id != company_id or row.currency != "USD"
+                row.company_id != company_id or row.currency != market_currency
             ):
                 raise ValidationError(
                     "company research market snapshot binding is invalid"
@@ -2305,12 +2766,13 @@ class CompanyResearchRepository:
                     "company research market snapshot exceeds preparation cutoff"
                 )
 
-    @staticmethod
     def expected_model_source_refs(
+        self,
         *,
         evidence: CompanyResearchArtifactVersion,
         predecessor_gaps: CompanyResearchArtifactVersion,
         market_snapshot_bindings: Sequence[FrozenMarketSnapshotBinding],
+        strategy_version: str,
     ) -> tuple[dict[str, str], ...]:
         """Derive the only source-record set a model publication may carry."""
         evidence_refs = evidence_payload_source_refs(evidence.payload)
@@ -2326,6 +2788,36 @@ class CompanyResearchRepository:
             predecessor_gaps.source_refs,
             field_name="predecessor research gaps source refs",
         )
+        if strategy_version == DEFAULT_STRATEGY_VERSION:
+            partition = partition_company_research_evidence(
+                evidence.payload,
+                self.evidence_cutoff(evidence),
+                mode=EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+            )
+            eligible_evidence_refs = canonical_source_refs(
+                tuple(
+                    {field: str(fact[field]) for field in SOURCE_REF_FIELDS}
+                    for fact in partition.eligible_facts
+                ),
+                field_name="eligible evidence model source refs",
+            )
+            eligible_identities = {
+                tuple(ref[field] for field in SOURCE_REF_FIELDS)
+                for ref in eligible_evidence_refs
+            }
+            quarantined_identities = {
+                tuple(ref[field] for field in SOURCE_REF_FIELDS)
+                for ref in evidence_refs
+            } - eligible_identities
+            gap_refs = tuple(
+                ref
+                for ref in gap_refs
+                if tuple(ref[field] for field in SOURCE_REF_FIELDS)
+                not in quarantined_identities
+            )
+            evidence_refs = eligible_evidence_refs
+        elif strategy_version != LEGACY_STRATEGY_VERSION:
+            raise ValidationError("company research strategy is unsupported")
         market_refs = tuple(
             source_record(binding.source_ref) for binding in market_snapshot_bindings
         )
@@ -2379,6 +2871,17 @@ class CompanyResearchRepository:
             or current_gaps.content_hash != bundle.research_gaps_content_hash
         ):
             raise ValidationError("company research model inputs are stale")
+        critical_boundary = None
+        if bundle.critical_inputs_artifact_id is not None:
+            critical_boundary = self.current_artifact(
+                preparation.project_id, "critical_inputs", lock=True
+            )
+            if (
+                critical_boundary is None
+                or critical_boundary.id != bundle.critical_inputs_artifact_id
+                or critical_boundary.content_hash != bundle.critical_inputs_content_hash
+            ):
+                raise ValidationError("critical input model inputs are stale")
         evidence_cutoff = self.evidence_cutoff(evidence)
         evidence_source_manifest_hash = self.evidence_source_manifest_hash(evidence)
         workspace_boundary = self.validate_workspace_market_boundary(
@@ -2397,17 +2900,36 @@ class CompanyResearchRepository:
             if isinstance(evidence.payload, dict)
             else None
         )
+        if preparation.strategy_version not in {
+            DEFAULT_STRATEGY_VERSION,
+            LEGACY_STRATEGY_VERSION,
+        }:
+            raise ValidationError(
+                "company research preparation strategy is unsupported"
+            )
+        automated_draft = preparation.strategy_version == DEFAULT_STRATEGY_VERSION
         if (
             not isinstance(facts, list)
             or not facts
             or any(
                 not isinstance(item, Mapping)
-                or item.get("review_decision") not in {"confirmed", "rejected"}
+                or (
+                    not automated_draft
+                    and item.get("review_decision") not in {"confirmed", "rejected"}
+                )
+                or (
+                    automated_draft
+                    and item.get("review_decision")
+                    not in {None, "confirmed", "rejected"}
+                )
                 for item in facts
             )
         ):
             raise ValidationError("reviewed evidence index is incomplete")
-        when = self._stored_datetime(created_at, "created_at")
+        when = max(
+            self._stored_datetime(created_at, "created_at"),
+            self._persisted_utc(preparation.updated_at),
+        )
         request_hash = self._require_hash(
             expected_request_hash, "expected_request_hash"
         )
@@ -2421,6 +2943,7 @@ class CompanyResearchRepository:
             evidence=evidence,
             predecessor_gaps=current_gaps,
             market_snapshot_bindings=market_snapshot_bindings,
+            strategy_version=preparation.strategy_version,
         )
         if bundle.source_refs != model_source_refs:
             raise ValidationError(
@@ -2429,6 +2952,44 @@ class CompanyResearchRepository:
         artifacts: list[CompanyResearchArtifactVersion] = []
 
         with self._session.begin_nested():
+            bundle_gap_items = bundle.research_gaps.get("gaps")
+            has_marked_unknown_gap = isinstance(bundle_gap_items, list) and any(
+                isinstance(item, Mapping)
+                and isinstance(item.get("code"), str)
+                and str(item["code"]).startswith("critical_input_marked_unknown_")
+                for item in bundle_gap_items
+            )
+            if has_marked_unknown_gap and bundle.research_gaps != current_gaps.payload:
+                current_critical = self.current_artifact(
+                    preparation.project_id, "critical_inputs", lock=True
+                )
+                if current_critical is None:
+                    raise ValidationError(
+                        "critical input gap rebuild requires a decision head"
+                    )
+                current_gaps = self.append_artifact(
+                    project_id=preparation.project_id,
+                    kind="research_gaps",
+                    input_hash=canonical_hash(
+                        {
+                            "schema_version": (
+                                "company-research-critical-input-gap-rebuild.v1"
+                            ),
+                            "parent_content_hash": current_gaps.content_hash,
+                            "critical_inputs_content_hash": (
+                                current_critical.content_hash
+                            ),
+                            "payload": bundle.research_gaps,
+                        }
+                    ),
+                    payload=bundle.research_gaps,
+                    source_refs=tuple(
+                        dict(value) for value in current_gaps.source_refs
+                    ),
+                    expected_parent_id=current_gaps.id,
+                    created_at=when,
+                )
+                artifacts.append(current_gaps)
 
             def append(
                 kind: str,
@@ -2438,6 +2999,10 @@ class CompanyResearchRepository:
                 artifact_id: UUID | None = None,
             ) -> CompanyResearchArtifactVersion:
                 refs = tuple(self._artifact_reference(parent) for parent in parents)
+                if critical_boundary is not None:
+                    critical_ref = self._artifact_reference(critical_boundary)
+                    if critical_ref not in refs:
+                        refs = (*refs, critical_ref)
                 current = self.current_artifact(preparation.project_id, kind, lock=True)
                 row = self.append_artifact(
                     project_id=preparation.project_id,
@@ -2493,6 +3058,72 @@ class CompanyResearchRepository:
                 (evidence, *model_rows, current_gaps),
             )
             append("memo", bundle.memo, (judgment_context,))
+            if automated_draft:
+                if bundle.critical_inputs is None:
+                    raise ValidationError(
+                        "mainline model bundle requires critical inputs"
+                    )
+                current_critical_inputs = self.current_artifact(
+                    preparation.project_id, "critical_inputs", lock=True
+                )
+                critical_payload = dict(bundle.critical_inputs)
+                critical_input_hash = canonical_hash(
+                    {
+                        "schema_version": "company-research-critical-input-selection.v1",
+                        "request_hash": request_hash,
+                        "payload": critical_payload,
+                    }
+                )
+                if current_critical_inputs is not None:
+                    critical_source_refs = critical_inputs_payload_source_refs(
+                        critical_payload
+                    )
+                    if self._critical_input_rebuild_is_noop(
+                        parent=current_critical_inputs,
+                        payload=critical_payload,
+                        source_refs=critical_source_refs,
+                    ):
+                        artifacts.append(current_critical_inputs)
+                    else:
+                        critical_payload, critical_input_hash = (
+                            self._critical_input_rebuild_binding(
+                                parent=current_critical_inputs,
+                                payload=critical_payload,
+                                source_refs=critical_source_refs,
+                            )
+                        )
+                        critical_inputs = self.append_artifact(
+                            project_id=preparation.project_id,
+                            kind="critical_inputs",
+                            input_hash=critical_input_hash,
+                            payload=critical_payload,
+                            source_refs=critical_inputs_payload_source_refs(
+                                critical_payload
+                            ),
+                            expected_parent_id=current_critical_inputs.id,
+                            created_at=when,
+                        )
+                        artifacts.append(critical_inputs)
+                else:
+                    critical_inputs = self.append_artifact(
+                        project_id=preparation.project_id,
+                        kind="critical_inputs",
+                        input_hash=critical_input_hash,
+                        payload=critical_payload,
+                        source_refs=critical_inputs_payload_source_refs(
+                            critical_payload
+                        ),
+                        expected_parent_id=None,
+                        created_at=when,
+                    )
+                    artifacts.append(critical_inputs)
+            for warning in bundle.process_warnings:
+                self.append_event(
+                    preparation_id=preparation.id,
+                    event_type="process_warning",
+                    payload=warning.canonical_payload(),
+                    created_at=when,
+                )
 
             preparation.status = "awaiting_judgment_review"
             preparation.current_step = "judgment_context"
@@ -2508,6 +3139,50 @@ class CompanyResearchRepository:
             job.claim_token = None
             self._session.flush([preparation, job])
         return preparation, tuple(artifacts)
+
+    def report_model_progress(
+        self,
+        preparation_id: UUID,
+        *,
+        project_id: UUID,
+        progress: int,
+        checkpoint: str,
+        expected_claim_token: str,
+        expected_request_hash: str,
+        expected_strategy_version: str,
+        updated_at: datetime,
+    ) -> None:
+        """Expose one safe checkpoint only while the exact model lease is live."""
+        expected = {
+            35: "analyzing_company",
+            60: "building_forecast",
+            80: "generating_report",
+        }
+        if expected.get(progress) != checkpoint:
+            raise ValidationError("company research progress checkpoint is invalid")
+        project, preparation, job = self._locked_project_preparation_job(
+            preparation_id,
+            populate_existing=True,
+        )
+        if (
+            project.id != project_id
+            or preparation.project_id != project_id
+            or preparation.status != "building_model"
+            or preparation.current_step != "model_bundle"
+            or job.status != "running"
+            or job.step != "model_bundle"
+            or job.claim_token != expected_claim_token
+            or job.cancel_requested
+            or preparation.request_hash != expected_request_hash
+            or preparation.strategy_version != expected_strategy_version
+            or progress <= preparation.progress
+        ):
+            raise ValidationError("company research preparation claim is stale")
+        when = self._stored_datetime(updated_at, "updated_at")
+        preparation.progress = progress
+        preparation.updated_at = when
+        job.progress = progress
+        self._session.flush([preparation, job])
 
     def fail_evidence_preparation(
         self,
@@ -2605,6 +3280,39 @@ class CompanyResearchRepository:
                 kind=row.kind,
                 payload=row.payload,
                 supersedes_id=row.supersedes_id,
+                read_compatibility=True,
+            )
+            if row.kind == "critical_inputs":
+                expected_refs = critical_inputs_payload_source_refs(row.payload)
+                if tuple(row.source_refs) != expected_refs:
+                    raise ValidationError(
+                        "critical inputs source refs must exactly match typed inputs"
+                    )
+                if row.supersedes_id is None:
+                    decoded = CompanyResearchArtifactCodec.decode(
+                        "critical_inputs", row.payload
+                    )
+                    if type(decoded) is not CriticalInputSet:
+                        raise ValidationError("critical_inputs payload is invalid")
+                    validate_initial_critical_input_set(decoded)
+        except ValidationError as exc:
+            raise CompanyResearchIntegrityError(str(exc)) from exc
+        except ValueError as exc:
+            raise CompanyResearchIntegrityError(str(exc)) from exc
+
+    @classmethod
+    def _validate_critical_input_link(
+        cls,
+        successor: CompanyResearchArtifactVersion,
+        parent: CompanyResearchArtifactVersion,
+    ) -> None:
+        try:
+            cls._validate_critical_input_append(
+                parent=parent,
+                payload=successor.payload,
+                source_refs=successor.source_refs,
+                input_hash=successor.input_hash,
+                allow_legacy_rebuild=True,
             )
         except ValidationError as exc:
             raise CompanyResearchIntegrityError(str(exc)) from exc
@@ -2641,7 +3349,7 @@ class CompanyResearchRepository:
                 "company research event content hash mismatch"
             )
 
-    def artifact(
+    def _artifact_row(
         self, artifact_id: UUID, *, lock: bool = False, fresh: bool = False
     ) -> CompanyResearchArtifactVersion | None:
         statement = select(CompanyResearchArtifactVersion).where(
@@ -2653,9 +3361,91 @@ class CompanyResearchRepository:
             statement = statement.with_for_update().execution_options(
                 populate_existing=True
             )
-        row = self._session.scalar(statement)
-        if row is not None:
+        return self._session.scalar(statement)
+
+    def _authenticated_artifact_chain(
+        self,
+        artifact_id: UUID,
+        *,
+        lock: bool,
+        fresh: bool = False,
+    ) -> tuple[CompanyResearchArtifactVersion, ...]:
+        seen: set[UUID] = set()
+        chain: list[CompanyResearchArtifactVersion] = []
+        current_id: UUID | None = artifact_id
+        while current_id is not None:
+            if current_id in seen:
+                raise CompanyResearchIntegrityError(
+                    "company research artifact chain contains a cycle"
+                )
+            seen.add(current_id)
+            row = self._artifact_row(current_id, lock=lock, fresh=fresh)
+            if row is None:
+                raise CompanyResearchIntegrityError(
+                    "company research artifact parent is missing"
+                )
             self._validate_artifact_row(row)
+            if row.supersedes_id is None:
+                if row.parent_content_hash is not None:
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact root has a parent content hash"
+                    )
+            else:
+                parent = self._artifact_row(
+                    row.supersedes_id,
+                    lock=lock,
+                    fresh=fresh,
+                )
+                if parent is None:
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact parent is missing"
+                    )
+                self._validate_artifact_row(parent)
+                if (
+                    parent.project_id != row.project_id
+                    or parent.kind != row.kind
+                    or parent.version != row.version - 1
+                ):
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact parent chain is invalid"
+                    )
+                if row.parent_content_hash != parent.content_hash:
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact parent content hash mismatch"
+                    )
+                if row.kind == "critical_inputs":
+                    self._validate_critical_input_link(row, parent)
+                if self._persisted_utc(row.created_at) < self._persisted_utc(
+                    parent.created_at
+                ):
+                    raise CompanyResearchIntegrityError(
+                        "company research artifact timestamps are not monotonic"
+                    )
+            chain.append(row)
+            current_id = row.supersedes_id
+        if not chain:
+            raise CompanyResearchIntegrityError(
+                "company research artifact chain is empty"
+            )
+        if chain[-1].version != 1:
+            raise CompanyResearchIntegrityError(
+                "company research artifact chain has no version-one root"
+            )
+        return tuple(reversed(chain))
+
+    def artifact(
+        self, artifact_id: UUID, *, lock: bool = False, fresh: bool = False
+    ) -> CompanyResearchArtifactVersion | None:
+        row = self._artifact_row(artifact_id, lock=lock, fresh=fresh)
+        if row is None:
+            return None
+        if row.kind == "critical_inputs":
+            return self._authenticated_artifact_chain(
+                artifact_id,
+                lock=lock,
+                fresh=fresh,
+            )[-1]
+        self._validate_artifact_row(row)
         return row
 
     def append_judgment_confirmation_memo(
@@ -2773,6 +3563,127 @@ class CompanyResearchRepository:
             created_at=created_at,
         )
 
+    def append_critical_input_successor(
+        self,
+        *,
+        project_id: UUID,
+        payload: Mapping[str, object],
+        expected_parent_id: UUID,
+        created_at: datetime,
+        artifact_id: UUID | None = None,
+    ) -> CompanyResearchArtifactVersion:
+        """Append one decision while preserving the authenticated original set."""
+
+        parent = self.artifact(expected_parent_id)
+        if (
+            parent is None
+            or parent.project_id != project_id
+            or parent.kind != "critical_inputs"
+        ):
+            raise StaleParentError("expected parent is not the company artifact head")
+        canonical_payload, input_hash = self._critical_input_successor_binding(
+            parent=parent,
+            payload=payload,
+        )
+        return self.append_artifact(
+            project_id=project_id,
+            kind="critical_inputs",
+            input_hash=input_hash,
+            payload=canonical_payload,
+            source_refs=parent.source_refs,
+            expected_parent_id=expected_parent_id,
+            created_at=created_at,
+            artifact_id=artifact_id,
+        )
+
+    def append_critical_input_rebuild(
+        self,
+        *,
+        project_id: UUID,
+        payload: Mapping[str, object],
+        expected_parent_id: UUID,
+        created_at: datetime,
+        artifact_id: UUID | None = None,
+    ) -> CompanyResearchArtifactVersion:
+        """Append a changed authenticated model selection with exact new refs."""
+
+        parent = self.artifact(expected_parent_id)
+        if (
+            parent is None
+            or parent.project_id != project_id
+            or parent.kind != "critical_inputs"
+        ):
+            raise StaleParentError("expected parent is not the company artifact head")
+        source_refs = critical_inputs_payload_source_refs(payload)
+        canonical_payload, input_hash = self._critical_input_rebuild_binding(
+            parent=parent,
+            payload=payload,
+            source_refs=source_refs,
+        )
+        return self.append_artifact(
+            project_id=project_id,
+            kind="critical_inputs",
+            input_hash=input_hash,
+            payload=canonical_payload,
+            source_refs=critical_inputs_payload_source_refs(canonical_payload),
+            expected_parent_id=expected_parent_id,
+            created_at=created_at,
+            artifact_id=artifact_id,
+        )
+
+    def queue_critical_input_model_rebuild(
+        self,
+        *,
+        state: CompanyResearchPublicationState,
+        critical_inputs: CompanyResearchArtifactVersion,
+        updated_at: datetime,
+    ) -> None:
+        """Queue a fenced rebuild bound to the current decision successor."""
+
+        preparation = state.preparation
+        job = state.job
+        current_critical_inputs = self.current_artifact(
+            state.project.id, "critical_inputs", lock=True
+        )
+        if (
+            critical_inputs.project_id != state.project.id
+            or critical_inputs.kind != "critical_inputs"
+            or current_critical_inputs is None
+            or current_critical_inputs.id != critical_inputs.id
+            or preparation.strategy_version != DEFAULT_STRATEGY_VERSION
+            or preparation.status != "awaiting_judgment_review"
+            or preparation.current_step != "judgment_context"
+            or preparation.progress != 85
+            or job.status != "waiting_for_review"
+            or job.step != "judgment_context"
+            or job.progress != 85
+            or job.claim_token is not None
+            or job.cancel_requested
+        ):
+            raise ConflictError("critical input model rebuild is stale")
+        when = self._stored_datetime(updated_at, "updated_at")
+        if when < max(
+            self._persisted_utc(preparation.updated_at),
+            self._persisted_utc(critical_inputs.created_at),
+        ):
+            raise ValidationError("critical input model rebuild clock regressed")
+        preparation.status = "building_model"
+        preparation.current_step = "model_bundle"
+        preparation.progress = 25
+        preparation.next_attempt_at = None
+        preparation.last_error_code = None
+        preparation.attempt += 1
+        preparation.updated_at = when
+        job.status = "queued"
+        job.step = "model_bundle"
+        job.progress = 25
+        job.error = None
+        job.started_at = None
+        job.finished_at = None
+        job.claim_token = None
+        job.attempt += 1
+        self._session.flush([preparation, job])
+
     def append_artifact(
         self,
         *,
@@ -2805,15 +3716,22 @@ class CompanyResearchRepository:
             raise ValidationError(
                 "company research artifact created_at precedes its parent"
             )
+        input_hash = self._require_hash(input_hash, "input_hash")
         self._validate_typed_artifact_payload(
             kind=kind,
             payload=payload,
             supersedes_id=actual_parent_id,
         )
+        if kind == "critical_inputs":
+            self._validate_critical_input_append(
+                parent=parent,
+                payload=payload,
+                source_refs=source_refs,
+                input_hash=input_hash,
+            )
         version = 1 if parent is None else parent.version + 1
         copied_payload = deepcopy(dict(payload))
         copied_refs = deepcopy(list(source_refs))
-        input_hash = self._require_hash(input_hash, "input_hash")
         row = CompanyResearchArtifactVersion(
             id=artifact_id,
             project_id=project_id,
@@ -2849,66 +3767,7 @@ class CompanyResearchRepository:
         self, artifact_id: UUID, *, lock: bool = False
     ) -> tuple[CompanyResearchArtifactVersion, ...]:
         """Return root-to-leaf chain after iteratively validating every link."""
-        seen: set[UUID] = set()
-        chain: list[CompanyResearchArtifactVersion] = []
-        current_id: UUID | None = artifact_id
-        expected_project_id: UUID | None = None
-        expected_kind: str | None = None
-        expected_version: int | None = None
-        while current_id is not None:
-            if current_id in seen:
-                raise CompanyResearchIntegrityError(
-                    "company research artifact chain contains a cycle"
-                )
-            seen.add(current_id)
-            row = self.artifact(current_id, lock=lock)
-            if row is None:
-                raise CompanyResearchIntegrityError(
-                    "company research artifact parent is missing"
-                )
-            if expected_project_id is not None and (
-                row.project_id != expected_project_id
-                or row.kind != expected_kind
-                or row.version != expected_version
-            ):
-                raise CompanyResearchIntegrityError(
-                    "company research artifact parent chain is invalid"
-                )
-            if row.supersedes_id is None:
-                if row.parent_content_hash is not None:
-                    raise CompanyResearchIntegrityError(
-                        "company research artifact root has a parent content hash"
-                    )
-            else:
-                parent = self.artifact(row.supersedes_id, lock=lock)
-                if parent is None:
-                    raise CompanyResearchIntegrityError(
-                        "company research artifact parent is missing"
-                    )
-                if row.parent_content_hash != parent.content_hash:
-                    raise CompanyResearchIntegrityError(
-                        "company research artifact parent content hash mismatch"
-                    )
-                if self._persisted_utc(row.created_at) < self._persisted_utc(
-                    parent.created_at
-                ):
-                    raise CompanyResearchIntegrityError(
-                        "company research artifact timestamps are not monotonic"
-                    )
-            chain.append(row)
-            expected_project_id = row.project_id
-            expected_kind = row.kind
-            expected_version = row.version - 1
-            current_id = row.supersedes_id
-        if not chain:
-            raise CompanyResearchIntegrityError(
-                "company research artifact chain is empty"
-            )
-        if chain[-1].version != 1:
-            raise CompanyResearchIntegrityError(
-                "company research artifact chain has no version-one root"
-            )
-        return tuple(reversed(chain))
+        return self._authenticated_artifact_chain(artifact_id, lock=lock)
 
     def current_artifact(
         self, project_id: UUID, kind: str, *, lock: bool = False

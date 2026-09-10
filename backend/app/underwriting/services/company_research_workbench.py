@@ -18,12 +18,14 @@ from app.underwriting.domain.company_research import (
     JudgmentContextArtifact,
     ResearchGap,
 )
-from app.underwriting.hashing import canonical_hash
+from app.underwriting.domain.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
+from app.underwriting.domain.company_research_provenance import canonical_source_refs
 from app.underwriting.fixtures.alphabet_golden_case import (
     LEGACY_EVIDENCE_MANIFEST_CONTENT_SHA256,
 )
-from app.underwriting.domain.company_research_provenance import canonical_source_refs
-from app.underwriting.persistence.models import UnderwritingResearchVersion
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchArtifactVersion,
     CompanyResearchPreparation,
@@ -33,11 +35,8 @@ from app.underwriting.persistence.company_research_repository import (
     reconcile_company_research_evidence_audit,
     validate_company_research_derived_gap_semantics,
 )
+from app.underwriting.persistence.models import UnderwritingResearchVersion
 from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.domain.company_research_artifact_codec import (
-    CompanyResearchArtifactCodec,
-)
-from app.underwriting.services.workspace_draft import WorkspaceDraftService
 from app.underwriting.services.company_research_model_builder import (
     validate_company_research_evidence_payload_for_read,
 )
@@ -45,6 +44,7 @@ from app.underwriting.services.company_research_sources import (
     CompanyResearchProviderInput,
     authenticate_governed_reviewed_evidence,
 )
+from app.underwriting.services.workspace_draft import WorkspaceDraftService
 
 ModuleState = Literal["not_started", "preparing", "needs_review", "ready", "blocked"]
 _MAX_ARTIFACT_HISTORY = 2048
@@ -196,20 +196,34 @@ class CompanyResearchWorkbench:
             raise ValidationError(
                 "company research artifact source refs are duplicated"
             )
+        artifact_payload = row.payload
         closed_model_artifact = "_lineage" in row.payload
         if closed_model_artifact:
-            CompanyResearchArtifactCodec.validate_payload(
+            validated_payload = CompanyResearchArtifactCodec.normalize_payload_for_read(
                 row.kind,
                 {key: value for key, value in row.payload.items() if key != "_lineage"},
             )
+            if row.kind == "valuation_set":
+                artifact_payload = {
+                    **validated_payload,
+                    "_lineage": row.payload["_lineage"],
+                }
         if row.kind == "evidence_index":
             validate_company_research_evidence_payload_for_read(row.payload)
-            if set(row.payload) != {
+            evidence_fields = {
                 "fixture_content_hash",
                 "cutoff",
                 "company_external_key",
                 "security_external_keys",
                 "facts",
+            }
+            judgment_fields = {
+                "counterevidence_fact_keys",
+                "next_verification_events",
+            }
+            if set(row.payload) not in {
+                frozenset(evidence_fields),
+                frozenset(evidence_fields | judgment_fields),
             }:
                 raise ValidationError("evidence index payload is invalid")
             facts = row.payload.get("facts")
@@ -222,50 +236,25 @@ class CompanyResearchWorkbench:
                 or len(set(keys)) != len(keys)
             ):
                 raise ValidationError("evidence index fact keys are invalid")
-            required_fact_keys = {
-                "fact_key",
-                "company_external_key",
-                "business_module",
-                "metric_key",
-                "value",
-                "value_kind",
-                "currency",
-                "unit",
-                "period_start",
-                "period_end",
-                "published_at",
-                "available_at",
-                "source_role",
-                "source_url",
-                "source_locator",
-                "raw_hash",
-            }
-            if any(
-                set(fact)
-                not in (required_fact_keys, required_fact_keys | {"review_decision"})
-                for fact in facts
-            ):
-                raise ValidationError("evidence index fact schema is invalid")
-            if any(
-                "review_decision" in fact
-                and fact["review_decision"] not in {"confirmed", "rejected"}
-                for fact in facts
-            ):
-                raise ValidationError("evidence index review decision is invalid")
         elif row.kind == "research_gaps" and not closed_model_artifact:
-            if set(row.payload) != {
-                "fixture_content_hash",
-                "company_external_key",
-                "gaps",
-            }:
-                raise ValidationError("research gaps payload is invalid")
-            gaps = row.payload["gaps"]
-            if not isinstance(gaps, list) or any(
-                not isinstance(gap, dict)
-                or set(gap) != {"gap_key", "business_module", "reason"}
-                for gap in gaps
-            ):
-                raise ValidationError("research gaps payload is invalid")
+            if set(row.payload) == {"gaps"}:
+                CompanyResearchArtifactCodec.validate_payload(
+                    "research_gaps", row.payload
+                )
+            else:
+                if set(row.payload) != {
+                    "fixture_content_hash",
+                    "company_external_key",
+                    "gaps",
+                }:
+                    raise ValidationError("research gaps payload is invalid")
+                gaps = row.payload["gaps"]
+                if not isinstance(gaps, list) or any(
+                    not isinstance(gap, dict)
+                    or set(gap) != {"gap_key", "business_module", "reason"}
+                    for gap in gaps
+                ):
+                    raise ValidationError("research gaps payload is invalid")
         elif row.kind == "business_map" and not closed_model_artifact:
             if set(row.payload) != {
                 "evidence_index_id",
@@ -297,7 +286,7 @@ class CompanyResearchWorkbench:
             row.version,
             row.input_hash,
             row.content_hash,
-            row.payload,
+            artifact_payload,
             tuple(row.source_refs),
         )
 
@@ -416,8 +405,65 @@ class CompanyResearchWorkbench:
         if preparation is None:
             raise ValidationError("company research cross-artifact lineage is invalid")
 
+        business_lineage = heads["business_map"].payload.get("_lineage")
+        business_refs = (
+            business_lineage.get("artifact_refs")
+            if isinstance(business_lineage, dict)
+            else None
+        )
+        critical_model_refs = (
+            [
+                ref
+                for ref in business_refs
+                if isinstance(ref, dict)
+                and ref.get("artifact_kind") == "critical_inputs"
+            ]
+            if isinstance(business_refs, list)
+            else []
+        )
+        if len(critical_model_refs) > 1:
+            raise ValidationError("company research critical model lineage is invalid")
+        critical_model_ref = critical_model_refs[0] if critical_model_refs else None
+        if critical_model_ref is not None:
+            try:
+                critical_model_row = history_by_id[
+                    UUID(critical_model_ref["artifact_id"])
+                ]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValidationError(
+                    "company research critical model lineage is invalid"
+                ) from exc
+            if (
+                critical_model_row.kind != "critical_inputs"
+                or critical_model_ref.get("content_hash")
+                != critical_model_row.content_hash
+            ):
+                raise ValidationError(
+                    "company research critical model lineage is invalid"
+                )
+            critical_head = heads.get("critical_inputs")
+            seen: set[UUID] = set()
+            while (
+                critical_head is not None
+                and critical_head.id != critical_model_row.id
+                and critical_head.id not in seen
+            ):
+                seen.add(critical_head.id)
+                critical_head = (
+                    history_by_id.get(critical_head.supersedes_id)
+                    if critical_head.supersedes_id is not None
+                    else None
+                )
+            if critical_head is None or critical_head.id != critical_model_row.id:
+                raise ValidationError(
+                    "company research critical model lineage is invalid"
+                )
+
         def expected(*kinds: str) -> list[dict[str, str]]:
-            return [self._lineage_reference(heads[kind]) for kind in kinds]
+            refs = [self._lineage_reference(heads[kind]) for kind in kinds]
+            if critical_model_ref is not None:
+                refs.append(critical_model_ref)
+            return refs
 
         memo_has_embedded_gaps = "research_gaps" in heads["memo"].payload
         expectations: dict[str, list[dict[str, str]]] = {
@@ -475,9 +521,21 @@ class CompanyResearchWorkbench:
         market_available = heads["judgment_context"].payload.get(
             "market_security_bridge_available"
         )
+        critical_payloads = (
+            heads["critical_inputs"].payload.get("inputs")
+            if "critical_inputs" in heads
+            else None
+        )
+        governed_unknown = isinstance(critical_payloads, list) and any(
+            isinstance(item, dict)
+            and item.get("kind") == "unknown"
+            and isinstance(item.get("gap_key"), str)
+            and str(item["gap_key"]).startswith("critical_input_marked_unknown_")
+            for item in critical_payloads
+        )
         if (
             type(market_available) is not bool
-            or bool(expected_market_ids) != market_available
+            or bool(expected_market_ids) != (market_available or governed_unknown)
             or ("valuation_set" in heads and not expected_market_ids)
         ):
             raise ValidationError("company research cross-artifact lineage is invalid")
@@ -529,13 +587,19 @@ class CompanyResearchWorkbench:
                 )
         current_gaps = heads["research_gaps"]
         if memo_has_embedded_gaps:
+            governed_source_gaps = current_gaps
+            while governed_source_gaps.supersedes_id is not None:
+                parent = history_by_id.get(governed_source_gaps.supersedes_id)
+                if parent is None or parent.kind != "research_gaps":
+                    raise ValidationError(
+                        "company research model source refs are invalid"
+                    )
+                governed_source_gaps = parent
             if (
-                current_gaps.project_id != project_id
-                or current_gaps.version != 1
-                or current_gaps.supersedes_id is not None
+                governed_source_gaps.project_id != project_id
+                or governed_source_gaps.version != 1
             ):
                 raise ValidationError("company research model source refs are invalid")
-            governed_source_gaps = current_gaps
         else:
             governed_source_gaps = (
                 history_by_id.get(current_gaps.supersedes_id)
@@ -556,6 +620,7 @@ class CompanyResearchWorkbench:
             evidence=heads["evidence_index"],
             predecessor_gaps=governed_source_gaps,
             market_snapshot_bindings=parsed,
+            strategy_version=preparation.strategy_version,
         )
         for kind in expectations:
             row = heads[kind]
@@ -932,7 +997,8 @@ class CompanyResearchWorkbench:
             len(
                 {
                     canonical_hash(ref)
-                    for item in heads.values()
+                    for kind, item in heads.items()
+                    if kind in _ARTIFACT_ORDER
                     for ref in item.source_refs
                 }
             ),

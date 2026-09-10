@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
@@ -12,9 +12,33 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.ai.client import LLMClient
 from app.models.ledger import ValidationError
 from app.models.operational import Job
 from app.repositories.operational import JobRepository
+from app.underwriting.domain.company_research import (
+    DEFAULT_STRATEGY_VERSION,
+    LEGACY_STRATEGY_VERSION,
+    CompanyResearchAssessment,
+    CompanyResearchIdentitySet,
+    CompanyResearchMemoArtifact,
+    CompanyResearchValidationError,
+)
+from app.underwriting.domain.company_research_artifact_codec import (
+    CompanyResearchArtifactCodec,
+)
+from app.underwriting.domain.company_research_critical_inputs import (
+    CriticalInputCandidate,
+    CriticalInputDecision,
+    CriticalInputKind,
+    CriticalInputSet,
+    select_critical_inputs,
+)
+from app.underwriting.domain.company_research_provenance import canonical_source_refs
+from app.underwriting.fixtures.alphabet_golden_case import (
+    AlphabetGoldenCaseFixtureError,
+)
+from app.underwriting.hashing import canonical_hash
 from app.underwriting.persistence.company_research_models import (
     CompanyResearchPreparation,
 )
@@ -24,44 +48,33 @@ from app.underwriting.persistence.company_research_repository import (
     CompanyResearchRepository,
     reconcile_company_research_evidence_audit,
 )
+from app.underwriting.persistence.models import UnderwritingResearchObject
+from app.underwriting.persistence.product_models import UnderwritingResearchProject
+from app.underwriting.persistence.product_repository import ProductRepository
 from app.underwriting.persistence.repository import StaleParentError
-from app.underwriting.services.company_research_sources import (
-    CompanyResearchEvidenceCompilation,
-    CompanyResearchProviderInput,
-    CompanyResearchSourceCompiler,
-    authenticate_governed_reviewed_evidence,
+from app.underwriting.services.company_research_ai_memo import (
+    CompanyResearchAIMemoAdapter,
 )
-from app.underwriting.domain.company_research_artifact_codec import (
-    CompanyResearchArtifactCodec,
+from app.underwriting.services.company_research_boundary import (
+    resolve_company_research_boundary,
 )
 from app.underwriting.services.company_research_initializer import (
     CompanyResearchGovernedInputs,
     CompanyResearchInitializer,
 )
-from app.underwriting.services.company_research_boundary import (
-    resolve_alphabet_company_research_boundary,
-)
 from app.underwriting.services.company_research_model_builder import (
     CompanyResearchBuildInput,
     CompanyResearchBuildResult,
     CompanyResearchModelBuilder,
+    EvidenceBuildMode,
+)
+from app.underwriting.services.company_research_sources import (
+    CompanyResearchEvidenceCompilation,
+    CompanyResearchProviderInput,
+    CompanyResearchSourceCompiler,
+    authenticate_governed_evidence_chain,
 )
 from app.underwriting.services.workspace_draft import WorkspaceDraftService
-from app.underwriting.domain.company_research import (
-    CompanyResearchAssessment,
-    CompanyResearchIdentitySet,
-    CompanyResearchMemoArtifact,
-)
-from app.underwriting.hashing import canonical_hash
-from app.underwriting.persistence.models import UnderwritingResearchObject
-from app.underwriting.persistence.product_models import UnderwritingResearchProject
-from app.underwriting.persistence.product_repository import ProductRepository
-from app.underwriting.fixtures.alphabet_golden_case import (
-    AlphabetGoldenCaseFixtureError,
-)
-from app.underwriting.domain.company_research import CompanyResearchValidationError
-from app.underwriting.domain.company_research_provenance import canonical_source_refs
-
 
 COMPANY_RESEARCH_STAGES = (
     "prepare_sources",
@@ -96,6 +109,8 @@ class CompanyResearchClaim:
     strategy_version: str
     step: str
     claimed_at: datetime
+    critical_inputs_artifact_id: UUID | None
+    critical_inputs_content_hash: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +126,9 @@ class _ModelBuildBoundary:
     workspace_draft_lock_version: int
     historical_basis_id: UUID
     historical_basis_content_hash: str
+    critical_inputs_artifact_id: UUID | None
+    critical_inputs_content_hash: str | None
+    market_snapshot_bindings: tuple
     source_refs: tuple[dict[str, str], ...]
 
 
@@ -130,6 +148,7 @@ class CompanyResearchPreparationWorker:
             [CompanyResearchBuildInput], CompanyResearchBuildResult
         ]
         | None = None,
+        llm_client: LLMClient | None = None,
     ) -> None:
         self._session = session
         self._now = now
@@ -137,6 +156,7 @@ class CompanyResearchPreparationWorker:
         self._jobs = JobRepository(session)
         self._provider = provider
         self._model_provider = model_provider
+        self._llm_client = llm_client
 
     def _utcnow(self) -> datetime:
         value = self._now()
@@ -241,17 +261,51 @@ class CompanyResearchPreparationWorker:
                     )
                 ):
                     continue
+                stage = job.step
+                critical_inputs_artifact_id = None
+                critical_inputs_content_hash = None
+                if (
+                    stage == "model_bundle"
+                    and preparation.strategy_version == DEFAULT_STRATEGY_VERSION
+                ):
+                    critical_head = self._repository.current_artifact(
+                        preparation.project_id, "critical_inputs", lock=True
+                    )
+                    queued = next(
+                        (
+                            event
+                            for event in reversed(
+                                self._repository.events(preparation.id, lock=True)
+                            )
+                            if event.event_type == "model_rebuild_queued"
+                        ),
+                        None,
+                    )
+                    if queued is not None:
+                        if critical_head is None or queued.payload != {
+                            "critical_inputs_artifact_id": str(critical_head.id),
+                            "critical_inputs_content_hash": critical_head.content_hash,
+                        }:
+                            raise ValidationError(
+                                "critical input model rebuild boundary is stale"
+                            )
+                        critical_inputs_artifact_id = critical_head.id
+                        critical_inputs_content_hash = critical_head.content_hash
                 token = secrets.token_hex(16)
                 job.status = "running"
                 job.started_at = now
                 job.claim_token = token
-                stage = job.step
                 preparation.status = (
                     "preparing_sources"
                     if stage == "evidence_index"
                     else "building_model"
                 )
                 preparation.progress = 5 if stage == "evidence_index" else 30
+                if (
+                    stage == "model_bundle"
+                    and preparation.strategy_version == DEFAULT_STRATEGY_VERSION
+                ):
+                    preparation.progress = 25
                 preparation.updated_at = now
                 self._jobs.append_event(
                     job_id=job.id,
@@ -260,12 +314,27 @@ class CompanyResearchPreparationWorker:
                     step=stage,
                     message=f"company research {stage} job claimed",
                 )
+                claim_payload: dict[str, object] = {
+                    "stage": stage,
+                    "attempt": job.attempt,
+                }
+                if critical_inputs_artifact_id is not None:
+                    claim_payload.update(
+                        {
+                            "critical_inputs_artifact_id": str(
+                                critical_inputs_artifact_id
+                            ),
+                            "critical_inputs_content_hash": (
+                                critical_inputs_content_hash
+                            ),
+                        }
+                    )
                 self._repository.append_event(
                     preparation_id=preparation.id,
                     event_type="source_stage_claimed"
                     if stage == "evidence_index"
                     else "model_stage_claimed",
-                    payload={"stage": stage, "attempt": job.attempt},
+                    payload=claim_payload,
                     created_at=now,
                 )
                 self._session.flush()
@@ -277,6 +346,8 @@ class CompanyResearchPreparationWorker:
                     strategy_version=preparation.strategy_version,
                     step=stage,
                     claimed_at=now,
+                    critical_inputs_artifact_id=critical_inputs_artifact_id,
+                    critical_inputs_content_hash=critical_inputs_content_hash,
                 )
         return None
 
@@ -679,6 +750,95 @@ class CompanyResearchPreparationWorker:
             self._session, now=self._now
         ).governed_inputs(project_id=project_id, cutoff_at=cutoff_at)
 
+    def _critical_input_overlays(
+        self,
+        preparation: CompanyResearchPreparation,
+        claim: CompanyResearchClaim,
+    ):
+        if preparation.strategy_version != DEFAULT_STRATEGY_VERSION:
+            return (), (), None
+        if claim.critical_inputs_artifact_id is None:
+            return (), (), None
+        head = self._repository.artifact(
+            claim.critical_inputs_artifact_id, fresh=True
+        )
+        current_head = self._repository.current_artifact(
+            preparation.project_id, "critical_inputs"
+        )
+        if (
+            head is None
+            or head.project_id != preparation.project_id
+            or head.kind != "critical_inputs"
+            or head.content_hash != claim.critical_inputs_content_hash
+            or current_head is None
+            or current_head.id != head.id
+            or current_head.content_hash != head.content_hash
+        ):
+            raise ValidationError("critical input model inputs are stale")
+        decoded = CompanyResearchArtifactCodec.decode(
+            "critical_inputs", head.payload
+        )
+        if type(decoded) is not CriticalInputSet:
+            raise ValidationError("critical_inputs payload is invalid")
+        replacements = tuple(
+            sorted(
+                (
+                    (
+                        item.replacement
+                        if item.replacement is not None
+                        else CriticalInputCandidate(
+                            key=item.key,
+                            kind=item.kind,
+                            value=item.value,
+                            period=item.period,
+                            unit=item.unit,
+                            currency=item.currency,
+                            source_ref=item.source_ref,
+                            provider=item.provider,
+                            available_at=item.available_at,
+                            coverage=item.coverage,
+                            rationale=item.rationale,
+                            assumption_key=item.assumption_key,
+                            equation_id=item.equation_id,
+                            parent_input_keys=item.parent_input_keys,
+                            unknown_reason=item.unknown_reason,
+                            gap_key=item.gap_key,
+                        )
+                    )
+                    for item in decoded.inputs
+                    if (
+                        item.decision
+                        is CriticalInputDecision.REPLACED_WITH_USER_ASSUMPTION
+                        and item.replacement is not None
+                    )
+                    or (
+                        item.kind is CriticalInputKind.USER_ASSUMPTION
+                        and item.assumption_key is not None
+                        and ":user_assumption_" in item.assumption_key
+                    )
+                ),
+                key=lambda item: item.key,
+            )
+        )
+        unknowns = tuple(
+            sorted(
+                (
+                    item
+                    for item in decoded.inputs
+                    if item.decision is CriticalInputDecision.MARKED_UNKNOWN
+                    or (
+                        item.kind is CriticalInputKind.UNKNOWN
+                        and item.gap_key is not None
+                        and item.gap_key.startswith(
+                            "critical_input_marked_unknown_"
+                        )
+                    )
+                ),
+                key=lambda item: item.key,
+            )
+        )
+        return replacements, unknowns, head
+
     def _model_input(self, claim: CompanyResearchClaim) -> _ModelBuildBoundary:
         preparation = self._session.get(
             CompanyResearchPreparation, claim.preparation_id
@@ -699,7 +859,7 @@ class CompanyResearchPreparationWorker:
         if evidence is None or gaps is None:
             raise ValidationError("reviewed evidence and research gaps are required")
         evidence_chain = self._repository.artifact_chain(evidence.id)
-        source_contract = authenticate_governed_reviewed_evidence(
+        source_contract = authenticate_governed_evidence_chain(
             provider_input=self._provider_input(preparation),
             evidence_chain=evidence_chain,
             research_gaps=gaps,
@@ -720,7 +880,8 @@ class CompanyResearchPreparationWorker:
             project_id=preparation.project_id,
             cutoff_at=cutoff,
         )
-        expected_boundary = resolve_alphabet_company_research_boundary(
+        expected_boundary = resolve_company_research_boundary(
+            preview.company.external_key,
             cutoff,
             source_manifest_hash=source_contract.input_hash,
         )
@@ -753,6 +914,9 @@ class CompanyResearchPreparationWorker:
             raise ValidationError(
                 "company research historical basis does not match governed model contract"
             )
+        replacements, unknowns, critical_head = self._critical_input_overlays(
+            preparation, claim
+        )
         bindings = (
             governed.market_context.snapshot_bindings
             if governed.market_context is not None
@@ -762,7 +926,17 @@ class CompanyResearchPreparationWorker:
             evidence=evidence,
             predecessor_gaps=gaps,
             market_snapshot_bindings=bindings,
+            strategy_version=preparation.strategy_version,
         )
+        try:
+            evidence_build_mode = {
+                DEFAULT_STRATEGY_VERSION: EvidenceBuildMode.AUTHENTICATED_AI_DRAFT,
+                LEGACY_STRATEGY_VERSION: EvidenceBuildMode.HUMAN_REVIEWED,
+            }[preparation.strategy_version]
+        except KeyError as exc:
+            raise ValidationError(
+                "company research preparation strategy is unsupported"
+            ) from exc
         build_input = CompanyResearchBuildInput(
             project_id=preparation.project_id,
             identity_set=CompanyResearchIdentitySet(
@@ -781,6 +955,18 @@ class CompanyResearchPreparationWorker:
             model_template=governed.model_template,
             strategy_assumptions=governed.strategy_assumptions,
             market_context=governed.market_context,
+            evidence_build_mode=evidence_build_mode,
+            critical_input_replacements=replacements,
+            critical_input_unknowns=unknowns,
+            critical_inputs_artifact_id=(
+                critical_head.id if critical_head is not None else None
+            ),
+            critical_inputs_content_hash=(
+                critical_head.content_hash if critical_head is not None else None
+            ),
+        )
+        build_input = CompanyResearchModelBuilder.apply_critical_input_overlays(
+            build_input
         )
         return _ModelBuildBoundary(
             build_input=build_input,
@@ -792,15 +978,70 @@ class CompanyResearchPreparationWorker:
             workspace_draft_lock_version=draft.lock_version,
             historical_basis_id=historical_basis_id,
             historical_basis_content_hash=authenticated_basis.content_hash,
+            critical_inputs_artifact_id=(
+                critical_head.id if critical_head is not None else None
+            ),
+            critical_inputs_content_hash=(
+                critical_head.content_hash if critical_head is not None else None
+            ),
+            market_snapshot_bindings=bindings,
             source_refs=source_refs,
         )
 
+    def _report_model_progress(
+        self,
+        claim: CompanyResearchClaim,
+        *,
+        project_id: UUID,
+        progress: int,
+        checkpoint: str,
+    ) -> None:
+        self._repository.report_model_progress(
+            claim.preparation_id,
+            project_id=project_id,
+            progress=progress,
+            checkpoint=checkpoint,
+            expected_claim_token=claim.claim_token,
+            expected_request_hash=claim.request_hash,
+            expected_strategy_version=claim.strategy_version,
+            updated_at=self._utcnow(),
+        )
+        self._session.commit()
+
     def _compile_model(
-        self, build_input: CompanyResearchBuildInput
+        self,
+        build_input: CompanyResearchBuildInput,
+        *,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> CompanyResearchBuildResult:
         if self._model_provider is not None:
-            return self._model_provider(build_input)
-        return CompanyResearchModelBuilder().build(build_input)
+            if progress_callback is not None:
+                progress_callback(35, "analyzing_company")
+            result = self._model_provider(build_input)
+            if progress_callback is not None:
+                progress_callback(60, "building_forecast")
+        else:
+            result = CompanyResearchModelBuilder().build(
+                build_input,
+                progress_callback=progress_callback,
+            )
+        if (
+            type(result) is CompanyResearchBuildResult
+            and build_input.evidence_build_mode
+            is EvidenceBuildMode.AUTHENTICATED_AI_DRAFT
+        ):
+            outcome = CompanyResearchAIMemoAdapter(self._llm_client).enrich(
+                build_input=build_input,
+                build_result=result,
+            )
+            result = replace(
+                result,
+                memo=outcome.memo,
+                process_warnings=outcome.warnings,
+            )
+        if progress_callback is not None:
+            progress_callback(80, "generating_report")
+        return result
 
     @staticmethod
     def _persisted_bundle(
@@ -831,11 +1072,13 @@ class CompanyResearchPreparationWorker:
         }
         if result.valuation_set is not None:
             values["valuation_set"] = result.valuation_set
+        values["critical_inputs"] = select_critical_inputs(
+            result.critical_input_dependency_graph
+        )
         payloads = {
             kind: CompanyResearchArtifactCodec.encode(kind, artifact)
             for kind, artifact in values.items()
         }
-        market_context = boundary.build_input.market_context
         return CompanyResearchPersistedBundle(
             evidence_artifact_id=boundary.evidence_artifact_id,
             evidence_content_hash=boundary.evidence_content_hash,
@@ -845,6 +1088,8 @@ class CompanyResearchPreparationWorker:
             workspace_draft_lock_version=boundary.workspace_draft_lock_version,
             historical_basis_id=boundary.historical_basis_id,
             historical_basis_content_hash=boundary.historical_basis_content_hash,
+            critical_inputs_artifact_id=boundary.critical_inputs_artifact_id,
+            critical_inputs_content_hash=boundary.critical_inputs_content_hash,
             business_map=payloads["business_map"],
             driver_map=payloads["driver_map"],
             financial_bridge=payloads["financial_bridge"],
@@ -853,12 +1098,10 @@ class CompanyResearchPreparationWorker:
             judgment_context=payloads["judgment_context"],
             research_gaps=payloads["research_gaps"],
             memo=payloads["memo"],
+            critical_inputs=payloads["critical_inputs"],
+            process_warnings=result.process_warnings,
             source_refs=boundary.source_refs,
-            market_snapshot_bindings=(
-                market_context.snapshot_bindings
-                if market_context is not None
-                else ()
-            ),
+            market_snapshot_bindings=boundary.market_snapshot_bindings,
         )
 
     @staticmethod
@@ -878,6 +1121,7 @@ class CompanyResearchPreparationWorker:
     def run_claim(
         self, claim: CompanyResearchClaim
     ) -> Literal[
+        "building_model",
         "awaiting_evidence_review",
         "awaiting_judgment_review",
         "recoverable_failure",
@@ -901,7 +1145,10 @@ class CompanyResearchPreparationWorker:
                 self._session.commit()
             except ValidationError as exc:
                 self._session.rollback()
-                self._block(claim, error_message=str(exc))
+                if self._is_stale_model_error(exc):
+                    self._discard(claim)
+                else:
+                    self._block(claim, error_message=str(exc))
                 return "discarded"
             except CompanyResearchValidationError:
                 self._session.rollback()
@@ -911,15 +1158,36 @@ class CompanyResearchPreparationWorker:
                 self._session.rollback()
                 raise
             try:
-                result = self._compile_model(boundary.build_input)
+                progress_callback = (
+                    (
+                        lambda progress, checkpoint: self._report_model_progress(
+                            claim,
+                            project_id=boundary.build_input.project_id,
+                            progress=progress,
+                            checkpoint=checkpoint,
+                        )
+                    )
+                    if claim.strategy_version == DEFAULT_STRATEGY_VERSION
+                    else None
+                )
+                result = self._compile_model(
+                    boundary.build_input,
+                    progress_callback=progress_callback,
+                )
             except RETRYABLE_PROVIDER_ERRORS:
                 self._session.rollback()
                 self._recoverable_failure(claim)
                 return "recoverable_failure"
+            except ValidationError as exc:
+                self._session.rollback()
+                if self._is_stale_model_error(exc):
+                    self._discard(claim)
+                else:
+                    self._block(claim)
+                return "discarded"
             except (
                 AlphabetGoldenCaseFixtureError,
                 CompanyResearchValidationError,
-                ValidationError,
             ):
                 self._session.rollback()
                 self._block(claim)
@@ -941,10 +1209,11 @@ class CompanyResearchPreparationWorker:
                 self._session.rollback()
                 raise
             try:
+                completion_time = self._utcnow()
                 self._repository.complete_model_bundle(
                     claim.preparation_id,
                     bundle=bundle,
-                    created_at=claim.claimed_at,
+                    created_at=completion_time,
                     expected_claim_token=claim.claim_token,
                     expected_request_hash=claim.request_hash,
                     expected_strategy_version=claim.strategy_version,
@@ -1004,4 +1273,6 @@ class CompanyResearchPreparationWorker:
             self._session.rollback()
             self._discard(claim)
             return "discarded"
+        if claim.strategy_version == DEFAULT_STRATEGY_VERSION:
+            return "building_model"
         return "awaiting_evidence_review"
