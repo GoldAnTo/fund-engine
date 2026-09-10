@@ -2,13 +2,10 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.acquisition import AcquisitionJob, AutomaticAdmissionDecision
-from app.domain.event_research import PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
 from app.errors import NotFoundError
 from app.models.event_research import (
     CaseRelation,
@@ -22,19 +19,17 @@ from app.models.event_research import (
 )
 from app.models.ledger import (
     CaseDocumentVersion,
-    CaseTenantAdmission,
     DocumentVersion,
     EvidenceLink,
     SourceSpan,
     SourceStatement,
     Thesis,
 )
-from app.models.operational import EventResearchLifecycle, ResearchRun
-from app.models.research_preparation import ResearchPreparation
+from app.models.operational import EventResearchLifecycle
 from app.models.proposals import Proposal
 from app.models.source_governance import SourceContract
 from app.services.event_research_scope_evidence import current_mapped_evidence_ids
-from app.services.source_admission import classify_source, source_contract_is_active
+from app.services.source_admission import classify_source
 from app.schemas.v1.event_research import (
     CaseRelationCaseDTO,
     CaseRelationCandidateOriginDTO,
@@ -45,8 +40,6 @@ from app.schemas.v1.event_research import (
     EventConclusionVersionDTO,
     EventKeyEvidenceDTO,
     EventNextActionDTO,
-    EventPreparationStepDTO,
-    EventPreparationSummaryDTO,
     EventResearchFactorDTO,
     EventResearchLifecycleDTO,
     EventResearchListItemDTO,
@@ -61,61 +54,26 @@ from app.schemas.v1.event_research import (
 from app.services.event_review_queue import EventReviewQueueService
 
 
-_PREPARATION_ERROR_MESSAGES = {
-    "preparation_provider_unavailable": "准备服务暂时不可用",
-    "preparation_internal_error": "准备任务暂时失败",
-    "preparation_backfill_candidate_limit": "候选数量超出处理限制",
-}
-
-
-@dataclass(frozen=True)
-class _PreparationDeskProjection:
-    action: EventNextActionDTO | None = None
-    status_summary: str | None = None
-    next_human_action: str | None = None
-
-
-@dataclass(frozen=True)
-class _AutomaticWorkbenchProjection:
-    conclusion: EventResearchConclusion | None
-    evidence_link_ids: tuple[uuid.UUID, ...] = ()
-
-
 class EventResearchQueries:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def list(
-        self, *, status: str | None = None, tenant_id: str
-    ) -> EventResearchListResponse:
+    def list(self, *, status: str | None = None) -> EventResearchListResponse:
         stmt = (
-            select(EventResearchBrief, EventResearchLifecycle, ResearchPreparation)
+            select(EventResearchBrief, EventResearchLifecycle)
             .join(
                 EventResearchLifecycle,
                 EventResearchLifecycle.research_case_id == EventResearchBrief.research_case_id,
             )
-            .join(
-                CaseTenantAdmission,
-                CaseTenantAdmission.research_case_id
-                == EventResearchBrief.research_case_id,
-            )
-            .outerjoin(
-                ResearchPreparation,
-                ResearchPreparation.research_case_id == EventResearchBrief.research_case_id,
-            )
-            .where(CaseTenantAdmission.tenant_id == tenant_id)
             .order_by(EventResearchLifecycle.updated_at.desc())
         )
         if status is not None:
             stmt = stmt.where(EventResearchLifecycle.status == status)
         return EventResearchListResponse(
-            items=[
-                self._list_item(brief, lifecycle, preparation)
-                for brief, lifecycle, preparation in self._session.execute(stmt)
-            ]
+            items=[self._list_item(brief, lifecycle) for brief, lifecycle in self._session.execute(stmt)]
         )
 
-    def network(self, *, tenant_id: str) -> ResearchNetworkResponse:
+    def network(self) -> ResearchNetworkResponse:
         cases = {
             brief.research_case_id: CaseRelationCaseDTO(
                 case_id=str(brief.research_case_id),
@@ -127,12 +85,6 @@ class EventResearchQueries:
                     EventResearchLifecycle,
                     EventResearchLifecycle.research_case_id == EventResearchBrief.research_case_id,
                 )
-                .join(
-                    CaseTenantAdmission,
-                    CaseTenantAdmission.research_case_id
-                    == EventResearchBrief.research_case_id,
-                )
-                .where(CaseTenantAdmission.tenant_id == tenant_id)
             )
         }
         relations = list(
@@ -217,14 +169,14 @@ class EventResearchQueries:
             resolved_candidates=resolved_candidates,
         )
 
-    def relations(self, case_id: uuid.UUID, *, tenant_id: str) -> ResearchNetworkResponse:
+    def relations(self, case_id: uuid.UUID) -> ResearchNetworkResponse:
         if self._session.scalar(
             select(EventResearchBrief.id)
             .where(EventResearchBrief.research_case_id == case_id)
             .limit(1)
         ) is None:
             raise NotFoundError("event research case not found")
-        network = self.network(tenant_id=tenant_id)
+        network = self.network()
         involves_case = lambda relation: (
             relation.source_case.case_id == str(case_id)
             or relation.target_case.case_id == str(case_id)
@@ -245,53 +197,13 @@ class EventResearchQueries:
         lifecycle = self._session.get(EventResearchLifecycle, case_id)
         if brief is None or lifecycle is None:
             raise NotFoundError("event research case not found")
-        preparation = self._session.scalar(
-            select(ResearchPreparation)
-            .where(ResearchPreparation.research_case_id == case_id)
-            .limit(1)
-        )
-        event = self._list_item(brief, lifecycle, preparation)
+        event = self._list_item(brief, lifecycle)
         scope = self._latest_scope(case_id)
-        automatic = brief.workflow_mode == "automatic"
-        automatic_projection = (
-            self._active_automatic_projection(case_id, lifecycle)
-            if automatic
-            else _AutomaticWorkbenchProjection(conclusion=None)
-        )
-        automatic_evidence_ids = (
-            automatic_projection.evidence_link_ids if automatic else None
-        )
-        evidence_states = (
-            frozenset({"automatically_admitted"})
-            if automatic
-            else frozenset({"reviewed"})
-        )
-        progress = self._progress(
-            case_id,
-            lifecycle,
-            evidence_states=evidence_states,
-            evidence_link_ids=automatic_evidence_ids,
-        )
-        factors = self._factors(
-            case_id,
-            scope,
-            self._pending_by_factor(case_id, scope),
-            evidence_states=evidence_states,
-            evidence_link_ids=automatic_evidence_ids,
-        )
+        progress = self._progress(case_id, lifecycle)
+        factors = self._factors(case_id, scope, self._pending_by_factor(case_id, scope))
         confidence = self._conclusion_confidence(factors)
-        evidence = self._formal_evidence(
-            case_id,
-            list(automatic_evidence_ids) if automatic_evidence_ids is not None else None,
-            review_states=evidence_states,
-        )
-        conclusion = self._conclusion(
-            case_id,
-            lifecycle,
-            confidence,
-            workflow_mode=brief.workflow_mode,
-            automatic_record=automatic_projection.conclusion,
-        )
+        evidence = self._formal_evidence(case_id)
+        conclusion = self._conclusion(case_id, lifecycle, confidence)
         return EventWorkbenchDTO(
             event=event,
             lifecycle=self._lifecycle(lifecycle),
@@ -300,8 +212,7 @@ class EventResearchQueries:
             evidence=evidence,
             progress=progress,
             scope=self._scope(scope, case_id),
-            next_action=self._next_action(lifecycle, preparation),
-            preparation=self._preparation_summary(preparation),
+            next_action=self._next_action(lifecycle),
         )
 
     def conclusion_history(self, case_id: uuid.UUID) -> EventConclusionHistoryResponse:
@@ -364,28 +275,7 @@ class EventResearchQueries:
         case_id: uuid.UUID,
         lifecycle: EventResearchLifecycle,
         confidence: str,
-        *,
-        workflow_mode: str = "reviewed",
-        automatic_record: EventResearchConclusion | None = None,
     ) -> EventConclusionDraftDTO:
-        if workflow_mode == "automatic":
-            if automatic_record is not None:
-                return EventConclusionDraftDTO(
-                    state="system_generated",
-                    text=automatic_record.text,
-                    confidence=confidence,
-                    citations=self._formal_evidence(
-                        case_id,
-                        automatic_record.evidence_link_ids,
-                        review_states=frozenset({"automatically_admitted"}),
-                    ),
-                )
-            return EventConclusionDraftDTO(
-                state="cannot_conclude",
-                text="自动研究正在处理材料并核验证据缺口。",
-                confidence="low",
-                citations=[],
-            )
         if lifecycle.status == "published":
             record = self._session.scalar(
                 select(EventResearchConclusion)
@@ -449,106 +339,19 @@ class EventResearchQueries:
             citations=reviewed,
         )
 
-    def _active_automatic_projection(
-        self,
-        case_id: uuid.UUID,
-        lifecycle: EventResearchLifecycle,
-    ) -> _AutomaticWorkbenchProjection:
-        if lifecycle.active_run_id is None:
-            return _AutomaticWorkbenchProjection(conclusion=None)
-        run = self._session.get(ResearchRun, lifecycle.active_run_id)
-        if (
-            run is None
-            or run.research_case_id != case_id
-            or run.status != "succeeded"
-            or run.stage != "complete"
-            or lifecycle.status != "completed"
-        ):
-            return _AutomaticWorkbenchProjection(conclusion=None)
-        conclusion = self._session.get(
-            EventResearchConclusion,
-            uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"fund-engine:event-research:automatic:{run.id}",
-            ),
-        )
-        if (
-            conclusion is None
-            or conclusion.research_case_id != case_id
-            or conclusion.state != "system_generated"
-            or conclusion.based_on_conclusion_id is not None
-            or conclusion.reviewer is not None
-            or not isinstance(conclusion.evidence_link_ids, list)
-        ):
-            return _AutomaticWorkbenchProjection(conclusion=None)
-        try:
-            evidence_link_ids = tuple(
-                uuid.UUID(str(value)) for value in conclusion.evidence_link_ids
-            )
-        except (TypeError, ValueError, AttributeError):
-            return _AutomaticWorkbenchProjection(conclusion=None)
-        if len(evidence_link_ids) != len(set(evidence_link_ids)):
-            return _AutomaticWorkbenchProjection(conclusion=None)
-        run_link_ids = set(
-            self._session.scalars(
-                select(EvidenceLink.id)
-                .join(
-                    AutomaticAdmissionDecision,
-                    AutomaticAdmissionDecision.id
-                    == EvidenceLink.automatic_admission_decision_id,
-                )
-                .join(
-                    AcquisitionJob,
-                    AcquisitionJob.id == AutomaticAdmissionDecision.job_id,
-                )
-                .where(
-                    EvidenceLink.id.in_(evidence_link_ids),
-                    EvidenceLink.review_state == "automatically_admitted",
-                    AutomaticAdmissionDecision.outcome == "admitted",
-                    AcquisitionJob.research_case_id == case_id,
-                    AcquisitionJob.research_run_id == run.id,
-                )
-            )
-        )
-        if run_link_ids != set(evidence_link_ids):
-            return _AutomaticWorkbenchProjection(conclusion=None)
-        mapped_ids = set(
-            current_mapped_evidence_ids(
-                self._session,
-                case_id,
-                review_states=frozenset({"automatically_admitted"}),
-            )
-        )
-        if not set(evidence_link_ids).issubset(mapped_ids):
-            return _AutomaticWorkbenchProjection(conclusion=None)
-        return _AutomaticWorkbenchProjection(
-            conclusion=conclusion,
-            evidence_link_ids=evidence_link_ids,
-        )
-
     @staticmethod
     def _list_item(
-        brief: EventResearchBrief,
-        lifecycle: EventResearchLifecycle,
-        preparation: ResearchPreparation | None = None,
+        brief: EventResearchBrief, lifecycle: EventResearchLifecycle
     ) -> EventResearchListItemDTO:
-        next_action = EventResearchQueries._next_action(lifecycle, preparation)
-        preparation_copy = EventResearchQueries._preparation_copy(preparation)
         return EventResearchListItemDTO(
             case_id=str(brief.research_case_id),
-            workflow_mode=brief.workflow_mode,
             event_title=brief.event_title,
             company_name=brief.company_name,
             ticker=brief.ticker,
             event_at=brief.event_at,
             lifecycle_status=lifecycle.status,
-            status_summary=preparation_copy.status_summary or lifecycle.status_summary,
-            next_human_action=(
-                preparation_copy.next_human_action
-                if preparation_copy.action is not None
-                else lifecycle.next_human_action
-            ),
-            next_action_kind=next_action.kind,
+            status_summary=lifecycle.status_summary,
+            next_human_action=lifecycle.next_human_action,
             updated_at=lifecycle.updated_at,
         )
 
@@ -619,9 +422,6 @@ class EventResearchQueries:
         case_id: uuid.UUID,
         scope: EventResearchScopeVersion | None,
         pending_by_factor: dict[str, int],
-        *,
-        evidence_states: frozenset[str] = frozenset({"reviewed"}),
-        evidence_link_ids: tuple[uuid.UUID, ...] | None = None,
     ) -> list[EventResearchFactorDTO]:
         if scope is not None:
             factors = list(
@@ -649,7 +449,7 @@ class EventResearchQueries:
             )
         }
         if scope is not None:
-            factor_counts = (
+            rows = self._session.execute(
                 select(
                     EventResearchScopeEvidenceAssignment.factor_statement,
                     EvidenceLink.role,
@@ -667,18 +467,13 @@ class EventResearchQueries:
                     EventResearchScopeEvidenceAssignment.factor_statement
                     == Thesis.statement,
                     Thesis.research_case_id == case_id,
-                    EvidenceLink.review_state.in_(evidence_states),
+                    EvidenceLink.review_state == "reviewed",
                 )
                 .group_by(
                     EventResearchScopeEvidenceAssignment.factor_statement,
                     EvidenceLink.role,
                 )
             )
-            if evidence_link_ids is not None:
-                factor_counts = factor_counts.where(
-                    EvidenceLink.id.in_(evidence_link_ids)
-                )
-            rows = self._session.execute(factor_counts)
             for statement, role, count in rows:
                 if statement is not None:
                     counts_by_factor.setdefault(statement, {})[role] = int(count)
@@ -824,39 +619,22 @@ class EventResearchQueries:
         ]
 
     def _progress(
-        self,
-        case_id: uuid.UUID,
-        lifecycle: EventResearchLifecycle,
-        *,
-        evidence_states: frozenset[str] = frozenset({"reviewed"}),
-        evidence_link_ids: tuple[uuid.UUID, ...] | None = None,
+        self, case_id: uuid.UUID, lifecycle: EventResearchLifecycle
     ) -> EventWorkbenchProgressDTO:
         review_summary = EventReviewQueueService(self._session).summary(case_id)
-        mapped_ids = current_mapped_evidence_ids(
-            self._session, case_id, review_states=evidence_states
-        )
-        if evidence_link_ids is not None:
-            allowed_ids = set(evidence_link_ids)
-            mapped_ids = [link_id for link_id in mapped_ids if link_id in allowed_ids]
         return EventWorkbenchProgressDTO(
-            verified=len(mapped_ids),
+            verified=len(current_mapped_evidence_ids(self._session, case_id)),
             pending=review_summary.pending,
             invalid_source=review_summary.invalid_source,
             current_gap=lifecycle.current_gap,
         )
 
     def _formal_evidence(
-        self,
-        case_id: uuid.UUID,
-        evidence_link_ids: list[str] | None = None,
-        *,
-        review_states: frozenset[str] = frozenset({"reviewed"}),
+        self, case_id: uuid.UUID, evidence_link_ids: list[str] | None = None
     ) -> list[EventKeyEvidenceDTO]:
-        mapped_evidence_ids = current_mapped_evidence_ids(
-            self._session, case_id, review_states=review_states
-        )
+        mapped_evidence_ids = current_mapped_evidence_ids(self._session, case_id)
         if evidence_link_ids is not None:
-            snapshot_ids = {str(value) for value in evidence_link_ids}
+            snapshot_ids = set(evidence_link_ids)
             mapped_evidence_ids = [
                 evidence_id
                 for evidence_id in mapped_evidence_ids
@@ -882,7 +660,7 @@ class EventResearchQueries:
                 SourceContract.document_version_id == DocumentVersion.id,
             )
             .where(EvidenceLink.id.in_(mapped_evidence_ids))
-            .where(EvidenceLink.review_state.in_(review_states))
+            .where(EvidenceLink.review_state == "reviewed")
             .order_by(EvidenceLink.available_at.desc())
         )
         return [
@@ -916,7 +694,6 @@ class EventResearchQueries:
             linked_to_case is not None
             and contract is not None
             and contract.allow_display
-            and source_contract_is_active(contract)
         )
         return EventKeyEvidenceDTO(
             case_id=str(case_id),
@@ -933,13 +710,7 @@ class EventResearchQueries:
         )
 
     @staticmethod
-    def _next_action(
-        lifecycle: EventResearchLifecycle,
-        preparation: ResearchPreparation | None = None,
-    ) -> EventNextActionDTO:
-        preparation_copy = EventResearchQueries._preparation_copy(preparation)
-        if preparation_copy.action is not None:
-            return preparation_copy.action
+    def _next_action(lifecycle: EventResearchLifecycle) -> EventNextActionDTO:
         if lifecycle.status == "awaiting_key_review":
             if (
                 lifecycle.active_run_id is None
@@ -957,14 +728,6 @@ class EventResearchQueries:
             )
         if lifecycle.status == "draft_ready":
             return EventNextActionDTO(kind="review_conclusion", label="审核结论草案")
-        if (
-            lifecycle.status == "awaiting_scope"
-            and lifecycle.next_human_action == PROTOCOL_COMPLETION_NEXT_HUMAN_ACTION
-        ):
-            return EventNextActionDTO(
-                kind="complete_research_protocol",
-                label=lifecycle.next_human_action,
-            )
         if lifecycle.status in {"awaiting_scope", "exhausted", "cannot_conclude"}:
             return EventNextActionDTO(
                 kind="edit_factors",
@@ -975,70 +738,6 @@ class EventResearchQueries:
                 kind="view_conclusion_change", label="查看结论变更"
             )
         return EventNextActionDTO(kind="wait", label="系统继续处理")
-
-    @staticmethod
-    def _preparation_summary(
-        preparation: ResearchPreparation | None,
-    ) -> EventPreparationSummaryDTO | None:
-        if preparation is None:
-            return None
-        return EventPreparationSummaryDTO(
-            status=preparation.status,
-            revision=preparation.version,
-            research_run_id=(
-                str(preparation.research_run_id)
-                if preparation.status == "authorized" and preparation.research_run_id is not None
-                else None
-            ),
-            next_attempt_at=preparation.next_attempt_at,
-            last_error_message=_PREPARATION_ERROR_MESSAGES.get(preparation.last_error_code),
-            system={
-                "claims": EventPreparationStepDTO(state=preparation.parse_claims_state),
-                "protocol": EventPreparationStepDTO(state=preparation.draft_protocol_state),
-                "plan": EventPreparationStepDTO(state=preparation.draft_evidence_plan_state),
-            },
-            review={
-                "claims": EventPreparationStepDTO(state=preparation.claim_review_state),
-                "protocol": EventPreparationStepDTO(state=preparation.protocol_review_state),
-                "plan": EventPreparationStepDTO(state=preparation.plan_review_state),
-            },
-        )
-
-    @staticmethod
-    def _preparation_copy(
-        preparation: ResearchPreparation | None,
-    ) -> "_PreparationDeskProjection":
-        if preparation is None or preparation.status == "authorized":
-            return _PreparationDeskProjection()
-        action_by_status = {
-            "preparing": EventNextActionDTO(kind="wait", label="系统正在准备研究材料"),
-            "awaiting_claim_review": EventNextActionDTO(
-                kind="review_preparation_claims", label="核验原文与候选陈述"
-            ),
-            "awaiting_protocol_confirmation": EventNextActionDTO(
-                kind="review_preparation_protocol", label="确认研究协议草案"
-            ),
-            "awaiting_plan_authorization": EventNextActionDTO(
-                kind="authorize_preparation_plan", label="审核补证计划并授权启动"
-            ),
-            "recoverable_failure": EventNextActionDTO(
-                kind="recover_preparation", label="恢复研究准备"
-            ),
-        }
-        action = action_by_status.get(preparation.status)
-        if action is None:
-            return _PreparationDeskProjection()
-        if preparation.status == "preparing":
-            return _PreparationDeskProjection(
-                action=action,
-                status_summary="系统正在准备研究材料",
-                next_human_action=None,
-            )
-        return _PreparationDeskProjection(
-            action=action,
-            status_summary=f"等待{action.label}",
-            next_human_action=action.label,
-        )
 
 
 def _leading_count(value: str | None) -> int | None:

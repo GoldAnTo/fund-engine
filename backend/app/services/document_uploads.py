@@ -20,7 +20,6 @@ from app.services.source_governance import SourceGovernanceService
 _SUPPORTED_MIME_TYPES = frozenset(
     {"application/pdf", "text/plain", "text/markdown", "text/csv"}
 )
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -64,64 +63,12 @@ class DocumentUploadService:
         actor: str,
         source_metadata: dict[str, object],
     ) -> UploadedCaseMaterial:
-        return self._freeze_case_material(
-            case_id=case_id,
-            raw=raw,
-            file_name=file_name,
-            mime_type=mime_type,
-            actor=actor,
-            source_metadata=source_metadata,
-            published_case=False,
-        )
-
-    def freeze_published_case_material(
-        self,
-        *,
-        case_id: uuid.UUID,
-        raw: bytes,
-        file_name: str,
-        mime_type: str,
-        actor: str,
-        source_metadata: dict[str, object],
-    ) -> UploadedCaseMaterial:
-        """Freeze an original for an explicit published-Case review decision.
-
-        This deliberately performs no lifecycle transition.  The caller must
-        subsequently record either ``reopen`` or ``no_change`` in the same
-        transaction, so the prior published conclusion is never rewritten by
-        material intake alone.
-        """
-        return self._freeze_case_material(
-            case_id=case_id,
-            raw=raw,
-            file_name=file_name,
-            mime_type=mime_type,
-            actor=actor,
-            source_metadata=source_metadata,
-            published_case=True,
-        )
-
-    def _freeze_case_material(
-        self,
-        *,
-        case_id: uuid.UUID,
-        raw: bytes,
-        file_name: str,
-        mime_type: str,
-        actor: str,
-        source_metadata: dict[str, object],
-        published_case: bool,
-    ) -> UploadedCaseMaterial:
         lifecycle = self._session.get(EventResearchLifecycle, case_id)
         if lifecycle is None:
             raise ValidationFailedError("event research case not found")
-        if lifecycle.status == "published" and not published_case:
+        if lifecycle.status == "published":
             raise ValidationFailedError(
                 "published case material must use the published-material decision workflow"
-            )
-        if lifecycle.status != "published" and published_case:
-            raise ValidationFailedError(
-                "only a published event research case can accept a material decision"
             )
         if not raw:
             raise ValidationFailedError("uploaded file must not be empty")
@@ -215,8 +162,6 @@ class DocumentUploadService:
 
     @staticmethod
     def _parse(*, raw: bytes, mime_type: str, file_name: str) -> _ParsedUpload:
-        if len(raw) > MAX_UPLOAD_BYTES:
-            raise ValidationFailedError("uploaded original must not exceed 20 MiB")
         if mime_type == "application/pdf":
             digest = hashlib.sha256(raw).hexdigest()
             try:

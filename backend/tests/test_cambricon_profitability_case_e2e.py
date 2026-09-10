@@ -15,12 +15,10 @@ from sqlalchemy import select
 
 from app.models.ledger import AIAssessment, ResearchCase
 from app.scripts.seed_cambricon_profitability_case import CASE_TITLE, seed
-from tests.tenant_admission import admit_case
 
 
 def test_cambricon_case_runs_through_existing_http_flow(cmd_client, cmd_session):
     seeded = seed(cmd_session)
-    admit_case(cmd_session, seeded.case_id)
     cmd_session.commit()
 
     # --- P1: the case is discoverable through the real read API. ---

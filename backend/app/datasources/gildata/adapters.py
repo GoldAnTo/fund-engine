@@ -23,11 +23,6 @@ import json
 import re
 from collections.abc import Sequence
 
-from app.datasources.gildata.client import (
-    GILDATA_RESPONSE_ERROR_MESSAGE,
-    GildataMCPError,
-)
-
 # Match a 6-digit A-share stock code embedded in free text (e.g. a title).
 _SEC_CODE_RE = re.compile(r"(\d{6})")
 
@@ -79,28 +74,6 @@ _ANNOUNCEMENT_ALIASES: dict[str, str] = {
     "正文": "content",
     "内容": "content",
     "原文": "content",
-    "原文地址": "source_url",
-    "公告地址": "source_url",
-    "链接": "source_url",
-}
-
-# Fund holding tables are returned by ``FinQuery``.  They identify a
-# reporting period but do not reliably carry the fund report's publication
-# date, so the adapter must never manufacture one from the retrieval time.
-_FUND_HOLDING_ALIASES: dict[str, str] = {
-    "基金简称": "fund_name",
-    "基金名称": "fund_name",
-    "基金代码": "fund_code",
-    "报告期": "report_period",
-    "截止日期": "report_period",
-    "股票简称": "stock_name",
-    "证券简称": "stock_name",
-    "股票代码": "stock_code",
-    "证券代码": "stock_code",
-    "持仓市值占资产净值比(%)": "weight",
-    "持仓市值占基金净资产比例(%)": "weight",
-    "占基金净值比例(%)": "weight",
-    "持仓权重(%)": "weight",
 }
 
 # Research-report key/value field names -> canonical keys.
@@ -282,36 +255,6 @@ def parse_content(text: str) -> list[dict]:
     return [r for r in results if isinstance(r, dict)]
 
 
-def parse_content_strict(text: str) -> list[dict]:
-    """Decode one live provider payload or raise a stable protocol error."""
-    if not isinstance(text, str) or not text.strip():
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    try:
-        inner = json.loads(text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE) from exc
-    if (
-        not isinstance(inner, dict)
-        or str(inner.get("code")) != "0"
-        or not isinstance(inner.get("results"), list)
-    ):
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    results = inner["results"]
-    if any(not isinstance(item, dict) for item in results):
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    return results
-
-
-def _strict_table_rows(item: dict) -> list[dict[str, str]]:
-    table_markdown = item.get("table_markdown")
-    if not isinstance(table_markdown, str) or not table_markdown.strip():
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    rows = parse_table_markdown_payload(table_markdown)
-    if not rows:
-        raise GildataMCPError(GILDATA_RESPONSE_ERROR_MESSAGE)
-    return rows
-
-
 # ---------------------------------------------------------------------------
 # fetch_* adapters
 # ---------------------------------------------------------------------------
@@ -353,8 +296,8 @@ def fetch_announcement(client, query: str) -> list[dict]:
     """
     text = client.call_tool("AnnouncementData", {"query": query})
     announcements: list[dict] = []
-    for item in parse_content_strict(text):
-        for row in _strict_table_rows(item):
+    for item in parse_content(text):
+        for row in parse_table_markdown_payload(item.get("table_markdown", "")):
             normalized = _normalize(row, _ANNOUNCEMENT_ALIASES)
             announcements.append(
                 {
@@ -363,7 +306,6 @@ def fetch_announcement(client, query: str) -> list[dict]:
                     "stock_code": normalized.get("stock_code", ""),
                     "sec_name": normalized.get("sec_name", ""),
                     "content": normalized.get("content", ""),
-                    "source_url": normalized.get("source_url", ""),
                 }
             )
     return announcements
@@ -409,38 +351,6 @@ def fetch_quote(client, query: str) -> list[dict]:
         for row in parse_table_markdown_payload(item.get("table_markdown", "")):
             quotes.append(_normalize(row, _QUOTE_ALIASES))
     return quotes
-
-
-def fetch_fund_stock_holdings(client, query: str) -> list[dict]:
-    """Pull fund stock holding rows without asserting a disclosure date.
-
-    ``FinQuery`` reports a fund's holding table with an economic report period
-    and position weight, but its response lacks a reliable disclosure-time
-    field.  A caller must separately match an official fund report from
-    :func:`fetch_announcement` before it can create a formal
-    ``HoldingDisclosure``.
-    """
-    text = client.call_tool("FinQuery", {"query": query})
-    holdings: list[dict] = []
-    for item in parse_content_strict(text):
-        for row in _strict_table_rows(item):
-            normalized = _normalize(row, _FUND_HOLDING_ALIASES)
-            if not all(
-                normalized.get(field, "")
-                for field in ("fund_code", "report_period", "stock_code", "weight")
-            ):
-                continue
-            holdings.append(
-                {
-                    "fund_name": normalized.get("fund_name", ""),
-                    "fund_code": normalized["fund_code"],
-                    "report_period": normalized["report_period"],
-                    "stock_name": normalized.get("stock_name", ""),
-                    "stock_code": normalized["stock_code"],
-                    "weight": normalized["weight"],
-                }
-            )
-    return holdings
 
 
 def fetch_macro_series(client, query: str) -> list[dict]:

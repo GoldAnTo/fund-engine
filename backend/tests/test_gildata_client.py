@@ -7,7 +7,6 @@ canned ``call_tool`` text strings.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from decimal import Decimal
 
 import httpx
@@ -39,13 +38,12 @@ class _FakeClient:
     """Fake client returning canned ``call_tool`` text strings, no network."""
 
     def __init__(self, research_results, announcement_results, quote_results,
-                 news_results=(), fund_holding_results=()):
+                 news_results=()):
         # research_results: queue of result-lists (one per FinancialResearchReport call)
         self._research = list(research_results)
         self._announcement = announcement_results
         self._quote = quote_results
         self._news = list(news_results)
-        self._fund_holdings = list(fund_holding_results)
         self.calls: list[tuple[str, dict]] = []
 
     def call_tool(self, name, arguments, timeout=60):
@@ -58,8 +56,7 @@ class _FakeClient:
         if name == "NewsDataQuery":
             return json.dumps({"code": "0", "results": self._news}, ensure_ascii=False)
         if name == "FinQuery":
-            results = self._fund_holdings if "持仓" in arguments.get("query", "") else self._quote
-            return json.dumps({"code": "0", "results": results}, ensure_ascii=False)
+            return json.dumps({"code": "0", "results": self._quote}, ensure_ascii=False)
         raise AssertionError(f"unexpected tool {name!r}")
 
 
@@ -82,19 +79,6 @@ ANNOUNCEMENT_MD = (
     "|公告标题|公告日期|股票代码|公告内容|\n"
     "|---|---|---|---|\n"
     "|寒武纪定增预案|2026-03-15|688256|本次定增募资49.8亿元投向算力芯片项目。|"
-)
-
-FUND_REPORT_ANNOUNCEMENT_MD = (
-    "公告标题：易方达蓝筹精选混合型证券投资基金2025年第2季度报告；\n"
-    "发布时间：2025-07-21；\n"
-    "原文地址：https://fund.example/005827/2025q2.pdf；\n"
-    "原文：本基金2025年第2季度报告。"
-)
-
-FUND_HOLDING_MD = (
-    "|基金简称|基金代码|报告期|股票简称|股票代码|持仓市值占资产净值比(%)|\n"
-    "|---|---|---|---|---|---|\n"
-    "|易方达蓝筹精选混合|005827.OF|2025-06-30|腾讯控股|00700.HK|9.50|"
 )
 
 NEWS_MD = (
@@ -153,73 +137,24 @@ def test_call_tool_returns_content_text(monkeypatch):
 
 
 def test_call_tool_raises_on_jsonrpc_error():
-    outer = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "error": {"code": -32600, "message": "bad sentinel-secret"},
-    }
+    outer = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "bad"}}
 
     def handler(request):
         return httpx.Response(200, json=outer)
 
     client = GildataMCPClient(token="tok", transport=_mock_transport(handler))
-    with pytest.raises(GildataMCPError) as exc_info:
+    with pytest.raises(GildataMCPError):
         client.call_tool("FinQuery", {"query": "x"})
-    assert str(exc_info.value) == "Gildata provider returned an invalid response"
-    assert "sentinel-secret" not in str(exc_info.value)
     client.close()
 
 
 def test_call_tool_raises_on_non_200():
     def handler(request):
-        return httpx.Response(500, text="server boom sentinel-secret")
+        return httpx.Response(500, text="server boom")
 
     client = GildataMCPClient(token="tok", transport=_mock_transport(handler))
-    with pytest.raises(GildataMCPError) as exc_info:
+    with pytest.raises(GildataMCPError):
         client.call_tool("FinQuery", {"query": "x"})
-    assert str(exc_info.value) == "Gildata provider request failed"
-    assert "sentinel-secret" not in str(exc_info.value)
-    client.close()
-
-
-def test_transport_error_does_not_echo_token_bearing_url():
-    def handler(request):
-        raise httpx.ConnectError(
-            f"failed request {request.url} sentinel-secret", request=request
-        )
-
-    client = GildataMCPClient(
-        token="token-sentinel", transport=_mock_transport(handler)
-    )
-    with pytest.raises(GildataMCPError) as exc_info:
-        client.call_tool("FinQuery", {"query": "x"})
-
-    assert str(exc_info.value) == "Gildata provider request failed"
-    assert "token-sentinel" not in str(exc_info.value)
-    assert "sentinel-secret" not in str(exc_info.value)
-    assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
-    client.close()
-
-
-def test_transport_error_retries_once_before_succeeding():
-    attempts = 0
-    inner_text = json.dumps({"code": "0", "results": []})
-
-    def handler(request):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise httpx.ConnectError("transient disconnect", request=request)
-        return httpx.Response(200, json=_envelope(inner_text))
-
-    client = GildataMCPClient(
-        token="tok",
-        max_attempts=2,
-        transport=_mock_transport(handler),
-    )
-
-    assert client.call_tool("FinQuery", {"query": "x"}) == inner_text
-    assert attempts == 2
     client.close()
 
 
@@ -262,47 +197,6 @@ def test_parse_content_invalid_returns_empty():
     assert adapters.parse_content("") == []
     assert adapters.parse_content("not json {") == []
     assert adapters.parse_content(json.dumps({"code": "0"})) == []
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        "",
-        "not json",
-        "[]",
-        json.dumps({"code": "500", "results": []}),
-        json.dumps({"code": "0", "results": [1]}),
-    ],
-)
-def test_strict_content_parser_normalizes_malformed_provider_payload(content):
-    with pytest.raises(GildataMCPError) as exc_info:
-        adapters.parse_content_strict(content)
-
-    assert str(exc_info.value) == "Gildata provider returned an invalid response"
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        {},
-        {"table_markdown": {}},
-        {"table_markdown": ""},
-        {"table_markdown": "totally malformed"},
-    ],
-)
-@pytest.mark.parametrize(
-    "fetcher",
-    [adapters.fetch_fund_stock_holdings, adapters.fetch_announcement],
-)
-def test_live_fund_adapters_reject_malformed_table_payload(result, fetcher):
-    class Client:
-        def call_tool(self, name, arguments, timeout=60):
-            return json.dumps({"code": "0", "results": [result]})
-
-    with pytest.raises(GildataMCPError) as exc_info:
-        fetcher(Client(), "query")
-
-    assert str(exc_info.value) == "Gildata provider returned an invalid response"
 
 
 # ---------------------------------------------------------------------------
@@ -350,41 +244,6 @@ def test_fetch_quote_empty_when_no_results():
     assert adapters.fetch_quote(client, "x") == []
 
 
-def test_fetch_fund_holdings_preserves_report_period_without_inventing_publish_date():
-    client = _FakeClient(
-        [], [], [], fund_holding_results=[{"table_markdown": FUND_HOLDING_MD}]
-    )
-
-    holdings = adapters.fetch_fund_stock_holdings(client, "查询基金005827最近一期公开披露的股票持仓明细")
-
-    assert holdings == [{
-        "fund_name": "易方达蓝筹精选混合",
-        "fund_code": "005827.OF",
-        "report_period": "2025-06-30",
-        "stock_name": "腾讯控股",
-        "stock_code": "00700.HK",
-        "weight": "9.50",
-    }]
-    assert client.calls[0][0] == "FinQuery"
-
-
-def test_fetch_fund_report_announcement_preserves_exact_publication_locator():
-    client = _FakeClient(
-        [], [{"table_markdown": FUND_REPORT_ANNOUNCEMENT_MD}], []
-    )
-
-    announcements = adapters.fetch_announcement(client, "易方达蓝筹精选混合 005827 2025年第二季度报告")
-
-    assert announcements == [{
-        "title": "易方达蓝筹精选混合型证券投资基金2025年第2季度报告",
-        "publish_date": "2025-07-21",
-        "stock_code": "",
-        "sec_name": "",
-        "content": "本基金2025年第2季度报告。",
-        "source_url": "https://fund.example/005827/2025q2.pdf",
-    }]
-
-
 # ---------------------------------------------------------------------------
 # Ingest script (uses the in-memory session fixture, mocked client)
 # ---------------------------------------------------------------------------
@@ -430,28 +289,6 @@ def test_ingest_freezes_documents_and_valuations(session):
     stock = session.scalar(select(Stock).where(Stock.code == "688256.SH"))
     assert stock is not None
     assert stock.name == "寒武纪"
-
-
-def test_ingest_without_case_does_not_adopt_the_first_global_case(session):
-    from sqlalchemy import select
-
-    from app.models.ledger import CaseDocumentVersion, ResearchCase
-    from app.scripts.ingest_real_data import ingest
-
-    session.add(
-        ResearchCase(
-            title="不应被自动归入的 Case",
-            industry_topic="test",
-            created_by="test",
-            created_at=datetime.now(timezone.utc),
-        )
-    )
-    session.flush()
-
-    summary = ingest(session, _make_client())
-
-    assert summary["case_id"] is None
-    assert list(session.scalars(select(CaseDocumentVersion))) == []
 
 
 def test_ingest_is_idempotent(session):

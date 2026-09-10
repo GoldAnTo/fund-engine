@@ -70,8 +70,6 @@ class CreateHoldingDisclosureRequest(V1Model):
     source_span_id: uuid.UUID | None = None
     provider_record_id: uuid.UUID | None = None
     coverage_status: Literal["complete", "partial", "not_recorded"] = "not_recorded"
-    filing_kind: Literal["quarterly", "annual", "correction", "other"] = "other"
-    supersedes_disclosure_id: uuid.UUID | None = None
 
 
 class HoldingDisclosureDTO(V1Model):
@@ -87,8 +85,6 @@ class HoldingDisclosureDTO(V1Model):
     source_span_id: uuid.UUID | None
     provider_record_id: uuid.UUID | None
     coverage_status: str
-    filing_kind: str
-    supersedes_disclosure_id: uuid.UUID | None
     created_at: datetime
 
 

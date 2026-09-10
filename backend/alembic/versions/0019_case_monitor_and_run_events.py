@@ -55,25 +55,15 @@ def upgrade() -> None:
         sa.UniqueConstraint("research_case_id", "version", name="uq_case_monitor_versions_case_version"),
     )
     op.create_index("ix_case_monitor_versions_case", "case_monitor_versions", ["research_case_id"])
-    if op.get_bind().dialect.name == "sqlite":
-        with op.batch_alter_table("research_runs") as batch:
-            batch.add_column(sa.Column("monitor_version_id", sa.Uuid(), nullable=True))
-            batch.create_foreign_key(
-                "fk_research_runs_monitor_version_id",
-                "case_monitor_versions",
-                ["monitor_version_id"],
-                ["id"],
-            )
-    else:
-        op.add_column(
-            "research_runs",
-            sa.Column(
-                "monitor_version_id",
-                sa.Uuid(),
-                sa.ForeignKey("case_monitor_versions.id"),
-                nullable=True,
-            ),
-        )
+    op.add_column(
+        "research_runs",
+        sa.Column(
+            "monitor_version_id",
+            sa.Uuid(),
+            sa.ForeignKey("case_monitor_versions.id"),
+            nullable=True,
+        ),
+    )
     op.create_table(
         "research_run_events",
         sa.Column("id", sa.Uuid(), primary_key=True),

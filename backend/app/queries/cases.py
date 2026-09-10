@@ -72,9 +72,7 @@ class CaseReadQueries:
 
     # --------------------------------------------------------------- list
 
-    def list_cases(
-        self, *, cursor: str | None, limit: int, tenant_id: str | None = None
-    ) -> CaseListResponse:
+    def list_cases(self, *, cursor: str | None, limit: int) -> CaseListResponse:
         after_created_at, after_id = (None, None)
         if cursor is not None:
             after_created_at, after_id = self._decode_cursor(cursor)
@@ -83,7 +81,6 @@ class CaseReadQueries:
             limit=limit,
             after_created_at=after_created_at,
             after_id=after_id,
-            tenant_id=tenant_id,
         )
         has_more = len(cases) > limit
         page_items = cases[:limit]
@@ -354,17 +351,24 @@ class CaseReadQueries:
 
         Fresh means: newer than the latest successful assessment (or no
         assessment at all).  A stale failure (a later rerun succeeded) is
-        hidden — the dossier shows current state, not history; the active
-        Case workflow exposes its own auditable run history.
+        hidden — the dossier shows current state, not history; the full
+        run history stays available via /provider-runs.
         """
         from app.models.ledger import AIRun
 
-        latest_failed = self._session.scalar(
+        failed_runs = self._session.scalars(
             select(AIRun)
             .where(AIRun.kind == "assess", AIRun.status == "failed")
-            .where(AIRun.input_ref["thesis_id"].as_string() == str(thesis.id))
             .order_by(AIRun.started_at.desc())
-            .limit(1)
+            .limit(50)
+        )
+        latest_failed = next(
+            (
+                run
+                for run in failed_runs
+                if run.input_ref.get("thesis_id") == str(thesis.id)
+            ),
+            None,
         )
         if latest_failed is None:
             return None

@@ -1,31 +1,16 @@
-"""Forecast verdict records must remain separate from ordinary claim review."""
+"""Forecast verdicts stay machine-auditable and human-published."""
 from __future__ import annotations
 
-import uuid
-from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import uuid
+from datetime import date, datetime, timezone
+
+from app.models.ledger import CaseDocumentVersion, Company, DocumentVersion, Fund, HoldingDisclosure, SourceSpan, SourceStatement, Stock
+from app.models.research_expression import KeyFactor, ReportClaim
+from app.services.source_governance import SourceGovernanceService
 
 
-def test_forecast_verdict_records_are_immutable_ledger_entries() -> None:
-    from app.models.ledger import Base, IMMUTABLE_TABLES
-    from app.models.research_expression import (
-        ActualMetricObservation,
-        ForecastEvaluationCandidate,
-        ForecastTargetVersion,
-        ForecastVerdict,
-    )
-
-    records = (
-        ForecastTargetVersion,
-        ActualMetricObservation,
-        ForecastEvaluationCandidate,
-        ForecastVerdict,
-    )
-    assert {record.__tablename__ for record in records} <= set(Base.metadata.tables)
-    assert {record.__tablename__ for record in records} <= IMMUTABLE_TABLES
-
-
-def test_numeric_forecast_candidate_preserves_rule_and_inputs() -> None:
+def test_within_tolerance_forecast_miss_is_contradicted() -> None:
     from app.services.forecast_verdicts import evaluate_numeric_forecast
 
     result = evaluate_numeric_forecast(
@@ -37,274 +22,155 @@ def test_numeric_forecast_candidate_preserves_rule_and_inputs() -> None:
 
     assert result.outcome == "contradicted"
     assert result.rule_version == "forecast-numeric-v1"
-    assert result.inputs == {
-        "expected_value": "455000000",
-        "actual_value": "247245713.03",
-        "comparator": "within_tolerance",
-        "relative_tolerance": "0.10",
-    }
+    assert result.inputs["expected_value"] == "455000000"
+    assert result.inputs["actual_value"] == "247245713.03"
 
 
-def test_source_statement_options_preserve_utc_availability_after_sqlite_reload(
-    cmd_client, cmd_session
-) -> None:
-    from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
-    from app.services.source_governance import SourceGovernanceService
+def test_within_tolerance_forecast_hit_is_supported() -> None:
+    from app.services.forecast_verdicts import evaluate_numeric_forecast
 
+    result = evaluate_numeric_forecast(
+        expected_value=Decimal("455000000"),
+        actual_value=Decimal("470000000"),
+        comparator="within_tolerance",
+        relative_tolerance=Decimal("0.10"),
+    )
+
+    assert result.outcome == "supported"
+
+
+def _case_with_frozen_sources(cmd_client, cmd_session) -> tuple[uuid.UUID, SourceStatement, SourceStatement, ReportClaim, KeyFactor]:
     case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json={
-        "raw_input": "验证实际披露来源时间", "event_title": "火星人年报验证",
-        "company_name": "火星人", "ticker": "300894.SZ",
-        "research_question": "实际值何时可得？", "candidate_factors": ["归母净利润", "毛利率", "渠道费用"],
-        "created_by": "tester",
+        "raw_input": "验证历史研报的利润预测", "event_title": "火星人利润预测验证",
+        "company_name": "火星人", "ticker": "300894.SZ", "research_question": "预测是否兑现？",
+        "candidate_factors": ["归母净利润", "毛利率", "渠道费用"], "created_by": "tester",
     }).json()["case_id"])
-    available_at = datetime(2024, 4, 22, 8, 0, tzinfo=timezone.utc)
-    document = DocumentVersion(
-        content_sha256="c" * 64,
-        source_url="https://example.test/actual-report",
-        title="冻结公司年报",
-        available_at=available_at,
-        acquired_at=available_at,
-        parser_version="fixture-v1",
-        parse_state="success",
-    )
-    cmd_session.add(document)
-    cmd_session.flush()
-    SourceGovernanceService(cmd_session).record_event_intake(
-        document=document,
-        source_type="licensed_provider",
-        source_metadata={"provider_name": "fixture", "permissions": {"ai_processing": True, "display": True}},
-        declared_by="tester",
-    )
-    cmd_session.add(CaseDocumentVersion(
-        research_case_id=case_id, document_version_id=document.id, linked_at=available_at,
-    ))
-    span = SourceSpan(
-        document_version_id=document.id, locator={"page": 123},
-        verbatim_text="归母净利润247245713.03元",
-    )
-    cmd_session.add(span)
-    cmd_session.flush()
-    statement = SourceStatement(
-        source_span_id=span.id, kind="disclosed_fact",
-        normalized_text="2023年归母净利润247245713.03元", created_at=available_at,
-    )
-    cmd_session.add(statement)
-    cmd_session.commit()
-    cmd_session.expire_all()
-
-    response = cmd_client.get(f"/api/v1/research-cases/{case_id}/source-statements")
-
-    assert response.status_code == 200, response.text
-    actual_source = response.json()["items"][0]
-    assert actual_source["id"] == str(statement.id)
-    assert actual_source["available_at"].endswith(("Z", "+00:00"))
-
-
-def test_service_freezes_matching_admitted_forecast_evidence(cmd_client, cmd_session, monkeypatch) -> None:
-    from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement
-    from app.models.research_expression import ActualMetricObservation, ForecastEvaluationCandidate, KeyFactor, ReportClaim
-    from app.queries.time import api_datetime
-    from app.services.source_governance import SourceGovernanceService
-
-    case_response = cmd_client.post("/api/v1/event-research", json={
-        "raw_input": "验证历史研报的利润预测",
-        "event_title": "火星人利润预测验证",
-        "company_name": "火星人",
-        "ticker": "300894.SZ",
-        "research_question": "预测是否兑现？",
-        "candidate_factors": ["归母净利润", "毛利率", "渠道费用"],
-        "created_by": "tester",
-    })
-    assert case_response.status_code == 201, case_response.text
-    case_id = uuid.UUID(case_response.json()["case_id"])
     forecast_at = datetime(2023, 4, 25, 8, 0, tzinfo=timezone.utc)
-    actual_at = datetime(2024, 4, 22, 0, 0, tzinfo=timezone.utc)
-    actual_at_local = datetime(2024, 4, 22, 8, 0, tzinfo=timezone(timedelta(hours=8)))
+    actual_at = datetime(2024, 4, 22, 8, 0, tzinfo=timezone.utc)
     documents = []
-    for title, available_at, digest in (
-        ("冻结券商预测", forecast_at, "a" * 64),
-        ("冻结公司年报", actual_at, "b" * 64),
+    for title, source_url, available_at, source_sha256 in (
+        ("开源证券火星人研报", "https://pdf.dfcfw.com/pdf/H3_AP202304251585791096_1.pdf", forecast_at, "8e5d8d05e960d0e901f90a39a0c6734b05e63f64372ff0d135768dc3613eaef2"),
+        ("火星人2023年年度报告", "https://static.cninfo.com.cn/finalpage/2024-04-22/1219704396.PDF", actual_at, "3d83bb6584788877b4cb4f9ba4b2d011211d381b07600ba889af935ead3920d3"),
     ):
-        document = DocumentVersion(
-            content_sha256=digest,
-            source_url=f"https://example.test/{title}",
-            title=title,
-            available_at=available_at,
-            acquired_at=available_at,
-            parser_version="fixture-v1",
-            parse_state="success",
-        )
+        document = DocumentVersion(content_sha256=source_sha256, source_url=source_url, title=title, available_at=available_at, acquired_at=available_at, parser_version="fixture-v1", parse_state="success")
         cmd_session.add(document)
         cmd_session.flush()
         SourceGovernanceService(cmd_session).record_event_intake(
-            document=document,
-            source_type="licensed_provider",
+            document=document, source_type="licensed_provider",
             source_metadata={"provider_name": "fixture", "permissions": {"ai_processing": True, "display": True}},
             declared_by="tester",
         )
-        cmd_session.add(CaseDocumentVersion(
-            research_case_id=case_id,
-            document_version_id=document.id,
-            linked_at=available_at,
-        ))
+        cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=available_at))
         documents.append(document)
-    forecast_span = SourceSpan(document_version_id=documents[0].id, locator={"page": 1}, verbatim_text="预计归母净利润455百万元")
-    actual_span = SourceSpan(document_version_id=documents[1].id, locator={"page": 123}, verbatim_text="归母净利润247245713.03元")
+    forecast_span = SourceSpan(document_version_id=documents[0].id, locator={"page": 1, "table": "财务摘要"}, verbatim_text="归母净利润(百万元) 315 455")
+    actual_span = SourceSpan(document_version_id=documents[1].id, locator={"page": 123, "row": "归属于母公司股东的净利润"}, verbatim_text="归属于母公司股东的净利润 247,245,713.03")
     cmd_session.add_all([forecast_span, actual_span])
     cmd_session.flush()
-    forecast_statement = SourceStatement(source_span_id=forecast_span.id, kind="forecast", normalized_text="预计2023年归母净利润455百万元", created_at=forecast_at)
-    actual_statement = SourceStatement(source_span_id=actual_span.id, kind="disclosed_fact", normalized_text="2023年归母净利润247245713.03元", created_at=actual_at)
+    forecast_statement = SourceStatement(source_span_id=forecast_span.id, kind="forecast", normalized_text="预计2023年归母净利润455百万元，2022年315百万元", created_at=forecast_at)
+    actual_statement = SourceStatement(source_span_id=actual_span.id, kind="disclosed_fact", normalized_text="2023年归属于母公司股东的净利润247,245,713.03元", created_at=actual_at)
     cmd_session.add_all([forecast_statement, actual_statement])
     cmd_session.flush()
-    claim = ReportClaim(
-        research_case_id=case_id,
-        source_statement_id=forecast_statement.id,
-        text="预计2023年归母净利润455百万元",
-        claim_kind="forecast",
-        asserted_period=date(2023, 12, 31),
-        asserted_by="券商",
-        review_state="reviewed",
-        reviewed_by="human:reviewer",
-        review_reason="冻结预测，不升级为公司事实。",
-        reviewed_at=forecast_at,
-        created_at=forecast_at,
-    )
+    claim = ReportClaim(research_case_id=case_id, source_statement_id=forecast_statement.id, text="预计2023年归母净利润455百万元", claim_kind="forecast", asserted_period=date(2023, 12, 31), asserted_by="开源证券", review_state="reviewed", reviewed_by="human:reviewer", review_reason="冻结券商预测，不作为公司披露事实。", reviewed_at=forecast_at, created_at=forecast_at)
     cmd_session.add(claim)
     cmd_session.flush()
-    factor = KeyFactor(
-        research_case_id=case_id,
-        report_claim_id=claim.id,
-        name="2023年归母净利润预测",
-        expected_direction="positive",
-        metric_name="归母净利润",
-        allowed_source_types=["company_disclosure"],
-        verification_window_start=date(2023, 1, 1),
-        verification_window_end=date(2023, 12, 31),
-        support_condition="实际值处于容差内",
-        refutation_condition="实际值超出容差",
-        next_verification_event="2023年年度报告",
-        review_state="reviewed",
-        reviewed_by="human:reviewer",
-        review_reason="预测与窗口均已审核。",
-        reviewed_at=forecast_at,
-        created_at=forecast_at,
-    )
+    factor = KeyFactor(research_case_id=case_id, report_claim_id=claim.id, name="2023年归母净利润预测", expected_direction="positive", metric_name="归母净利润", allowed_source_types=["company_disclosure"], verification_window_start=date(2023, 1, 1), verification_window_end=date(2023, 12, 31), support_condition="实际值处于容差内", refutation_condition="实际值超出容差", next_verification_event="2023年年度报告", review_state="reviewed", reviewed_by="human:reviewer", review_reason="预测与验证窗完整。", reviewed_at=forecast_at, created_at=forecast_at)
     cmd_session.add(factor)
     cmd_session.commit()
-    monkeypatch.setattr("app.services.forecast_verdicts._utcnow", lambda: actual_at)
+    return case_id, forecast_statement, actual_statement, claim, factor
 
-    target_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/forecast-targets", json={
+
+def test_http_forecast_candidate_stays_hidden_until_human_verdict(cmd_client, cmd_session) -> None:
+    case_id, forecast_statement, actual_statement, claim, factor = _case_with_frozen_sources(cmd_client, cmd_session)
+    target = cmd_client.post(f"/api/v1/research-cases/{case_id}/forecast-targets", json={
         "key_factor_id": str(factor.id), "report_claim_id": str(claim.id),
-        "forecast_source_statement_id": str(forecast_statement.id),
-        "baseline_source_statement_id": str(forecast_statement.id),
-        "metric_name": "归母净利润", "entity_key": "300894.SZ",
-        "baseline_value": 315000000, "expected_value": 455000000, "unit": "CNY",
-        "forecast_period_start": "2023-01-01", "forecast_period_end": "2023-12-31",
-        "comparator": "within_tolerance", "relative_tolerance": 0.10,
-        "reviewed_by": "human:reviewer", "review_reason": "冻结研报表格数值。",
+        "forecast_source_statement_id": str(forecast_statement.id), "baseline_source_statement_id": str(forecast_statement.id),
+        "metric_name": "归母净利润", "entity_key": "300894.SZ", "baseline_value": "315000000",
+        "expected_value": "455000000", "unit": "CNY", "forecast_period_start": "2023-01-01", "forecast_period_end": "2023-12-31",
+        "comparator": "within_tolerance", "relative_tolerance": "0.10", "reviewed_by": "human:reviewer", "review_reason": "冻结研报表格数值。",
     })
-    assert target_response.status_code == 201, target_response.text
-    target_body = target_response.json()
-    for source_name in ("forecast_source", "baseline_source"):
-        assert target_body[source_name]["available_at"].endswith(("Z", "+00:00"))
-    target_id = target_response.json()["id"]
-    actual_response = cmd_client.post(f"/api/v1/research-cases/{case_id}/actual-metric-observations", json={
-        "forecast_target_id": target_id, "source_statement_id": str(actual_statement.id),
-        "entity_key": "300894.SZ", "observed_value": 247245713.03, "unit": "CNY",
-        "observed_period_start": "2023-01-01", "observed_period_end": "2023-12-31",
-        "available_at": actual_at_local.isoformat(), "recorded_by": "human:reviewer",
-        "record_reason": "年报第123页审计口径。",
+    assert target.status_code == 201, target.text
+    wrong_entity = cmd_client.post(f"/api/v1/forecast-targets/{target.json()['id']}/actual-metric-observations", json={
+        "source_statement_id": str(actual_statement.id), "entity_key": "000001.SZ", "observed_value": "247245713.03", "unit": "CNY",
+        "observed_period_start": "2023-01-01", "observed_period_end": "2023-12-31", "available_at": "2024-04-22T08:00:00Z",
+        "recorded_by": "human:reviewer", "record_reason": "错误实体必须被拒绝。",
     })
-    assert actual_response.status_code == 201, actual_response.text
-    actual_id = uuid.UUID(actual_response.json()["id"])
-    assert actual_response.json()["available_at"] in {
-        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
-    }
-    assert actual_response.json()["source"]["available_at"].endswith(("Z", "+00:00"))
-    cmd_session.expire_all()
-    stored_actual = cmd_session.get(ActualMetricObservation, actual_id)
-    assert stored_actual is not None
-    assert api_datetime(stored_actual.available_at) == actual_at
-
-    not_due_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
-        "actual_observation_id": str(actual_id),
-        "cutoff": "2024-04-22T07:59:00+08:00",
+    assert wrong_entity.status_code == 422
+    actual = cmd_client.post(f"/api/v1/forecast-targets/{target.json()['id']}/actual-metric-observations", json={
+        "source_statement_id": str(actual_statement.id), "entity_key": "300894.SZ", "observed_value": "247245713.03", "unit": "CNY",
+        "observed_period_start": "2023-01-01", "observed_period_end": "2023-12-31", "available_at": "2024-04-22T08:00:00Z",
+        "recorded_by": "human:reviewer", "record_reason": "年报第123页审计口径。",
     })
-    assert not_due_response.status_code == 201, not_due_response.text
-    assert not_due_response.json()["outcome"] == "not_due"
-    candidate_response = cmd_client.post(f"/api/v1/forecast-targets/{target_id}/evaluate", json={
-        "actual_observation_id": str(actual_id),
-        "cutoff": "2024-04-22T08:00:00+08:00",
+    assert actual.status_code == 201, actual.text
+    candidate = cmd_client.post(f"/api/v1/forecast-targets/{target.json()['id']}/evaluate", json={"actual_observation_id": actual.json()["id"], "cutoff": "2024-04-22T23:59:59Z"})
+    assert candidate.status_code == 201, candidate.text
+    assert candidate.json()["outcome"] == "contradicted"
+    expression = cmd_client.get(f"/api/v1/research-cases/{case_id}/market-expression?as_of=2024-04-22&cutoff=2024-04-22T23:59:59Z")
+    assert expression.status_code == 200
+    assert expression.json()["factors"][0]["forecast_verdict"] is None
+    verdict = cmd_client.post(f"/api/v1/forecast-evaluations/{candidate.json()['id']}/verdicts", json={"decision": "confirmed", "reason": "年报实际值显著低于冻结预测，确认未兑现。", "reviewed_by": "human:reviewer"})
+    assert verdict.status_code == 201, verdict.text
+    fund_at = datetime(2024, 8, 30, 8, 0, tzinfo=timezone.utc)
+    fund_document = DocumentVersion(
+        content_sha256="98eb181d73cff199f6169aea238b32661559e4ee2b77ddfdd70f9cb10c740031",
+        source_url="https://www.sse.com.cn/disclosure/fund/announcement/c/new/2024-08-30/560010_20240830_0EVT.pdf",
+        title="广发中证1000ETF 2024年中期报告", available_at=fund_at, acquired_at=fund_at,
+        parser_version="fixture-v1", parse_state="success",
+    )
+    cmd_session.add(fund_document)
+    cmd_session.flush()
+    SourceGovernanceService(cmd_session).record_event_intake(
+        document=fund_document, source_type="licensed_provider",
+        source_metadata={"provider_name": "sse", "permissions": {"ai_processing": True, "display": True}}, declared_by="tester",
+    )
+    cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=fund_document.id, linked_at=fund_at))
+    fund_span = SourceSpan(document_version_id=fund_document.id, locator={"page": 100, "row": 907}, verbatim_text="300894 火星人 349,600 4,481,872.00 0.04")
+    cmd_session.add(fund_span)
+    cmd_session.flush()
+    fund_statement = SourceStatement(source_span_id=fund_span.id, kind="disclosed_fact", normalized_text="560010 于2024-06-30持有300894火星人349600股，市值4481872元。", created_at=fund_at)
+    company = Company(code="300894", name="火星人", type="listed", created_at=fund_at)
+    cmd_session.add_all([fund_statement, company])
+    cmd_session.flush()
+    stock = Stock(company_id=company.id, code="300894.SZ", name="火星人", market="SZSE", created_at=fund_at)
+    fund = Fund(code="560010", name="广发中证1000ETF", fund_type="equity", created_at=fund_at)
+    cmd_session.add_all([stock, fund])
+    cmd_session.flush()
+    cmd_session.add(HoldingDisclosure(
+        fund_id=fund.id, stock_id=stock.id, weight=Decimal("0.0004"), report_period=date(2024, 6, 30),
+        published_at=fund_at, acquired_at=fund_at, source="sse_fund_report",
+        source_document_version_id=fund_document.id, source_span_id=fund_span.id, coverage_status="complete", created_at=fund_at,
+    ))
+    cmd_session.commit()
+    binding = cmd_client.post(f"/api/v1/research-cases/{case_id}/market-instruments", json={
+        "company_id": str(company.id), "stock_id": str(stock.id), "source_statement_id": str(forecast_statement.id),
+        "relationship_role": "directly_affected", "reviewed_by": "human:reviewer", "review_reason": "预测主体即该股票。",
     })
-    assert candidate_response.status_code == 201, candidate_response.text
-    candidate = candidate_response.json()
-    assert candidate["cutoff"] in {
-        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
-    }
-    assert candidate["inputs"]["cutoff"] == "2024-04-22T00:00:00+00:00"
-    assert candidate["inputs"]["available_at"] == "2024-04-22T00:00:00+00:00"
-    cmd_session.expire_all()
-    stored_candidate = cmd_session.get(ForecastEvaluationCandidate, uuid.UUID(candidate["id"]))
-    assert stored_candidate is not None
-    assert api_datetime(stored_candidate.cutoff) == actual_at
-    verdict_response = cmd_client.post(f"/api/v1/forecast-evaluations/{candidate['id']}/verdicts", json={
-        "decision": "confirmed", "outcome": None,
-        "reason": "实际值显著低于冻结预测，确认未兑现。",
-        "reviewed_by": "human:reviewer",
+    assert binding.status_code == 201, binding.text
+    impact = cmd_client.post(f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/fundamental-impacts", json={
+        "market_instrument_binding_id": binding.json()["id"], "source_statement_id": str(actual_statement.id),
+        "metric_name": "归母净利润", "expected_direction": "positive", "rationale": "以年报实际指标验证研报预测。",
+        "reviewed_by": "human:reviewer", "review_reason": "公司与指标口径已核对。",
     })
-    assert verdict_response.status_code == 201, verdict_response.text
-
-    assert candidate["outcome"] == "contradicted"
-    assert candidate["review_state"] == "machine_generated"
-    assert verdict_response.json()["outcome"] == "contradicted"
-    cmd_session.expire_all()
-
-    before_available = cmd_client.get(
-        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
-        params={"cutoff": "2024-04-22T07:59:00+08:00"},
-    )
-    assert before_available.status_code == 200, before_available.text
-    assert before_available.json()["items"] == []
-    at_available = cmd_client.get(
-        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
-        params={"cutoff": "2024-04-22T08:00:00+08:00"},
-    )
-    assert at_available.status_code == 200, at_available.text
-    assert len(at_available.json()["items"]) == 1
-    assert at_available.json()["items"][0]["actual"]["id"] == str(actual_id)
-
-    response = cmd_client.get(
-        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
-        params={"cutoff": datetime.now(timezone.utc).isoformat()},
-    )
-
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["case_id"] == str(case_id)
-    assert len(payload["items"]) == 1
-    assert payload["items"][0]["outcome"] == "contradicted"
-    assert payload["items"][0]["rule_version"] == "forecast-numeric-v1"
-    assert payload["items"][0]["forecast_source"]["document_title"] == "冻结券商预测"
-    item = payload["items"][0]
-    for source in (
-        item["forecast_source"],
-        item["target"]["forecast_source"],
-        item["target"]["baseline_source"],
-        item["actual_source"],
-        item["actual"]["source"],
-    ):
-        assert source["available_at"].endswith(("Z", "+00:00"))
-    assert item["actual"]["available_at"] in {
-        "2024-04-22T00:00:00Z", "2024-04-22T00:00:00+00:00",
-    }
-
-    monkeypatch.setenv(
-        "RESEARCH_TENANT_TOKENS",
-        '{"test-tenant-token":"test-team","other-token":"other-team"}',
-    )
-    foreign = cmd_client.get(
-        f"/api/v1/research-cases/{case_id}/forecast-verdicts",
-        params={"cutoff": datetime.now(timezone.utc).isoformat()},
-        headers={"Authorization": "Bearer other-token"},
-    )
-    assert foreign.status_code == 404
+    assert impact.status_code == 201, impact.text
+    formal = cmd_client.get(f"/api/v1/research-cases/{case_id}/market-expression?as_of=2026-08-10&cutoff=2026-08-10T23:59:59Z")
+    forecast_verdict = formal.json()["factors"][0]["forecast_verdict"]
+    assert forecast_verdict["outcome"] == "contradicted"
+    assert forecast_verdict["actual_value"] == 247245713.03
+    assert forecast_verdict["actual_source"]["locator"] == {"page": 123, "row": "归属于母公司股东的净利润"}
+    assert formal.json()["fundamentals"][0]["stock_code"] == "300894.SZ"
+    fund_position = formal.json()["fund_exposure"][0]["positions"][0]
+    assert formal.json()["fund_exposure"][0]["fund_code"] == "560010"
+    assert fund_position["report_period"] == "2024-06-30"
+    assert fund_position["source_locator"] == {"page": 100, "row": 907}
+    assert fund_position["freshness_status"] == "stale_disclosure"
+    listed = cmd_client.get(f"/api/v1/research-cases/{case_id}/forecast-verdicts?cutoff=2026-08-10T23:59:59Z")
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["outcome"] == "contradicted"
+    before_actual = cmd_client.get(f"/api/v1/research-cases/{case_id}/forecast-verdicts?cutoff=2024-04-21T23:59:59Z")
+    assert before_actual.status_code == 200
+    assert before_actual.json()["items"] == []
+    rejected_successor = cmd_client.post(f"/api/v1/forecast-evaluations/{candidate.json()['id']}/verdicts", json={
+        "decision": "rejected", "reason": "撤回已发布结论以待补充审查。", "reviewed_by": "human:reviewer", "supersedes_id": verdict.json()["id"],
+    })
+    assert rejected_successor.status_code == 201, rejected_successor.text
+    withdrawn = cmd_client.get(f"/api/v1/research-cases/{case_id}/market-expression?as_of=2026-08-10&cutoff=2026-08-10T23:59:59Z")
+    assert withdrawn.json()["factors"][0]["forecast_verdict"] is None

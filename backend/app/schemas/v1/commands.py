@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Literal
-from uuid import UUID
 
 from pydantic import Field
 
@@ -159,9 +158,8 @@ class RerunResponse(V1Model):
 
     A rerun freezes a NEW snapshot and appends a NEW provisional assessment;
     prior snapshots/assessments are never touched, and the difference shows
-    up in the snapshot-compare view.  ``mode`` is ``mock`` only when
-    ``APP_ENV=test`` and no LLM key is configured; every non-test runtime
-    requires a live provider.
+    up in the snapshot-compare view.  ``mode`` is ``mock`` without an LLM key
+    (non-production only — production fails closed per provider discipline).
     """
 
     thesis_id: str
@@ -246,8 +244,6 @@ class AtomicClaimCandidateDTO(V1Model):
 
 class AtomicClaimQueueResponse(V1Model):
     items: list[AtomicClaimCandidateDTO]
-    has_more: bool = False
-    next_cursor: str | None = None
 
 
 class AtomicClaimReviewRequest(V1Model):
@@ -257,33 +253,6 @@ class AtomicClaimReviewRequest(V1Model):
     reviewer: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
-
-
-class CreateAtomicClaimCandidateRequest(V1Model):
-    """A researcher-proposed, review-gated claim from one frozen span.
-
-    The server derives the quote and offsets from ``source_span_id`` so the
-    browser cannot silently alter the cited wording or location.
-    """
-
-    source_span_id: UUID
-    normalized_text: str = Field(min_length=1)
-    claim_type: Literal[
-        "disclosed_fact",
-        "reported_claim",
-        "management_attribution",
-        "forecast",
-        "research_opinion",
-    ] = "reported_claim"
-    assertion_actor: str | None = Field(default=None, max_length=512)
-    subject: str | None = Field(default=None, max_length=512)
-    predicate: str | None = Field(default=None, max_length=512)
-    object_text: str | None = Field(default=None, max_length=2_000)
-    numeric_value: str | None = Field(default=None, max_length=128)
-    unit: str | None = Field(default=None, max_length=128)
-    observed_period: date | None = None
-    scope: dict[str, str] = Field(default_factory=dict)
-    actor: str = Field(min_length=1, max_length=128)
 
 
 # ---------------------------------------------------------------------------
@@ -334,9 +303,7 @@ class ProposeResponse(V1Model):
 
     Every proposed link lands as a ``Proposal(kind=evidence_link)`` in the
     review queue; nothing is auto-confirmed.  ``job_id`` lets the client track
-    progress / cancellation.  ``mode`` is ``mock`` only when
-    ``APP_ENV=test`` and no LLM key is configured; every non-test runtime
-    requires a live provider.
+    progress / cancellation.  ``mode`` is ``mock`` without an LLM key.
     """
 
     thesis_id: str
@@ -354,12 +321,12 @@ class ProposeResponse(V1Model):
 class IngestRequest(V1Model):
     """Trigger a Gildata ingest run.
 
-    Query fields are optional and fall back to the AI-compute defaults.
-    ``case_id`` is required: an ingest may attach frozen provider material only
-    to the current tenant's explicitly selected Case.
+    All fields optional: omitted queries fall back to the AI-compute
+    defaults.  ``case_id`` tags ingested span locators against a case;
+    when omitted the first existing case is used (or none).
     """
 
-    case_id: str
+    case_id: str | None = None
     research_queries: list[str] | None = None
     announcement_query: str | None = None
     news_query: str | None = None

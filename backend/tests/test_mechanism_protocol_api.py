@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.models.ledger import ResearchCase
-from tests.tenant_admission import admit_case
 
 
 def test_case_protocol_api_lists_templates_and_appends_selection(cmd_client, cmd_session) -> None:
@@ -11,8 +10,6 @@ def test_case_protocol_api_lists_templates_and_appends_selection(cmd_client, cmd
         title="机制 API Case", industry_topic="ai", created_by="human", created_at=datetime.now(timezone.utc)
     )
     cmd_session.add(case)
-    cmd_session.flush()
-    admit_case(cmd_session, case.id)
     cmd_session.commit()
 
     templates = cmd_client.get("/api/v1/mechanism-templates")

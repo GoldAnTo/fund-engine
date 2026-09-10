@@ -1,32 +1,44 @@
-import { lazy, StrictMode, Suspense } from "react";
-import { createRoot } from "react-dom/client";
-import { LiveResearchWorkbench } from "@/workbench/LiveResearchWorkbench";
-import { ResearchWorkbench } from "@/workbench/ResearchWorkbench";
-import { AppErrorBoundary } from "@/app/AppErrorBoundary";
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import { ResearchOsRoutes } from "./app/routes";
+import { setResearchOsApi } from "./app/researchOsApi";
+import { setResearchClient } from "./data/researchClient";
 
-import "@/styles/global.css";
-import "@/styles/app.css";
+// 测试钩子：?client=mock 强制使用内存 mock 适配器。
+// 写入路径的 e2e 用例借此保证任何人工决策都不会落到真实后端；
+// 正常访问不带该参数时行为不变。
+import "./styles/research-os.css";
+import "./styles/research-os-overrides.css";
 
-const EventMarketApp = lazy(() => import("@/app/EventMarketApp"));
-const CompanyResearchApp = lazy(() => import("@/app/CompanyResearchApp"));
-const ResearchArchiveApp = lazy(() => import("@/app/ResearchArchiveApp"));
-
-const rootElement = document.getElementById("root");
-
-if (!rootElement) {
-  throw new Error("#root element not found");
+async function bootstrap() {
+  const mockRequested =
+    new URLSearchParams(window.location.search).get("client") === "mock" ||
+    import.meta.env.VITE_RESEARCH_CLIENT === "mock";
+  if (mockRequested && !import.meta.env.DEV) {
+    ReactDOM.createRoot(document.getElementById("root")!).render(
+      <main className="ros-page"><div className="ros-empty"><strong>离线演示仅在开发环境可用</strong><p>生产环境不会打包或加载旧原型 fixture，也不会将 mock 请求回退到真实研究账本。</p></div></main>,
+    );
+    return;
+  }
+  if (mockRequested) {
+    // Keep the retired prototype adapter available to the local Vite server
+    // only. A variable + vite-ignore import deliberately prevents it (and its
+    // historical fixture) from becoming a production build chunk.
+    const localMockAdapterModule = "./data/" + "mockResearchAdapter";
+    const { MockResearchAdapter } = await import(/* @vite-ignore */ localMockAdapterModule);
+    const { MockResearchOsApi } = await import("./data/mockResearchOsApi");
+    const mockAdapter = new MockResearchAdapter();
+    setResearchClient(mockAdapter);
+    setResearchOsApi(new MockResearchOsApi(mockAdapter));
+  }
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <BrowserRouter>
+        <ResearchOsRoutes />
+      </BrowserRouter>
+    </React.StrictMode>,
+  );
 }
 
-createRoot(rootElement).render(
-  <StrictMode>
-    <AppErrorBoundary>
-    {/^\/events\/[^/]+\/(?:market|stocks|funds)(?:\/|$)/.test(window.location.pathname)
-      ? <Suspense fallback={<p role="status">正在加载市场研究…</p>}><EventMarketApp /></Suspense>
-      : /^\/underwriting\/research(?:\/|$)/.test(window.location.pathname)
-      ? <Suspense fallback={<p role="status">正在加载研究档案…</p>}><ResearchArchiveApp /></Suspense>
-      : /^\/research(?:\/|$)/.test(window.location.pathname)
-      ? <Suspense fallback={<p role="status">正在加载公司研究…</p>}><CompanyResearchApp /></Suspense>
-      : new URLSearchParams(window.location.search).get("client") === "mock" ? <ResearchWorkbench /> : <LiveResearchWorkbench />}
-    </AppErrorBoundary>
-  </StrictMode>,
-);
+void bootstrap();

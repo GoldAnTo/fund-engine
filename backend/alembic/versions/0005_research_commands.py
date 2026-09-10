@@ -68,10 +68,6 @@ def upgrade() -> None:
     )
 
     # Defence-in-depth: reject UPDATE/DELETE for every new ledger table.
-    # reject_mutable_ledger() is installed only by PostgreSQL migrations.
-    if op.get_bind().dialect.name != "postgresql":
-        return
-
     # reject_mutable_ledger() was created in migration 0001.
     for table in IMMUTABLE_TABLES:
         op.execute(

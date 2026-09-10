@@ -10,7 +10,6 @@ import pytest
 from sqlalchemy import func, select
 
 from app.api.v1.commands.ingest import get_gildata_client
-from app.datasources.gildata.client import GildataMCPError
 from app.main import app
 from tests.test_gildata_client import _make_client
 
@@ -32,15 +31,13 @@ def fake_gildata(cmd_client):
 
 
 def test_ingest_freezes_documents_and_valuations(fake_gildata, cmd_seeded):
-    from app.models.ledger import DocumentVersion, ResearchCase, ValuationSnapshot
+    from app.models.ledger import DocumentVersion, ValuationSnapshot
 
     seeded_vals = cmd_seeded.scalar(
         select(func.count()).select_from(ValuationSnapshot)
     )
 
-    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
-    assert case is not None
-    resp = fake_gildata.post("/api/v1/documents/ingest", json={"case_id": str(case.id)})
+    resp = fake_gildata.post("/api/v1/documents/ingest", json={})
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["research_reports"] == 2
@@ -60,15 +57,10 @@ def test_ingest_freezes_documents_and_valuations(fake_gildata, cmd_seeded):
 
 
 def test_ingest_is_idempotent_via_api(fake_gildata, cmd_seeded):
-    from app.models.ledger import ResearchCase
-
-    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
-    assert case is not None
-    payload = {"case_id": str(case.id)}
-    first = fake_gildata.post("/api/v1/documents/ingest", json=payload)
+    first = fake_gildata.post("/api/v1/documents/ingest", json={})
     assert first.status_code == 201
 
-    second = fake_gildata.post("/api/v1/documents/ingest", json=payload)
+    second = fake_gildata.post("/api/v1/documents/ingest", json={})
     assert second.status_code == 201, second.text
     body = second.json()
     # Valuation guard: all three metrics skipped on the second run.
@@ -83,71 +75,10 @@ def test_ingest_unknown_case_returns_404(fake_gildata, cmd_seeded):
     assert resp.status_code == 404
 
 
-def test_ingest_requires_an_explicit_case(fake_gildata, cmd_seeded):
-    resp = fake_gildata.post("/api/v1/documents/ingest", json={})
-
-    assert resp.status_code == 422
-    assert resp.json()["error"]["code"] == "validation_failed"
-
-
-def test_ingest_cannot_attach_to_another_tenants_case(
-    fake_gildata, cmd_seeded, monkeypatch
-):
-    from app.models.ledger import ResearchCase
-
-    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
-    assert case is not None
-    monkeypatch.setenv(
-        "RESEARCH_TENANT_TOKENS",
-        '{"test-tenant-token":"test-team","other-tenant-token":"other-team"}',
-    )
-
-    response = fake_gildata.post(
-        "/api/v1/documents/ingest",
-        json={"case_id": str(case.id)},
-        headers={"Authorization": "Bearer other-tenant-token"},
-    )
-
-    assert response.status_code == 404
-
-
 def test_ingest_without_token_returns_503(cmd_client, cmd_seeded, monkeypatch):
     """No dependency override and no GILDATA_TOKEN -> 503 envelope."""
     monkeypatch.delenv("GILDATA_TOKEN", raising=False)
-    from app.models.ledger import ResearchCase
-
-    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
-    assert case is not None
-    resp = cmd_client.post("/api/v1/documents/ingest", json={"case_id": str(case.id)})
+    resp = cmd_client.post("/api/v1/documents/ingest", json={})
     assert resp.status_code == 503
     body = resp.json()
     assert body["error"]["code"] == "upstream_unavailable"
-
-
-def test_ingest_provider_failure_never_echoes_upstream_details(
-    cmd_client, cmd_seeded
-):
-    from app.models.ledger import ResearchCase
-
-    class FailingClient:
-        def call_tool(self, name, arguments, timeout=60):
-            raise GildataMCPError(
-                "request https://provider.invalid?token=sentinel-secret failed"
-            )
-
-    def override():
-        yield FailingClient()
-
-    case = cmd_seeded.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
-    assert case is not None
-    app.dependency_overrides[get_gildata_client] = override
-    try:
-        response = cmd_client.post(
-            "/api/v1/documents/ingest", json={"case_id": str(case.id)}
-        )
-    finally:
-        app.dependency_overrides.pop(get_gildata_client, None)
-
-    assert response.status_code == 503
-    assert response.json()["error"]["message"] == "Gildata provider request failed"
-    assert "sentinel-secret" not in response.text

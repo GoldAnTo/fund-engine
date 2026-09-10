@@ -24,11 +24,6 @@ class SourceContract(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
     document_version_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("document_versions.id"), nullable=False, index=True)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    research_source_type: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default=lambda context: context.get_current_parameters()["source_type"],
-    )
     provider_or_tenant: Mapped[str] = mapped_column(String(256), nullable=False)
     allow_ai_processing: Mapped[bool] = mapped_column(Boolean, nullable=False)
     allow_display: Mapped[bool] = mapped_column(Boolean, nullable=False)

@@ -11,90 +11,46 @@ or keep one supervised worker polling locally::
 from __future__ import annotations
 
 import argparse
-import os
-import socket
 import time
 from datetime import datetime, timedelta, timezone
 
-from app.env import load_local_env
-
-load_local_env()  # backend/.env (gitignored); exported process env still wins
-
-from app.ai.error_safety import AI_OPERATION_ERROR_MESSAGE
 from app.db import SessionLocal
 from app.models.operational import ResearchRun
 from app.services.auto_research import AutoResearchService
 from app.services.monitor_scheduler import MonitorScheduler
-from app.services.fund_disclosure_sync_scheduler import FundDisclosureSyncScheduler
-from app.services.research_worker_heartbeat import WorkerHeartbeatService
-from app.services.worker_heartbeat_publisher import WorkerHeartbeatPublisher
-
-
-def _worker_id() -> str:
-    return os.getenv("RESEARCH_WORKER_ID", socket.gethostname())[:128]
-
-
-def _touch(*, mode: str, state: str) -> None:
-    with SessionLocal() as session:
-        WorkerHeartbeatService(session).touch(
-            worker_id=_worker_id(), mode=mode, state=state, worker_kind="research_run"
-        )
-        session.commit()
 
 
 def run_once(*, recover_after_minutes: int = 30) -> bool:
     """Claim and execute one persisted run; return whether work was found."""
     with SessionLocal() as session:
         MonitorScheduler(session).dispatch_due()
-        scheduled_fund_runs = FundDisclosureSyncScheduler(session).dispatch_due()
         session.commit()
         service = AutoResearchService(session)
         service.repo.recover_stale_run_jobs(
             before=datetime.now(timezone.utc) - timedelta(minutes=recover_after_minutes)
         )
-        service.repo.requeue_source_ready_runs()
         job = service.repo.claim_next_run_job()
         if job is None:
             session.commit()
-            return bool(scheduled_fund_runs)
-        claim_token = job.claim_token
+            return False
         run = session.get(ResearchRun, job.target_id)
         session.commit()  # publish the claim before provider work begins
         if run is None:
-            service.repo.record_job_completion(
-                job,
-                status="failed",
-                step="failed",
-                error="run missing",
-                expected_claim_token=claim_token,
-            )
+            service.repo.record_job_completion(job, status="failed", step="failed", error="run missing")
             session.commit()
             return True
         try:
             service.execute(run)
-            if run.status == "waiting_for_sources":
-                service.repo.wait_for_sources(
-                    run, job, expected_claim_token=claim_token
-                )
-            else:
-                service.repo.record_job_completion(
-                    job,
-                    status="cancelled" if run.status == "cancelled" else run.status,
-                    step=run.stage,
-                    run=run,
-                    expected_claim_token=claim_token,
-                )
-            session.commit()
-        except Exception:
-            service.repo.update_run(run, status="failed", stage="failed", stop_reason="execution_failed")
+            session.refresh(run)
             service.repo.record_job_completion(
                 job,
-                status="failed",
-                step="failed",
-                error=AI_OPERATION_ERROR_MESSAGE,
-                run=run,
-                expected_claim_token=claim_token,
+                status="cancelled" if run.status == "cancelled" else run.status,
+                step=run.stage,
             )
+            session.commit()
+        except Exception as exc:
+            service.repo.update_run(run, status="failed", stage="failed", stop_reason="execution_failed")
+            service.repo.record_job_completion(job, status="failed", step="failed", error=str(exc))
             session.commit()
             raise
         return True
@@ -109,23 +65,12 @@ def main() -> None:
     if not args.once and not args.loop:
         parser.error("choose --once or --loop")
     if args.once:
-        _touch(mode="once", state="executing")
         run_once()
-        _touch(mode="once", state="idle")
         return
-    publisher = WorkerHeartbeatPublisher(
-        session_factory=SessionLocal,
-        worker_id=_worker_id(),
-        worker_kind="research_run",
-    )
-    publisher.start()
-    try:
-        while True:
-            found = run_once()
-            if not found:
-                time.sleep(max(args.poll_seconds, 0.1))
-    finally:
-        publisher.stop()
+    while True:
+        found = run_once()
+        if not found:
+            time.sleep(max(args.poll_seconds, 0.1))
 
 
 if __name__ == "__main__":

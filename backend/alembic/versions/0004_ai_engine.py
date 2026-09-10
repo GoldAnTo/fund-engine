@@ -33,11 +33,6 @@ def upgrade() -> None:
     )
 
     # Defence-in-depth: reject UPDATE/DELETE for every new ledger table.
-    # SQLite is supported for isolated demos but does not expose the
-    # PostgreSQL append-only trigger function.
-    if op.get_bind().dialect.name != "postgresql":
-        return
-
     # reject_mutable_ledger() was created in migration 0001.
     for table in IMMUTABLE_TABLES:
         op.execute(

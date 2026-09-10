@@ -9,7 +9,7 @@ import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.errors import NotFoundError, ValidationFailedError
@@ -19,16 +19,11 @@ from app.models.ledger import (
     DocumentUploadArtifact,
     DocumentVersion,
     Stock,
-    SourceSpan,
-    SourceStatement,
-    Thesis,
 )
 from app.models.source_governance import ProviderRecord, SourceContract
-from app.services.source_admission import source_contract_is_active
 from app.queries.basis import HistoricalBasis
 from app.queries.extraction_runs import extraction_state, latest_extract_runs
 from app.services.content_quality import assess_span_texts
-from app.services.case_tenant_access import CaseTenantAccess
 from app.repositories.documents import DocumentRepository
 from app.repositories.research import ResearchRepository
 from app.schemas.v1.common import CursorPage
@@ -47,13 +42,7 @@ _RESEARCH_STATES = frozenset({"reviewed", "machine_generated"})
 
 
 def _iso(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    # SQLite drops tzinfo from DateTime(timezone=True).  The document ledger
-    # treats naive legacy values as UTC, and API callers may safely reuse this
-    # representation as an OutcomeBinding baseline without inventing a time.
-    normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-    return normalized.isoformat()
+    return value.isoformat() if value is not None else None
 
 
 def _encode_cursor(available_at: datetime, version_id: uuid.UUID) -> str:
@@ -91,26 +80,14 @@ class DocumentReadQueries:
         basis: HistoricalBasis,
         limit: int,
         cursor: str | None,
-        tenant_id: str | None = None,
     ) -> DocumentListResponse:
         cursor_at, cursor_id = (None, None)
         if cursor is not None:
             cursor_at, cursor_id = _decode_cursor(cursor)
-            if tenant_id is not None:
-                owned_cursor = self._session.scalar(
-                    select(DocumentVersion.id).where(
-                        DocumentVersion.id == cursor_id,
-                        DocumentVersion.available_at == cursor_at,
-                        self._docs.owned_attachment(tenant_id, case_id),
-                    )
-                )
-                if owned_cursor is None:
-                    raise NotFoundError("document version not found")
         versions = self._docs.visible_versions(
             cutoff=basis.cutoff,
             limit=limit,
             query=query,
-            tenant_id=tenant_id,
             case_id=case_id,
             cursor_at=cursor_at,
             cursor_id=cursor_id,
@@ -147,36 +124,20 @@ class DocumentReadQueries:
                 )
             )
         } if page_items else {}
-        visible_ids = [version.id for version in page_items
-                       if self._content_is_displayable(contracts.get(version.id))]
-        spans_by_document = defaultdict(list)
-        if visible_ids:
-            for span in self._session.scalars(
-                select(SourceSpan).where(SourceSpan.document_version_id.in_(visible_ids))
-                .order_by(SourceSpan.id)
-            ):
-                spans_by_document[span.document_version_id].append(span)
-        # The summary needs counts, not full statement objects or their text.
-        statement_counts = dict(self._session.execute(
-            select(SourceSpan.document_version_id, func.count(SourceStatement.id))
-            .join(SourceStatement, SourceStatement.source_span_id == SourceSpan.id)
-            .where(SourceSpan.document_version_id.in_(visible_ids))
-            .group_by(SourceSpan.document_version_id)
-        ).all()) if visible_ids else {}
-        stock_cache: dict[tuple[str, str], Stock | None] = {}
         items: list[DocumentSummaryDTO] = []
         for version in page_items:
-            source_contract = contracts.get(version.id)
-            visible_spans = spans_by_document.get(version.id, [])
+            spans = self._docs.spans_for_version(version.id)
+            statements = self._research.statements_for_span_ids(
+                [s.id for s in spans]
+            )
             items.append(
                 self._summary(
                     version,
-                    len(visible_spans),
-                    statement_counts.get(version.id, 0),
-                    spans=visible_spans,
-                    stock_cache=stock_cache,
+                    len(spans),
+                    len(statements),
+                    spans=spans,
                     latest_run=run_map.get(version.id),
-                    source_contract=source_contract,
+                    source_contract=contracts.get(version.id),
                     provider_record=provider_records.get(version.id),
                     upload_artifact=upload_artifacts.get(version.id),
                 )
@@ -188,38 +149,15 @@ class DocumentReadQueries:
         )
 
     def detail(
-        self, *, version_id: uuid.UUID, research_mode: bool = False,
-        case_id: uuid.UUID | None = None,
-        tenant_id: str | None = None,
+        self, *, version_id: uuid.UUID, research_mode: bool = False
     ) -> DocumentDetailResponse:
-        version_query = select(DocumentVersion).where(DocumentVersion.id == version_id)
-        if tenant_id is not None:
-            version_query = version_query.where(self._docs.owned_attachment(tenant_id, case_id))
-        version = self._session.scalar(version_query)
+        version = self._session.get(DocumentVersion, version_id)
         if version is None:
             raise NotFoundError("document version not found")
 
-        source_contract = self._session.scalar(
-            select(SourceContract).where(
-                SourceContract.document_version_id == version_id
-            )
-        )
-        provider_record = self._session.scalar(
-            select(ProviderRecord).where(
-                ProviderRecord.document_version_id == version_id
-            )
-        )
-        upload_artifact = self._session.scalar(
-            select(DocumentUploadArtifact).where(
-                DocumentUploadArtifact.document_version_id == version_id
-            )
-        )
         spans = self._docs.spans_for_version(version_id)
-        visible_spans = (
-            spans if self._content_is_displayable(source_contract) else []
-        )
         statements = self._research.statements_for_span_ids(
-            [s.id for s in visible_spans]
+            [s.id for s in spans]
         )
         span_to_statements: dict[uuid.UUID, list] = defaultdict(list)
         for st in statements:
@@ -235,24 +173,12 @@ class DocumentReadQueries:
             )
             if link.review_state in allowed_states
         ]
-        if case_id is not None or tenant_id is not None:
-            thesis_query = select(Thesis.id)
-            if case_id is not None:
-                thesis_query = thesis_query.where(Thesis.research_case_id == case_id)
-            if tenant_id is not None:
-                thesis_query = thesis_query.where(
-                    Thesis.research_case_id.in_(CaseTenantAccess(self._session).case_ids(tenant_id))
-                )
-            case_thesis_ids = set(self._session.scalars(thesis_query))
-            # Frozen source content can be shared, but its other Cases' research
-            # relations must not escape through the shared document response.
-            links = [link for link in links if link.thesis_id in case_thesis_ids]
         stmt_to_links: dict[uuid.UUID, list] = defaultdict(list)
         for link in links:
             stmt_to_links[link.source_statement_id].append(link)
 
         span_dtos: list[SourceSpanDTO] = []
-        for span in visible_spans:
+        for span in spans:
             citations: list[dict] = []
             for st in span_to_statements.get(span.id, []):
                 for link in stmt_to_links.get(st.id, []):
@@ -284,39 +210,17 @@ class DocumentReadQueries:
         return DocumentDetailResponse(
             document=self._summary(
                 version,
-                len(visible_spans),
+                len(spans),
                 len(statements),
-                spans=visible_spans,
+                spans=spans,
                 latest_run=latest_extract_runs(self._session, [version_id]).get(
                     version_id
                 ),
-                source_contract=source_contract,
-                provider_record=provider_record,
-                upload_artifact=upload_artifact,
+                source_contract=self._session.scalar(select(SourceContract).where(SourceContract.document_version_id == version_id)),
+                provider_record=self._session.scalar(select(ProviderRecord).where(ProviderRecord.document_version_id == version_id)),
+                upload_artifact=self._session.scalar(select(DocumentUploadArtifact).where(DocumentUploadArtifact.document_version_id == version_id)),
             ),
             spans=span_dtos,
-        )
-
-    def detail_for_case(
-        self,
-        *,
-        case_id: uuid.UUID,
-        version_id: uuid.UUID,
-        research_mode: bool = False,
-    ) -> DocumentDetailResponse:
-        """Read one document only after its Case ownership is established."""
-        attached = self._session.scalar(
-            select(CaseDocumentVersion.id).where(
-                CaseDocumentVersion.research_case_id == case_id,
-                CaseDocumentVersion.document_version_id == version_id,
-            )
-        )
-        if attached is None:
-            # A caller that can read the Case still learns nothing about an
-            # unrelated global content-addressed document version.
-            raise NotFoundError("document version not found")
-        return self.detail(
-            version_id=version_id, research_mode=research_mode, case_id=case_id
         )
 
     @staticmethod
@@ -358,7 +262,6 @@ class DocumentReadQueries:
         sec_code: str | None,
         title: str | None = None,
         sec_name: str | None = None,
-        stock_cache: dict[tuple[str, str], Stock | None] | None = None,
     ) -> str | None:
         """Resolve the document's subject entity to ``name (code)`` via Stock.
 
@@ -369,19 +272,14 @@ class DocumentReadQueries:
         "工业富联(601138)…" → "寒武纪" / "工业富联").  Falls back to the raw
         code when no Stock row matches; ``None`` when nothing resolves.
         """
-        # Request-local memoization includes misses; no cross-request stale cache.
-        cache = stock_cache if stock_cache is not None else {}
         base = (sec_code or "").split(".")[0].strip()
         if base:
             candidates = {
                 sec_code, base, f"{base}.SH", f"{base}.SZ", f"{base}.BJ"
             }
-            key = ("code", sec_code or "")
-            if key not in cache:
-                cache[key] = self._session.scalar(
-                    select(Stock).where(Stock.code.in_(candidates)).limit(1)
-                )
-            stock = cache[key]
+            stock = self._session.scalar(
+                select(Stock).where(Stock.code.in_(candidates)).limit(1)
+            )
             if stock is not None:
                 return f"{stock.name} ({stock.code})"
             return sec_code
@@ -391,12 +289,9 @@ class DocumentReadQueries:
         ):
             if not name:
                 continue
-            key = ("name", name)
-            if key not in cache:
-                cache[key] = self._session.scalar(
-                    select(Stock).where(Stock.name == name).limit(1)
-                )
-            stock = cache[key]
+            stock = self._session.scalar(
+                select(Stock).where(Stock.name == name).limit(1)
+            )
             if stock is not None:
                 return f"{stock.name} ({stock.code})"
         return None
@@ -408,13 +303,11 @@ class DocumentReadQueries:
         statement_count: int,
         *,
         spans: list | None = None,
-        stock_cache: dict[tuple[str, str], Stock | None] | None = None,
         latest_run: AIRun | None = None,
         source_contract: SourceContract | None = None,
         provider_record: ProviderRecord | None = None,
         upload_artifact: DocumentUploadArtifact | None = None,
     ) -> DocumentSummaryDTO:
-        content_is_displayable = self._content_is_displayable(source_contract)
         meta = self._locator_metadata(spans or [])
         quality, quality_reasons = assess_span_texts(
             [s.verbatim_text for s in spans] if spans else []
@@ -422,7 +315,7 @@ class DocumentReadQueries:
         return DocumentSummaryDTO(
             id=str(version.id),
             content_sha256=version.content_sha256,
-            source_url=version.source_url if content_is_displayable else None,
+            source_url=version.source_url,
             published_at=_iso(version.published_at),
             available_at=_iso(version.available_at),
             acquired_at=_iso(version.acquired_at),
@@ -455,15 +348,11 @@ class DocumentReadQueries:
             quality_reasons=quality_reasons,
             # S4: prefer the source-side title written at freeze time,
             # fall back to whatever the legacy span-locator derived.
-            title=(version.title or meta["title"])
-            if content_is_displayable
-            else None,
-            org=meta["org"] if content_is_displayable else None,
-            doc_kind=meta["doc_kind"] if content_is_displayable else None,
-            entity=(
-                self._resolve_entity(meta["sec_code"], meta["title"], meta["sec_name"], stock_cache)
-                if content_is_displayable
-                else None
+            title=version.title or meta["title"],
+            org=meta["org"],
+            doc_kind=meta["doc_kind"],
+            entity=self._resolve_entity(
+                meta["sec_code"], meta["title"], meta["sec_name"]
             ),
             source_contract=self._source_contract_dto(source_contract, provider_record),
             original_file=(
@@ -475,15 +364,10 @@ class DocumentReadQueries:
                     uploaded_by=upload_artifact.uploaded_by,
                     retention_policy=upload_artifact.retention_policy,
                 )
-                if upload_artifact is not None and content_is_displayable
+                if upload_artifact is not None
                 else None
             ),
         )
-
-    @staticmethod
-    def _content_is_displayable(contract: SourceContract | None) -> bool:
-        """Preserve legacy snapshots, but never disclose explicitly restricted content."""
-        return contract is None or contract.allow_display
 
     @staticmethod
     def _source_contract_dto(
@@ -499,16 +383,9 @@ class DocumentReadQueries:
         }
         return SourceContractDTO(
             source_type=contract.source_type,
-            research_source_type=contract.research_source_type,
             provider_or_tenant=contract.provider_or_tenant,
             permissions=permissions,
-            status=(
-                "admitted"
-                if contract.allow_ai_processing
-                and contract.allow_display
-                and source_contract_is_active(contract)
-                else "restricted"
-            ),
+            status="admitted" if contract.allow_ai_processing and contract.allow_display else "restricted",
             region=contract.region,
             effective_from=contract.effective_from,
             effective_until=contract.effective_until,
@@ -522,9 +399,6 @@ class DocumentReadQueries:
                     provider_record_id=provider_record.provider_record_id,
                     request_scope=dict(provider_record.request_scope or {}),
                     retrieval_reference=provider_record.retrieval_reference,
-                    content_sha256=provider_record.content_sha256,
-                    retrieved_at=provider_record.retrieved_at,
-                    contract_version=provider_record.contract_version,
                 )
                 if provider_record is not None
                 else None

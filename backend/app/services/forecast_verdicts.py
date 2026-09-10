@@ -1,8 +1,4 @@
-"""Deterministic evaluation for frozen report forecasts.
-
-This module deliberately does not fetch data, infer a metric from text, or
-publish a research conclusion.  It only compares two already-frozen numbers.
-"""
+"""Deterministic, auditable evaluation of a frozen numeric forecast."""
 from __future__ import annotations
 
 import uuid
@@ -14,23 +10,31 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.ledger import CaseDocumentVersion, DocumentVersion, SourceSpan, SourceStatement, ValidationError
-from app.models.research_expression import ActualMetricObservation, ForecastEvaluationCandidate, ForecastTargetVersion, ForecastVerdict, KeyFactor, ReportClaim
+from app.models.ledger import CaseDocumentVersion, SourceSpan, SourceStatement, ValidationError
+from app.models.research_expression import (
+    ActualMetricObservation,
+    ForecastEvaluationCandidate,
+    ForecastTargetVersion,
+    ForecastVerdict,
+    KeyFactor,
+    ReportClaim,
+)
 from app.models.source_governance import SourceContract
 from app.repositories.research import ResearchRepository
-from app.services.source_admission import source_contract_is_active
+
+
+ForecastOutcome = Literal[
+    "supported", "contradicted", "insufficient_evidence", "not_due"
+]
+ForecastComparator = Literal["at_least", "at_most", "within_tolerance"]
 
 
 @dataclass(frozen=True)
 class NumericForecastEvaluation:
-    outcome: str
+    outcome: ForecastOutcome
     rule_version: str
     inputs: dict[str, str]
     rationale: str
-
-
-ForecastOutcome = Literal["supported", "contradicted", "insufficient_evidence", "not_due"]
-ForecastComparator = Literal["at_least", "at_most", "within_tolerance"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,23 +85,20 @@ def evaluate_numeric_forecast(
     comparator: ForecastComparator,
     relative_tolerance: Decimal | None,
 ) -> NumericForecastEvaluation:
-    """Evaluate one frozen numeric forecast without assigning causality."""
+    """Compare two already-normalised values without deriving any investment view."""
     if comparator not in {"at_least", "at_most", "within_tolerance"}:
-        raise ValueError("unsupported forecast comparator")
-    if relative_tolerance is not None and relative_tolerance < 0:
-        raise ValueError("relative tolerance must not be negative")
-    if comparator == "within_tolerance" and relative_tolerance is None:
-        raise ValueError("within_tolerance requires a relative tolerance")
-    if comparator == "within_tolerance" and expected_value == 0:
-        raise ValueError("within_tolerance cannot compare a zero expected_value")
-
-    if comparator == "at_least":
-        supported = actual_value >= expected_value
-    elif comparator == "at_most":
-        supported = actual_value <= expected_value
-    else:
+        raise ValueError(f"unsupported forecast comparator: {comparator}")
+    if comparator == "within_tolerance":
+        if relative_tolerance is None or relative_tolerance < 0:
+            raise ValueError("within_tolerance requires a non-negative relative_tolerance")
+        if expected_value == 0:
+            raise ValueError("within_tolerance cannot compare a zero expected_value")
         supported = abs(actual_value - expected_value) <= abs(expected_value) * relative_tolerance
-
+    elif comparator == "at_least":
+        supported = actual_value >= expected_value
+    else:
+        supported = actual_value <= expected_value
+    outcome: ForecastOutcome = "supported" if supported else "contradicted"
     inputs = {
         "expected_value": str(expected_value),
         "actual_value": str(actual_value),
@@ -105,13 +106,12 @@ def evaluate_numeric_forecast(
         "relative_tolerance": str(relative_tolerance) if relative_tolerance is not None else "",
     }
     return NumericForecastEvaluation(
-        outcome="supported" if supported else "contradicted",
+        outcome=outcome,
         rule_version="forecast-numeric-v1",
         inputs=inputs,
         rationale=(
-            "实际值满足冻结的数值比较规则。"
-            if supported
-            else "实际值不满足冻结的数值比较规则。"
+            f"actual {actual_value} {'meets' if supported else 'does not meet'} "
+            f"the frozen {comparator} forecast rule against expected {expected_value}"
         ),
     )
 
@@ -121,11 +121,12 @@ def _utcnow() -> datetime:
 
 
 def _as_utc(value: datetime) -> datetime:
+    """SQLite does not round-trip timezone metadata; retain instant semantics."""
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 class ForecastVerdictService:
-    """Create frozen inputs, deterministic candidates and human verdicts."""
+    """Write-side boundary for frozen forecast inputs and published verdicts."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -140,11 +141,11 @@ class ForecastVerdictService:
             raise ValidationError("report claim must be a reviewed record in this research case")
         if factor.report_claim_id != claim.id:
             raise ValidationError("forecast target factor must be linked to its report claim")
+        for statement_id in (value.forecast_source_statement_id, value.baseline_source_statement_id):
+            if statement_id is not None:
+                self._require_admitted_case_statement(case_id, statement_id)
         if claim.source_statement_id != value.forecast_source_statement_id:
             raise ValidationError("forecast source statement must be the report claim source")
-        self._require_admitted_case_statement(case_id, value.forecast_source_statement_id)
-        if value.baseline_source_statement_id is not None:
-            self._require_admitted_case_statement(case_id, value.baseline_source_statement_id)
         if value.forecast_period_start > value.forecast_period_end:
             raise ValidationError("forecast_period_start must not be after forecast_period_end")
         self._require_finite(value.expected_value, "expected_value")
@@ -185,19 +186,18 @@ class ForecastVerdictService:
             raise ValidationError("actual observation period must equal the frozen forecast period")
         if value.available_at.tzinfo is None:
             raise ValidationError("available_at must include a timezone")
-        available_at = _as_utc(value.available_at)
-        if _as_utc(self._statement_available_at(value.source_statement_id)) != available_at:
+        source_available_at = self._statement_available_at(value.source_statement_id)
+        if _as_utc(source_available_at) != _as_utc(value.available_at):
             raise ValidationError("actual observation available_at must equal its frozen source availability")
         self._require_finite(value.observed_value, "observed_value")
         for name in ("entity_key", "recorded_by", "record_reason"):
             self._require_text(getattr(value, name), name)
         record = ActualMetricObservation(
-            forecast_target_id=target.id, source_statement_id=value.source_statement_id,
-            entity_key=value.entity_key.strip(), observed_value=value.observed_value,
-            unit=value.unit.strip(), observed_period_start=value.observed_period_start,
-            observed_period_end=value.observed_period_end, available_at=available_at,
-            recorded_by=value.recorded_by.strip(), record_reason=value.record_reason.strip(),
-            created_at=_utcnow(),
+            forecast_target_id=target.id, source_statement_id=value.source_statement_id, entity_key=value.entity_key.strip(),
+            observed_value=value.observed_value, unit=value.unit.strip(),
+            observed_period_start=value.observed_period_start, observed_period_end=value.observed_period_end,
+            available_at=value.available_at, recorded_by=value.recorded_by.strip(),
+            record_reason=value.record_reason.strip(), created_at=_utcnow(),
         )
         self._session.add(record)
         self._session.flush()
@@ -210,20 +210,19 @@ class ForecastVerdictService:
             raise ValidationError("actual observation must belong to the selected forecast target")
         if cutoff.tzinfo is None:
             raise ValidationError("cutoff must include a timezone")
-        cutoff = _as_utc(cutoff)
-        available_at = _as_utc(actual.available_at)
-        if cutoff < available_at:
+        if _as_utc(cutoff) < _as_utc(actual.available_at):
+            outcome: ForecastOutcome = "not_due"
             evaluation = NumericForecastEvaluation(
-                outcome="not_due", rule_version="forecast-numeric-v1",
-                inputs={"expected_value": str(target.expected_value), "actual_value": str(actual.observed_value), "cutoff": cutoff.isoformat(), "available_at": available_at.isoformat()},
-                rationale="实际观测在该查询截点尚不可用。",
+                outcome=outcome, rule_version="forecast-numeric-v1",
+                inputs={"expected_value": str(target.expected_value), "actual_value": str(actual.observed_value), "cutoff": cutoff.isoformat(), "available_at": actual.available_at.isoformat()},
+                rationale="the actual observation was not available at the requested cutoff",
             )
         else:
             evaluation = evaluate_numeric_forecast(
                 expected_value=target.expected_value, actual_value=actual.observed_value,
                 comparator=target.comparator, relative_tolerance=target.relative_tolerance,
             )
-            evaluation.inputs.update({"unit": target.unit, "cutoff": cutoff.isoformat(), "available_at": available_at.isoformat()})
+            evaluation.inputs.update({"unit": target.unit, "cutoff": cutoff.isoformat(), "available_at": actual.available_at.isoformat()})
         record = ForecastEvaluationCandidate(
             forecast_target_id=target.id, actual_observation_id=actual.id, cutoff=cutoff,
             outcome=evaluation.outcome, rule_version=evaluation.rule_version, inputs=evaluation.inputs,
@@ -253,9 +252,9 @@ class ForecastVerdictService:
             self._require_text(getattr(value, name), name)
         now = _utcnow()
         record = ForecastVerdict(
-            candidate_id=candidate.id, supersedes_id=value.supersedes_id,
-            decision=value.decision, outcome=outcome, reason=value.reason.strip(),
-            reviewed_by=value.reviewed_by.strip(), reviewed_at=now, created_at=now,
+            candidate_id=candidate.id, supersedes_id=value.supersedes_id, decision=value.decision,
+            outcome=outcome, reason=value.reason.strip(), reviewed_by=value.reviewed_by.strip(),
+            reviewed_at=now, created_at=now,
         )
         self._session.add(record)
         self._session.flush()
@@ -265,21 +264,30 @@ class ForecastVerdictService:
         if ResearchRepository(self._session).get_case(case_id) is None:
             raise ValidationError("research case not found")
 
-    def _require_admitted_case_statement(self, case_id: uuid.UUID, statement_id: uuid.UUID) -> SourceStatement:
+    def _require_admitted_case_statement(self, case_id: uuid.UUID, statement_id: uuid.UUID) -> None:
         statement = self._session.get(SourceStatement, statement_id)
         span = self._session.get(SourceSpan, statement.source_span_id) if statement else None
-        if statement is None or span is None:
+        if span is None:
             raise ValidationError("source statement not found")
-        case_document = self._session.scalar(select(CaseDocumentVersion.id).where(CaseDocumentVersion.research_case_id == case_id).where(CaseDocumentVersion.document_version_id == span.document_version_id).limit(1))
-        contract = self._session.scalar(select(SourceContract).where(SourceContract.document_version_id == span.document_version_id))
-        if case_document is None or contract is None or not contract.allow_ai_processing or not contract.allow_display or not source_contract_is_active(contract):
-            raise ValidationError("source statement must be attached to this case and admitted for processing and display")
-        return statement
+        admitted = self._session.scalar(
+            select(CaseDocumentVersion.id)
+            .join(SourceContract, SourceContract.document_version_id == CaseDocumentVersion.document_version_id)
+            .where(CaseDocumentVersion.research_case_id == case_id)
+            .where(CaseDocumentVersion.document_version_id == span.document_version_id)
+            .where(SourceContract.allow_ai_processing.is_(True))
+            .where(SourceContract.allow_display.is_(True))
+            .limit(1)
+        )
+        if admitted is None:
+            raise ValidationError("source statement must be admitted to this research case")
 
     def _statement_available_at(self, statement_id: uuid.UUID) -> datetime:
         statement = self._session.get(SourceStatement, statement_id)
         span = self._session.get(SourceSpan, statement.source_span_id) if statement else None
-        document = self._session.get(DocumentVersion, span.document_version_id) if span else None
+        if span is None:
+            raise ValidationError("source statement not found")
+        from app.models.ledger import DocumentVersion
+        document = self._session.get(DocumentVersion, span.document_version_id)
         if document is None:
             raise ValidationError("source document not found")
         return document.available_at

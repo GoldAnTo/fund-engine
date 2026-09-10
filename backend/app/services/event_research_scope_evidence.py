@@ -81,12 +81,7 @@ def current_scope_thesis_ids(
     return set(canonical.values())
 
 
-def current_mapped_evidence_ids(
-    session: Session,
-    case_id: uuid.UUID,
-    *,
-    review_states: frozenset[str] = frozenset({"reviewed"}),
-) -> list[uuid.UUID]:
+def current_mapped_evidence_ids(session: Session, case_id: uuid.UUID) -> list[uuid.UUID]:
     scope = session.scalar(
         select(EventResearchScopeVersion)
         .where(EventResearchScopeVersion.research_case_id == case_id)
@@ -111,7 +106,7 @@ def current_mapped_evidence_ids(
             .where(EventResearchScopeEvidenceAssignment.factor_statement.in_(active_statements))
             .where(EventResearchScopeEvidenceAssignment.factor_statement == Thesis.statement)
             .where(Thesis.research_case_id == case_id)
-            .where(EvidenceLink.review_state.in_(review_states))
+            .where(EvidenceLink.review_state == "reviewed")
         )
     )
 

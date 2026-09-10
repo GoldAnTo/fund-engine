@@ -59,53 +59,6 @@ class KeyFactor(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class KeyFactorCandidateRun(Base):
-    """One reproducible, source-bound deterministic parsing attempt."""
-
-    __tablename__ = "key_factor_candidate_runs"
-    __table_args__ = (
-        CheckConstraint("status IN ('completed')", name="ck_key_factor_candidate_runs_status"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
-    source_statement_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("source_statements.id"), nullable=False, index=True)
-    requested_by: Mapped[str] = mapped_column(String(128), nullable=False)
-    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), nullable=False)
-    candidate_count: Mapped[int] = mapped_column(nullable=False)
-    skipped_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class KeyFactorCandidate(Base):
-    """Machine proposal retained separately from a reviewed KeyFactor."""
-
-    __tablename__ = "key_factor_candidates"
-    __table_args__ = (
-        CheckConstraint(
-            "review_state IN ('machine_generated')",
-            name="ck_key_factor_candidates_review_state",
-        ),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
-    run_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("key_factor_candidate_runs.id"), nullable=False, index=True)
-    ordinal: Mapped[int] = mapped_column(nullable=False)
-    name: Mapped[str] = mapped_column(Text, nullable=False)
-    metric_name: Mapped[str] = mapped_column(Text, nullable=False)
-    expected_direction: Mapped[str] = mapped_column(String(16), nullable=False)
-    verification_window_start: Mapped[date] = mapped_column(Date, nullable=False)
-    verification_window_end: Mapped[date] = mapped_column(Date, nullable=False)
-    support_condition: Mapped[str] = mapped_column(Text, nullable=False)
-    refutation_condition: Mapped[str] = mapped_column(Text, nullable=False)
-    next_verification_event: Mapped[str] = mapped_column(Text, nullable=False)
-    evidence_excerpt: Mapped[str] = mapped_column(Text, nullable=False)
-    rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    review_state: Mapped[str] = mapped_column(String(32), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class ClaimVerification(Base):
     __tablename__ = "claim_verifications"
     __table_args__ = (
@@ -189,9 +142,6 @@ class MarketObservation(Base):
     research_case_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("research_cases.id"), nullable=False, index=True)
     key_factor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("key_factors.id"), nullable=True)
     stock_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("stocks.id"), nullable=False)
-    # Old observations remain readable without a source after the audit hardening
-    # migration.  New writes require this through MarketObservationInput.
-    source_statement_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("source_statements.id"), nullable=True)
     event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     window_label: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -207,18 +157,12 @@ class MarketObservation(Base):
 
 
 class ForecastTargetVersion(Base):
-    """A reviewed numeric forecast frozen from a report claim."""
+    """A reviewed, frozen numeric prediction from a report claim."""
 
     __tablename__ = "forecast_target_versions"
     __table_args__ = (
-        CheckConstraint(
-            "comparator IN ('at_least', 'at_most', 'within_tolerance')",
-            name="ck_forecast_target_comparator",
-        ),
-        CheckConstraint(
-            "relative_tolerance IS NULL OR relative_tolerance >= 0",
-            name="ck_forecast_target_tolerance",
-        ),
+        CheckConstraint("comparator IN ('at_least', 'at_most', 'within_tolerance')", name="ck_forecast_target_comparator"),
+        CheckConstraint("relative_tolerance IS NULL OR relative_tolerance >= 0", name="ck_forecast_target_tolerance"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -243,7 +187,7 @@ class ForecastTargetVersion(Base):
 
 
 class ActualMetricObservation(Base):
-    """A source-backed actual for exactly one frozen target."""
+    """A source-backed actual value for exactly one frozen forecast target."""
 
     __tablename__ = "actual_metric_observations"
 
@@ -262,14 +206,11 @@ class ActualMetricObservation(Base):
 
 
 class ForecastEvaluationCandidate(Base):
-    """A deterministic comparison awaiting an explicit human verdict."""
+    """A deterministic, machine-generated comparison awaiting a human verdict."""
 
     __tablename__ = "forecast_evaluation_candidates"
     __table_args__ = (
-        CheckConstraint(
-            "outcome IN ('supported', 'contradicted', 'insufficient_evidence', 'not_due')",
-            name="ck_forecast_evaluation_outcome",
-        ),
+        CheckConstraint("outcome IN ('supported', 'contradicted', 'insufficient_evidence', 'not_due')", name="ck_forecast_evaluation_outcome"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)
@@ -285,18 +226,12 @@ class ForecastEvaluationCandidate(Base):
 
 
 class ForecastVerdict(Base):
-    """An append-only human publication or withdrawal of one candidate."""
+    """An append-only human publication (or rejection) of one candidate."""
 
     __tablename__ = "forecast_verdicts"
     __table_args__ = (
-        CheckConstraint(
-            "decision IN ('confirmed', 'modified', 'rejected')",
-            name="ck_forecast_verdict_decision",
-        ),
-        CheckConstraint(
-            "outcome IN ('supported', 'contradicted', 'insufficient_evidence', 'not_due')",
-            name="ck_forecast_verdict_outcome",
-        ),
+        CheckConstraint("decision IN ('confirmed', 'modified', 'rejected')", name="ck_forecast_verdict_decision"),
+        CheckConstraint("outcome IN ('supported', 'contradicted', 'insufficient_evidence', 'not_due')", name="ck_forecast_verdict_outcome"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid)

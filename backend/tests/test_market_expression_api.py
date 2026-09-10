@@ -154,21 +154,6 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
         reviewed_at=now,
         created_at=now,
     ))
-    quarterly_disclosure = HoldingDisclosure(
-        fund_id=fund.id,
-        stock_id=stock.id,
-        weight=Decimal("0.051"),
-        report_period=date(2025, 12, 31),
-        published_at=datetime(2026, 1, 10, tzinfo=timezone.utc),
-        acquired_at=now,
-        source="licensed_provider",
-        source_document_version_id=document.id,
-        coverage_status="complete",
-        filing_kind="quarterly",
-        created_at=now,
-    )
-    cmd_session.add(quarterly_disclosure)
-    cmd_session.flush()
     cmd_session.add(HoldingDisclosure(
         fund_id=fund.id,
         stock_id=stock.id,
@@ -179,8 +164,6 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
         source="licensed_provider",
         source_document_version_id=document.id,
         coverage_status="complete",
-        filing_kind="annual",
-        supersedes_disclosure_id=quarterly_disclosure.id,
         created_at=now,
     ))
     unlinked_document = DocumentVersion(
@@ -241,10 +224,6 @@ def test_market_expression_separates_reviewed_claims_observations_and_disclosed_
     assert position["source_document_version_id"] == str(document.id)
     assert position["source_visible_in_case"] is True
     assert position["freshness_status"] == "stale_disclosure"
-    assert position["filing_kind"] == "annual"
-    assert position["supersedes_disclosure_id"] == str(quarterly_disclosure.id)
-    assert position["supersedes_filing_kind"] == "quarterly"
-    assert position["supersedes_published_at"].startswith("2026-01-10")
     # Complete coverage does not rescue an expired disclosure.  Do not promote
     # it into a precise current fund exposure.
     assert next(item for item in payload["fund_exposure"] if item["fund_code"] == "000001")["disclosed_exposure"] is None
@@ -331,7 +310,7 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
     document = DocumentVersion(
         content_sha256=hashlib.sha256(b"reviewed-source").hexdigest(),
         source_url="https://licensed.example/report/reviewed-source",
-        title=None,
+        title="已准入研报",
         available_at=now,
         acquired_at=now,
         parser_version="docling-v1",
@@ -360,7 +339,6 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
     source = options.json()["items"][0]
     assert source["id"] == str(statement.id)
     assert source["document_version_id"] == str(document.id)
-    assert source["document_title"] == "https://licensed.example/report/reviewed-source"
     assert source["locator"] == {"page": 8, "paragraph": 2}
     assert source["available_at"].startswith("2026-08-09T09:00:00")
     assert source["permission_status"] == "admitted"
@@ -399,99 +377,6 @@ def test_researcher_can_register_a_reviewed_claim_and_key_factor_from_an_admitte
     assert factor["report_claim_id"] == claim["id"]
     assert factor["allowed_source_types"] == ["company_disclosure", "licensed_provider"]
     assert factor["verification"] is None
-
-    missing_window = cmd_client.post(
-        f"/api/v1/research-cases/{case_id}/key-factors",
-        json={
-            "report_claim_id": claim["id"],
-            "name": "未固定窗口的订单增速",
-            "expected_direction": "positive",
-            "metric_name": "订单同比增速",
-            "allowed_source_types": ["company_disclosure"],
-            "support_condition": "公司定期报告披露订单同比增长。",
-            "refutation_condition": "订单增速未达预期或出现延后。",
-            "next_verification_event": "2026 年三季报",
-            "reviewed_by": "human:researcher",
-            "review_reason": "故意缺少观察窗口，用于验证门禁。",
-        },
-    )
-    assert missing_window.status_code == 422
-
-
-def test_researcher_can_parse_a_source_bound_key_factor_candidate_without_creating_a_factor(
-    cmd_client, cmd_session
-) -> None:
-    """Parsing remains an inspectable proposal until a human registers it."""
-    case_id = uuid.UUID(cmd_client.post("/api/v1/event-research", json=_event_payload()).json()["case_id"])
-    now = datetime(2026, 8, 9, 9, 0, tzinfo=timezone.utc)
-    document = DocumentVersion(
-        content_sha256=hashlib.sha256(b"forecast-candidate-source").hexdigest(),
-        source_url="https://licensed.example/report/forecast-candidate",
-        title="工业富联预测研报",
-        available_at=now,
-        acquired_at=now,
-        parser_version="docling-v1",
-        parse_state="success",
-    )
-    cmd_session.add(document)
-    cmd_session.flush()
-    SourceGovernanceService(cmd_session).record_event_intake(
-        document=document,
-        source_type="licensed_provider",
-        source_metadata={"provider_name": "licensed.example", "permissions": {"ai_processing": True, "display": True}},
-        declared_by="tester",
-    )
-    cmd_session.add(CaseDocumentVersion(research_case_id=case_id, document_version_id=document.id, linked_at=now))
-    span = SourceSpan(
-        document_version_id=document.id,
-        locator={"page": 1, "paragraph": 1},
-        verbatim_text=(
-            "海通证券预计工业富联2024年归母净利润为251.49亿元。"
-            "云计算业务收入3193.77亿元，同比增长64.37%；AI服务器收入同比超过150%；"
-            "400G、800G高速交换机同比增长数倍。"
-        ),
-    )
-    cmd_session.add(span)
-    cmd_session.flush()
-    statement = SourceStatement(
-        source_span_id=span.id,
-        kind="forecast",
-        normalized_text="海通证券预测与年度业务驱动指标。",
-        observed_period=date(2024, 12, 31),
-        created_at=now,
-    )
-    cmd_session.add(statement)
-    cmd_session.commit()
-
-    parsed = cmd_client.post(
-        f"/api/v1/research-cases/{case_id}/key-factor-candidate-runs",
-        json={"source_statement_id": str(statement.id), "requested_by": "human:researcher"},
-    )
-
-    assert parsed.status_code == 201
-    payload = parsed.json()
-    assert payload["parser_version"] == "key-factor-rules-v1"
-    assert payload["status"] == "completed"
-    assert payload["candidate_count"] == 4
-    assert payload["source"]["source_statement_id"] == str(statement.id)
-    candidate = payload["candidates"][0]
-    assert candidate["name"] == "2024 年归母净利润预测兑现"
-    assert candidate["metric_name"] == "归母净利润"
-    assert candidate["evidence_excerpt"] == "预计工业富联2024年归母净利润为251.49亿元"
-    assert candidate["review_state"] == "machine_generated"
-    assert [item["name"] for item in payload["candidates"][1:]] == [
-        "2024 年云计算业务收入同比增长",
-        "2024 年AI服务器收入同比增长",
-        "2024 年400G、800G高速交换机同比增长",
-    ]
-    assert cmd_session.query(KeyFactor).filter_by(research_case_id=case_id).count() == 0
-
-    history = cmd_client.get(
-        f"/api/v1/research-cases/{case_id}/key-factor-candidate-runs"
-    )
-
-    assert history.status_code == 200
-    assert history.json()["items"][0]["id"] == payload["id"]
 
 
 def test_researcher_can_append_a_verification_to_a_reviewed_key_factor(
@@ -747,7 +632,7 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
     })
     assert binding.status_code == 201
 
-    payload = {
+    response = cmd_client.post(f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/market-observations", json={
         "market_instrument_binding_id": binding.json()["id"],
         "event_at": "2026-08-08T20:00:00Z",
         "available_at": "2026-08-09T00:00:00Z",
@@ -758,17 +643,7 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
         "relative_return": 0.034,
         "reviewed_by": "human:researcher",
         "review_reason": "只核对窗口、基准和价格来源，不作因果归因。",
-    }
-    missing_source = cmd_client.post(
-        f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/market-observations",
-        json=payload,
-    )
-    assert missing_source.status_code == 422
-
-    response = cmd_client.post(
-        f"/api/v1/research-cases/{case_id}/key-factors/{factor.id}/market-observations",
-        json={**payload, "source_statement_id": str(statement.id)},
-    )
+    })
 
     assert response.status_code == 201
     observation = response.json()
@@ -776,5 +651,4 @@ def test_researcher_can_append_a_reviewed_market_observation_from_a_stock_bindin
     assert observation["window_label"] == "T0 至 T+5"
     assert observation["relative_return"] == 0.034
     assert observation["after_hours_treatment"] == "事件发生在盘后，窗口从下一交易日开盘开始"
-    assert observation["source"]["source_statement_id"] == str(statement.id)
     assert "causal_result" not in observation

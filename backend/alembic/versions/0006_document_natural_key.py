@@ -106,31 +106,17 @@ def upgrade() -> None:
                 {"k": key, "id": row.id},
             )
 
-    if conn.dialect.name == "sqlite":
-        # SQLite cannot add a table constraint after creation. A unique index
-        # has the same data-integrity semantics and keeps the local demo
-        # migration chain replayable.
-        op.create_index(
-            "uq_document_versions_natural_key",
-            "document_versions",
-            ["natural_key"],
-            unique=True,
-        )
-    else:
-        op.create_unique_constraint(
-            "uq_document_versions_natural_key",
-            "document_versions",
-            ["natural_key"],
-        )
+    op.create_unique_constraint(
+        "uq_document_versions_natural_key",
+        "document_versions",
+        ["natural_key"],
+    )
 
 
 def downgrade() -> None:
-    if op.get_bind().dialect.name == "sqlite":
-        op.drop_index("uq_document_versions_natural_key", table_name="document_versions")
-    else:
-        op.drop_constraint(
-            "uq_document_versions_natural_key",
-            "document_versions",
-            type_="unique",
-        )
+    op.drop_constraint(
+        "uq_document_versions_natural_key",
+        "document_versions",
+        type_="unique",
+    )
     op.drop_column("document_versions", "natural_key")

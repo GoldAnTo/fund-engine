@@ -55,49 +55,13 @@ class RegisterKeyFactorRequest(V1Model):
     expected_direction: Literal["positive", "negative", "neutral"]
     metric_name: str = Field(min_length=1)
     allowed_source_types: list[str] = Field(min_length=1)
-    verification_window_start: date
-    verification_window_end: date
+    verification_window_start: date | None = None
+    verification_window_end: date | None = None
     support_condition: str = Field(min_length=1)
     refutation_condition: str = Field(min_length=1)
     next_verification_event: str = Field(min_length=1)
     reviewed_by: str = Field(min_length=1)
     review_reason: str = Field(min_length=1)
-
-
-class StartKeyFactorCandidateRunRequest(V1Model):
-    source_statement_id: uuid.UUID
-    requested_by: str = Field(min_length=1)
-
-
-class KeyFactorCandidateDTO(V1Model):
-    id: str
-    name: str
-    metric_name: str
-    expected_direction: str
-    verification_window_start: date
-    verification_window_end: date
-    support_condition: str
-    refutation_condition: str
-    next_verification_event: str
-    evidence_excerpt: str
-    rule_id: str
-    review_state: str
-
-
-class KeyFactorCandidateRunDTO(V1Model):
-    id: str
-    requested_by: str
-    parser_version: str
-    status: str
-    candidate_count: int
-    skipped_reason: str | None
-    created_at: datetime
-    source: ExpressionSourceDTO
-    candidates: list[KeyFactorCandidateDTO]
-
-
-class KeyFactorCandidateRunsResponse(V1Model):
-    items: list[KeyFactorCandidateRunDTO]
 
 
 class RegisterClaimVerificationRequest(V1Model):
@@ -129,7 +93,6 @@ class RegisterFundamentalImpactRequest(V1Model):
 
 class RegisterMarketObservationRequest(V1Model):
     market_instrument_binding_id: uuid.UUID
-    source_statement_id: uuid.UUID
     event_at: datetime
     available_at: datetime
     window_label: str = Field(min_length=1)
@@ -187,6 +150,29 @@ class ClaimVerificationDTO(V1Model):
     source: ExpressionSourceDTO
 
 
+class ForecastVerdictSummaryDTO(V1Model):
+    id: str
+    outcome: str
+    decision: str
+    metric_name: str
+    baseline_value: float | None
+    expected_value: float
+    actual_value: float
+    unit: str
+    forecast_period_start: date
+    forecast_period_end: date
+    comparator: str
+    relative_tolerance: float | None
+    rule_version: str
+    rationale: str
+    reviewed_by: str
+    reason: str
+    reviewed_at: datetime
+    forecast_source: ExpressionSourceDTO
+    baseline_source: ExpressionSourceDTO | None
+    actual_source: ExpressionSourceDTO
+
+
 class ReportClaimDTO(V1Model):
     id: str
     text: str
@@ -216,6 +202,7 @@ class KeyFactorDTO(V1Model):
     review_reason: str
     reviewed_at: datetime
     verification: ClaimVerificationDTO | None
+    forecast_verdict: ForecastVerdictSummaryDTO | None
 
 
 class FundamentalImpactDTO(V1Model):
@@ -251,7 +238,6 @@ class MarketObservationDTO(V1Model):
     reviewed_by: str
     review_reason: str
     reviewed_at: datetime
-    source: ExpressionSourceDTO | None
 
 
 class FundDisclosurePositionDTO(V1Model):
@@ -272,10 +258,6 @@ class FundDisclosurePositionDTO(V1Model):
     source_permission_status: str
     coverage_status: str
     freshness_status: str
-    filing_kind: str = "other"
-    supersedes_disclosure_id: str | None = None
-    supersedes_filing_kind: str | None = None
-    supersedes_published_at: datetime | None = None
 
 
 class FundDisclosureExposureDTO(V1Model):

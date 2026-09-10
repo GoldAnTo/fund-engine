@@ -10,19 +10,16 @@ from sqlalchemy.orm import Session
 from app.errors import NotFoundError
 from app.models.ledger import CaseDocumentVersion, Company, DocumentVersion, Fund, HoldingDisclosure, SourceSpan, SourceStatement, Stock
 from app.models.source_governance import SourceContract
-from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, KeyFactorCandidate, KeyFactorCandidateRun, MarketInstrumentBinding, MarketObservation, ReportClaim
+from app.models.research_expression import ActualMetricObservation, ClaimVerification, ForecastEvaluationCandidate, ForecastTargetVersion, ForecastVerdict, FundamentalImpact, KeyFactor, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.repositories.research import ResearchRepository
-from app.services.exposure import choose_latest_disclosure_per_fund_stock
 from app.schemas.v1.market_expression import (
     ClaimVerificationDTO,
     ExpressionSourceDTO,
+    ForecastVerdictSummaryDTO,
     FundDisclosureExposureDTO,
     FundDisclosurePositionDTO,
     FundamentalImpactDTO,
     KeyFactorDTO,
-    KeyFactorCandidateDTO,
-    KeyFactorCandidateRunDTO,
-    KeyFactorCandidateRunsResponse,
     MarketExpressionResponse,
     MarketInstrumentBindingDTO,
     MarketInstrumentBindingsResponse,
@@ -34,7 +31,6 @@ from app.schemas.v1.market_expression import (
     SourceStatementOptionDTO,
     SourceStatementOptionsResponse,
 )
-from app.queries.time import api_datetime
 
 
 class MarketExpressionQueries:
@@ -76,10 +72,9 @@ class MarketExpressionQueries:
         return SourceStatementOptionsResponse(items=[
             SourceStatementOptionDTO(
                 id=str(statement.id), kind=statement.kind, text=statement.normalized_text,
-                document_version_id=str(document.id),
-                document_title=document.title or document.source_url or "未命名冻结资料",
+                document_version_id=str(document.id), document_title=document.title,
                 source_url=document.source_url, locator=span.locator,
-                available_at=api_datetime(document.available_at), permission_status="admitted",
+                available_at=document.available_at, permission_status="admitted",
             )
             for statement, span, document in rows
         ])
@@ -98,18 +93,6 @@ class MarketExpressionQueries:
             for item in bindings
             if self._case_has_source(case_id, item.source_statement_id)
         ])
-
-    def key_factor_candidate_runs(self, case_id: uuid.UUID) -> KeyFactorCandidateRunsResponse:
-        if ResearchRepository(self._db).get_case(case_id) is None:
-            raise NotFoundError(f"research case {case_id} not found")
-        runs = self._db.scalars(
-            select(KeyFactorCandidateRun)
-            .where(KeyFactorCandidateRun.research_case_id == case_id)
-            .order_by(KeyFactorCandidateRun.created_at.desc(), KeyFactorCandidateRun.id.desc())
-        )
-        return KeyFactorCandidateRunsResponse(
-            items=[self._key_factor_candidate_run(item) for item in runs]
-        )
 
     def market_instrument_catalog(self, query: str = "") -> MarketInstrumentCatalogResponse:
         needle = query.strip()
@@ -149,7 +132,7 @@ class MarketExpressionQueries:
         document = self._db.get(DocumentVersion, span.document_version_id) if span else None
         contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
         permission_status = "not_recorded" if contract is None else "admitted" if contract.allow_ai_processing and contract.allow_display else "restricted"
-        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=api_datetime(document.available_at) if document else None, permission_status=permission_status)
+        return ExpressionSourceDTO(source_statement_id=str(statement_id), document_version_id=str(document.id) if document else None, document_title=document.title if document else None, source_url=document.source_url if document else None, locator=span.locator if span else None, available_at=document.available_at if document else None, permission_status=permission_status)
 
     def _case_has_source(self, case_id: uuid.UUID, statement_id: uuid.UUID | None) -> bool:
         if statement_id is None:
@@ -162,39 +145,6 @@ class MarketExpressionQueries:
 
     def _claim(self, item: ReportClaim) -> ReportClaimDTO:
         return ReportClaimDTO(id=str(item.id), text=item.text, claim_kind=item.claim_kind, asserted_period=item.asserted_period, asserted_by=item.asserted_by, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at, source=self._source(item.source_statement_id))
-
-    def _key_factor_candidate_run(self, item: KeyFactorCandidateRun) -> KeyFactorCandidateRunDTO:
-        candidates = self._db.scalars(
-            select(KeyFactorCandidate)
-            .where(KeyFactorCandidate.run_id == item.id)
-            .order_by(KeyFactorCandidate.ordinal, KeyFactorCandidate.id)
-        )
-        return KeyFactorCandidateRunDTO(
-            id=str(item.id),
-            requested_by=item.requested_by,
-            parser_version=item.parser_version,
-            status=item.status,
-            candidate_count=item.candidate_count,
-            skipped_reason=item.skipped_reason,
-            created_at=item.created_at,
-            source=self._source(item.source_statement_id),
-            candidates=[
-                KeyFactorCandidateDTO(
-                    id=str(candidate.id), name=candidate.name,
-                    metric_name=candidate.metric_name,
-                    expected_direction=candidate.expected_direction,
-                    verification_window_start=candidate.verification_window_start,
-                    verification_window_end=candidate.verification_window_end,
-                    support_condition=candidate.support_condition,
-                    refutation_condition=candidate.refutation_condition,
-                    next_verification_event=candidate.next_verification_event,
-                    evidence_excerpt=candidate.evidence_excerpt,
-                    rule_id=candidate.rule_id,
-                    review_state=candidate.review_state,
-                )
-                for candidate in candidates
-            ],
-        )
 
     def _market_instrument(self, item: MarketInstrumentBinding) -> MarketInstrumentBindingDTO:
         company = self._db.get(Company, item.company_id)
@@ -215,7 +165,47 @@ class MarketExpressionQueries:
 
     def _factor(self, item: KeyFactor, cutoff: datetime) -> KeyFactorDTO:
         verification = self._db.scalar(select(ClaimVerification).where(ClaimVerification.key_factor_id == item.id).where(ClaimVerification.review_state == "reviewed").where(ClaimVerification.created_at <= cutoff).where(ClaimVerification.reviewed_at <= cutoff).order_by(ClaimVerification.created_at.desc(), ClaimVerification.id.desc()).limit(1))
-        return KeyFactorDTO(id=str(item.id), thesis_id=str(item.thesis_id) if item.thesis_id else None, report_claim_id=str(item.report_claim_id) if item.report_claim_id else None, name=item.name, expected_direction=item.expected_direction, metric_name=item.metric_name, allowed_source_types=list(item.allowed_source_types or []), verification_window_start=item.verification_window_start, verification_window_end=item.verification_window_end, support_condition=item.support_condition, refutation_condition=item.refutation_condition, next_verification_event=item.next_verification_event, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at, verification=ClaimVerificationDTO(outcome=verification.outcome, rationale=verification.rationale, reviewed_by=verification.reviewed_by or "未记录", reviewed_at=verification.reviewed_at or verification.created_at, source=self._source(verification.source_statement_id)) if verification else None)
+        forecast_verdict = self._forecast_verdict(item.id, cutoff)
+        return KeyFactorDTO(id=str(item.id), thesis_id=str(item.thesis_id) if item.thesis_id else None, report_claim_id=str(item.report_claim_id) if item.report_claim_id else None, name=item.name, expected_direction=item.expected_direction, metric_name=item.metric_name, allowed_source_types=list(item.allowed_source_types or []), verification_window_start=item.verification_window_start, verification_window_end=item.verification_window_end, support_condition=item.support_condition, refutation_condition=item.refutation_condition, next_verification_event=item.next_verification_event, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at, verification=ClaimVerificationDTO(outcome=verification.outcome, rationale=verification.rationale, reviewed_by=verification.reviewed_by or "未记录", reviewed_at=verification.reviewed_at or verification.created_at, source=self._source(verification.source_statement_id)) if verification else None, forecast_verdict=forecast_verdict)
+
+    def _forecast_verdict(self, factor_id: uuid.UUID, cutoff: datetime) -> ForecastVerdictSummaryDTO | None:
+        rows = self._db.execute(
+            select(ForecastVerdict, ForecastEvaluationCandidate, ForecastTargetVersion, ActualMetricObservation)
+            .join(ForecastEvaluationCandidate, ForecastEvaluationCandidate.id == ForecastVerdict.candidate_id)
+            .join(ForecastTargetVersion, ForecastTargetVersion.id == ForecastEvaluationCandidate.forecast_target_id)
+            .join(ActualMetricObservation, ActualMetricObservation.id == ForecastEvaluationCandidate.actual_observation_id)
+            .where(ForecastTargetVersion.key_factor_id == factor_id)
+            .where(ForecastVerdict.created_at <= cutoff)
+            .where(ForecastVerdict.reviewed_at <= cutoff)
+            .where(ForecastEvaluationCandidate.created_at <= cutoff)
+            .where(ForecastEvaluationCandidate.cutoff <= cutoff)
+            .where(ActualMetricObservation.available_at <= cutoff)
+            .order_by(ForecastVerdict.created_at.desc(), ForecastVerdict.id.desc())
+        ).all()
+        superseded_ids = set(self._db.scalars(select(ForecastVerdict.supersedes_id).where(ForecastVerdict.supersedes_id.is_not(None))))
+        row = next(
+            (item for item in rows if item[0].id not in superseded_ids and item[0].decision in {"confirmed", "modified"}),
+            None,
+        )
+        if row is None:
+            return None
+        verdict, candidate, target, actual = row
+        if not self._case_has_source(target.research_case_id, target.forecast_source_statement_id):
+            return None
+        if not self._case_has_source(target.research_case_id, actual.source_statement_id):
+            return None
+        return ForecastVerdictSummaryDTO(
+            id=str(verdict.id), outcome=verdict.outcome, decision=verdict.decision,
+            metric_name=target.metric_name, baseline_value=float(target.baseline_value) if target.baseline_value is not None else None,
+            expected_value=float(target.expected_value), actual_value=float(actual.observed_value), unit=target.unit,
+            forecast_period_start=target.forecast_period_start, forecast_period_end=target.forecast_period_end,
+            comparator=target.comparator, relative_tolerance=float(target.relative_tolerance) if target.relative_tolerance is not None else None,
+            rule_version=candidate.rule_version, rationale=candidate.rationale,
+            reviewed_by=verdict.reviewed_by, reason=verdict.reason, reviewed_at=verdict.reviewed_at,
+            forecast_source=self._source(target.forecast_source_statement_id),
+            baseline_source=self._source(target.baseline_source_statement_id) if target.baseline_source_statement_id else None,
+            actual_source=self._source(actual.source_statement_id),
+        )
 
     def _fundamental(self, item: FundamentalImpact) -> FundamentalImpactDTO:
         company = self._db.get(Company, item.company_id)
@@ -224,24 +214,15 @@ class MarketExpressionQueries:
 
     def _observation(self, item: MarketObservation) -> MarketObservationDTO:
         stock = self._db.get(Stock, item.stock_id)
-        return MarketObservationDTO(id=str(item.id), key_factor_id=str(item.key_factor_id) if item.key_factor_id else None, stock_id=str(item.stock_id), stock_code=stock.code if stock else "已删除股票", stock_name=stock.name if stock else "已删除股票", event_at=item.event_at, available_at=api_datetime(item.available_at), window_label=item.window_label, benchmark=item.benchmark, price_source=item.price_source, after_hours_treatment=item.after_hours_treatment, relative_return=float(item.relative_return) if item.relative_return is not None else None, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at, source=self._source(item.source_statement_id) if item.source_statement_id else None)
+        return MarketObservationDTO(id=str(item.id), key_factor_id=str(item.key_factor_id) if item.key_factor_id else None, stock_id=str(item.stock_id), stock_code=stock.code if stock else "已删除股票", stock_name=stock.name if stock else "已删除股票", event_at=item.event_at, available_at=item.available_at, window_label=item.window_label, benchmark=item.benchmark, price_source=item.price_source, after_hours_treatment=item.after_hours_treatment, relative_return=float(item.relative_return) if item.relative_return is not None else None, reviewed_by=item.reviewed_by or "未记录", review_reason=item.review_reason or "未记录", reviewed_at=item.reviewed_at or item.created_at)
 
     def _fund_exposure(self, case_id: uuid.UUID, fundamentals: list[FundamentalImpact], as_of: date, cutoff: datetime) -> list[FundDisclosureExposureDTO]:
         stock_ids = [item.stock_id for item in fundamentals if item.stock_id is not None]
         if not stock_ids:
             return []
-        visible = list(
-            self._db.scalars(
-                select(HoldingDisclosure)
-                .where(HoldingDisclosure.stock_id.in_(stock_ids))
-                .where(HoldingDisclosure.report_period <= as_of)
-                .where(HoldingDisclosure.published_at <= cutoff)
-            )
-        )
-        latest = {
-            (disclosure.fund_id, disclosure.stock_id): disclosure
-            for disclosure in choose_latest_disclosure_per_fund_stock(visible)
-        }
+        latest: dict[tuple[uuid.UUID, uuid.UUID], HoldingDisclosure] = {}
+        for disclosure in self._db.scalars(select(HoldingDisclosure).where(HoldingDisclosure.stock_id.in_(stock_ids)).where(HoldingDisclosure.report_period <= as_of).where(HoldingDisclosure.published_at <= cutoff).order_by(HoldingDisclosure.report_period.desc(), HoldingDisclosure.created_at.desc())):
+            latest.setdefault((disclosure.fund_id, disclosure.stock_id), disclosure)
         grouped: dict[uuid.UUID, list[HoldingDisclosure]] = {}
         for disclosure in latest.values():
             grouped.setdefault(disclosure.fund_id, []).append(disclosure)
@@ -258,11 +239,6 @@ class MarketExpressionQueries:
                 document = self._db.get(DocumentVersion, disclosure.source_document_version_id) if disclosure.source_document_version_id else None
                 contract = self._db.scalar(select(SourceContract).where(SourceContract.document_version_id == document.id)) if document else None
                 span = self._db.get(SourceSpan, disclosure.source_span_id) if disclosure.source_span_id else None
-                predecessor = (
-                    self._db.get(HoldingDisclosure, disclosure.supersedes_disclosure_id)
-                    if disclosure.supersedes_disclosure_id
-                    else None
-                )
                 source_visible = bool(contract and contract.allow_display)
                 source_visible_in_case = bool(
                     source_visible
@@ -296,10 +272,6 @@ class MarketExpressionQueries:
                     source_permission_status="admitted" if source_visible else "not_recorded" if document is None else "restricted",
                     coverage_status=disclosure.coverage_status,
                     freshness_status=freshness_status,
-                    filing_kind=disclosure.filing_kind,
-                    supersedes_disclosure_id=str(predecessor.id) if predecessor else None,
-                    supersedes_filing_kind=predecessor.filing_kind if predecessor else None,
-                    supersedes_published_at=predecessor.published_at if predecessor else None,
                 ))
             coverage_complete = positions and all(
                 position.coverage_status == "complete" and position.freshness_status == "historical_disclosure"

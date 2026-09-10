@@ -91,11 +91,6 @@ def upgrade() -> None:
     op.create_index("ix_audit_logs_entity", "audit_logs", ["entity_type", "entity_id"])
     op.create_index("ix_audit_logs_created_at", "audit_logs", ["created_at"])
 
-    # Defence-in-depth, same convention as migration 0001. SQLite does not
-    # provide the PostgreSQL trigger function used below.
-    if op.get_bind().dialect.name != "postgresql":
-        return
-
     # Defence-in-depth, same convention as migration 0001.
     for table in IMMUTABLE_TABLES:
         op.execute(

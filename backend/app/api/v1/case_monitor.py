@@ -17,23 +17,14 @@ from app.schemas.v1.case_monitor import (
     UpdateCaseMonitorRequest,
     SetCaseMonitorStatusRequest,
     StartFactorMonitorRunRequest,
-    StartManualMonitorRunRequest,
 )
 from app.services.case_monitor import CaseMonitorConfig, CaseMonitorService
 from app.services.auto_research import AutoResearchService
 from app.services.monitor_scheduler import MonitorScheduler
 from app.schemas.v1.auto_research import ResearchRunResponse
-from app.api.v1.tenant_context import require_research_tenant
-from app.services.case_tenant_access import CaseTenantAccess
 
 
-router = APIRouter(
-    tags=["case-monitor-v1"], dependencies=[Depends(require_research_tenant)]
-)
-
-
-def _require_case(db: Session, case_id: uuid.UUID, tenant_id: str) -> None:
-    CaseTenantAccess(db).require_case(case_id, tenant_id)
+router = APIRouter(tags=["case-monitor-v1"])
 
 
 def _dto(monitor) -> CaseMonitorDTO:
@@ -53,12 +44,7 @@ def _dto(monitor) -> CaseMonitorDTO:
 
 
 @router.get("/research-cases/{case_id}/monitor", response_model=CaseMonitorDetailResponse)
-def get_monitor(
-    case_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
-):
-    _require_case(db, case_id, tenant_id)
+def get_monitor(case_id: uuid.UUID, db: Session = Depends(get_db)):
     query = CaseMonitorQuery(db)
     monitor = query.effective(case_id)
     run = query.latest_run(case_id)
@@ -75,11 +61,7 @@ def get_monitor(
         next_scheduled_at=(MonitorScheduler.next_due_at(monitor.frequency) if monitor is not None and monitor.status == "active" else None),
         confirmed_factors=[
             ConfirmedFactorOptionDTO(id=str(factor.id), statement=factor.statement)
-            for factor in query.confirmed_factors(case_id, monitor)
-        ],
-        available_confirmed_factors=[
-            ConfirmedFactorOptionDTO(id=str(factor.id), statement=factor.statement)
-            for factor in query.available_confirmed_factors(case_id)
+            for factor in query.confirmed_factors(case_id)
         ],
     )
 
@@ -89,14 +71,11 @@ def save_monitor(
     case_id: uuid.UUID,
     request: UpdateCaseMonitorRequest,
     db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
 ):
-    _require_case(db, case_id, tenant_id)
     try:
         monitor = CaseMonitorService(db).save(
             case_id,
             actor=request.actor,
-            expected_version=request.expected_version,
             config=CaseMonitorConfig(
                 frequency=request.frequency,
                 factor_ids=[uuid.UUID(value) for value in request.factor_ids],
@@ -118,18 +97,9 @@ def save_monitor(
     response_model=ResearchRunResponse,
     status_code=201,
 )
-def start_manual_monitor_run(
-    case_id: uuid.UUID,
-    request: StartManualMonitorRunRequest | None = None,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
-):
+def start_manual_monitor_run(case_id: uuid.UUID, db: Session = Depends(get_db)):
     """Queue an explicit replenishment using the effective monitor version."""
-    _require_case(db, case_id, tenant_id)
     try:
-        if request is not None:
-            from app.services.manual_monitor_command import start_manual_monitor_command
-            return start_manual_monitor_command(db, case_id, tenant_id, request)
         service = AutoResearchService(db)
         run = service.start_from_monitor(case_id)
         return service.detail(run.id)
@@ -143,13 +113,7 @@ def start_manual_monitor_run(
     response_model=ResearchRunResponse,
     status_code=201,
 )
-def start_factor_monitor_run(
-    case_id: uuid.UUID,
-    request: StartFactorMonitorRunRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
-):
-    _require_case(db, case_id, tenant_id)
+def start_factor_monitor_run(case_id: uuid.UUID, request: StartFactorMonitorRunRequest, db: Session = Depends(get_db)):
     try:
         service = AutoResearchService(db)
         run = service.start_from_key_factor(case_id, key_factor_id=uuid.UUID(request.key_factor_id))
@@ -160,16 +124,9 @@ def start_factor_monitor_run(
 
 
 @router.post("/research-cases/{case_id}/monitor/{target_status}", response_model=CaseMonitorDTO)
-def set_monitor_status(
-    case_id: uuid.UUID,
-    target_status: str,
-    request: SetCaseMonitorStatusRequest,
-    db: Session = Depends(get_db),
-    tenant_id: str = Depends(require_research_tenant),
-):
-    _require_case(db, case_id, tenant_id)
+def set_monitor_status(case_id: uuid.UUID, target_status: str, request: SetCaseMonitorStatusRequest, db: Session = Depends(get_db)):
     try:
-        monitor = CaseMonitorService(db).set_status(case_id, actor=request.actor, status=target_status, reason=request.change_reason, expected_version=request.expected_version)
+        monitor = CaseMonitorService(db).set_status(case_id, actor=request.actor, status=target_status, reason=request.change_reason)
         db.commit()
     except (ValueError, TypeError) as exc:
         db.rollback()

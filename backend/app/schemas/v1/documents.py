@@ -19,9 +19,6 @@ class ProviderRecordDTO(V1Model):
     provider_record_id: str
     request_scope: dict[str, Any]
     retrieval_reference: str | None
-    content_sha256: str
-    retrieved_at: datetime
-    contract_version: str | None
 
 
 class OriginalFileDTO(V1Model):
@@ -37,7 +34,6 @@ class OriginalFileDTO(V1Model):
 
 class SourceContractDTO(V1Model):
     source_type: str
-    research_source_type: str
     provider_or_tenant: str
     permissions: dict[str, bool]
     status: Literal["admitted", "restricted"]
@@ -54,9 +50,7 @@ class SourceContractDTO(V1Model):
 class DocumentSummaryDTO(V1Model):
     id: str
     content_sha256: str
-    # A Case may retain audit metadata for a source whose terms forbid display.
-    # Never expose its original location through a read response in that state.
-    source_url: str | None
+    source_url: str
     published_at: str | None
     available_at: str
     acquired_at: str

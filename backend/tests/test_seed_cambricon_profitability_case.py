@@ -355,18 +355,6 @@ def test_seed_is_idempotent_after_legitimate_later_human_reviews(session):
     assessment = session.get(AIAssessment, result.assessment_id)
     snapshot = session.get(EvidenceSnapshot, assessment.snapshot_id)
     review_service = ReviewService(ResearchRepository(session))
-    # Legacy seed sources must be explicitly attached before a later review.
-    from app.models.ledger import CaseDocumentVersion
-    attached = set()
-    repository = ResearchRepository(session)
-    for link_id in snapshot.evidence_link_ids:
-        link = session.get(EvidenceLink, uuid.UUID(link_id))
-        document = repository.get_document_version_for_statement(link.source_statement_id)
-        if document.id not in attached:
-            session.add(CaseDocumentVersion(research_case_id=result.case_id,
-                        document_version_id=document.id, linked_at=document.acquired_at))
-            attached.add(document.id)
-    session.flush()
     for link_id in snapshot.evidence_link_ids:
         link = session.get(EvidenceLink, uuid.UUID(link_id))
         review_service.review_link(
@@ -378,7 +366,7 @@ def test_seed_is_idempotent_after_legitimate_later_human_reviews(session):
             reason="后续人工审核，不改变种子基础账本",
             reviewer="test-reviewer",
         )
-    AssessmentService(ResearchRepository(session), session).review(
+    AssessmentService(ResearchRepository(session)).review(
         result.assessment_id,
         outcome="confirmed",
         conclusion="supported",

@@ -4,17 +4,14 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ledger import CaseDocumentVersion, Company, SourceSpan, SourceStatement, Stock, Thesis, ValidationError
-from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, KeyFactorCandidate, KeyFactorCandidateRun, MarketInstrumentBinding, MarketObservation, ReportClaim
+from app.models.research_expression import ClaimVerification, FundamentalImpact, KeyFactor, MarketInstrumentBinding, MarketObservation, ReportClaim
 from app.models.source_governance import SourceContract
-from app.services.source_admission import source_contract_is_active
 from app.repositories.research import ResearchRepository
-from app.services.key_factor_candidates import KeyFactorCandidateParser
 
 
 def _utcnow() -> datetime:
@@ -40,8 +37,8 @@ class KeyFactorInput:
     expected_direction: str
     metric_name: str
     allowed_source_types: list[str]
-    verification_window_start: date
-    verification_window_end: date
+    verification_window_start: date | None
+    verification_window_end: date | None
     support_condition: str
     refutation_condition: str
     next_verification_event: str
@@ -82,7 +79,6 @@ class FundamentalImpactInput:
 @dataclass(frozen=True, slots=True)
 class MarketObservationInput:
     market_instrument_binding_id: uuid.UUID
-    source_statement_id: uuid.UUID
     event_at: datetime
     available_at: datetime
     window_label: str
@@ -131,7 +127,7 @@ class MarketExpressionService:
             thesis = self._session.get(Thesis, value.thesis_id)
             if thesis is None or thesis.research_case_id != case_id or thesis.review_state != "confirmed":
                 raise ValidationError("thesis must be a confirmed proposition in this research case")
-        if value.verification_window_start > value.verification_window_end:
+        if value.verification_window_start and value.verification_window_end and value.verification_window_start > value.verification_window_end:
             raise ValidationError("verification_window_start must not be after verification_window_end")
         for name in ("name", "metric_name", "support_condition", "refutation_condition", "next_verification_event", "reviewed_by", "review_reason"):
             self._require_text(getattr(value, name), name)
@@ -159,54 +155,6 @@ class MarketExpressionService:
         self._session.add(record)
         self._session.flush()
         return record
-
-    def parse_key_factor_candidates(
-        self, case_id: uuid.UUID, *, source_statement_id: uuid.UUID, requested_by: str
-    ) -> KeyFactorCandidateRun:
-        """Persist a transparent parse attempt without creating reviewed factors."""
-        self._require_case(case_id)
-        self._require_text(requested_by, "requested_by")
-        statement = self._require_admitted_case_statement(case_id, source_statement_id)
-        span = self._session.get(SourceSpan, statement.source_span_id)
-        if span is None:
-            raise ValidationError("source span not found")
-        parsed = KeyFactorCandidateParser().parse(
-            span.verbatim_text, observed_period=statement.observed_period
-        )
-        now = _utcnow()
-        run = KeyFactorCandidateRun(
-            research_case_id=case_id,
-            source_statement_id=statement.id,
-            requested_by=requested_by.strip(),
-            parser_version=parsed.parser_version,
-            status="completed",
-            candidate_count=len(parsed.candidates),
-            skipped_reason=parsed.skipped_reason,
-            created_at=now,
-        )
-        self._session.add(run)
-        self._session.flush()
-        for ordinal, candidate in enumerate(parsed.candidates, start=1):
-            self._session.add(
-                KeyFactorCandidate(
-                    run_id=run.id,
-                    ordinal=ordinal,
-                    name=candidate.name,
-                    metric_name=candidate.metric_name,
-                    expected_direction=candidate.expected_direction,
-                    verification_window_start=candidate.verification_window_start,
-                    verification_window_end=candidate.verification_window_end,
-                    support_condition=candidate.support_condition,
-                    refutation_condition=candidate.refutation_condition,
-                    next_verification_event=candidate.next_verification_event,
-                    evidence_excerpt=candidate.evidence_excerpt,
-                    rule_id=candidate.rule_id,
-                    review_state="machine_generated",
-                    created_at=now,
-                )
-            )
-        self._session.flush()
-        return run
 
     def register_claim_verification(
         self, case_id: uuid.UUID, factor_id: uuid.UUID, value: ClaimVerificationInput
@@ -307,7 +255,6 @@ class MarketExpressionService:
         if binding is None or binding.research_case_id != case_id or binding.review_state != "reviewed" or binding.stock_id is None:
             raise ValidationError("market observation requires a reviewed stock binding in this research case")
         self._require_admitted_case_statement(case_id, binding.source_statement_id)
-        self._require_admitted_case_statement(case_id, value.source_statement_id)
         if value.event_at.tzinfo is None or value.available_at.tzinfo is None:
             raise ValidationError("event_at and available_at must include a timezone")
         if value.available_at < value.event_at:
@@ -320,7 +267,6 @@ class MarketExpressionService:
             research_case_id=case_id,
             key_factor_id=factor.id,
             stock_id=binding.stock_id,
-            source_statement_id=value.source_statement_id,
             event_at=value.event_at,
             available_at=value.available_at,
             window_label=value.window_label.strip(),
@@ -356,13 +302,7 @@ class MarketExpressionService:
         contract = self._session.scalar(
             select(SourceContract).where(SourceContract.document_version_id == span.document_version_id)
         )
-        if (
-            case_document is None
-            or contract is None
-            or not contract.allow_ai_processing
-            or not contract.allow_display
-            or not source_contract_is_active(contract)
-        ):
+        if case_document is None or contract is None or not contract.allow_ai_processing or not contract.allow_display:
             raise ValidationError("source statement must be attached to this case and admitted for processing and display")
         return statement
 

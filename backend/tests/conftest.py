@@ -3,27 +3,9 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-# Tests must never see a developer's local .env credentials.  Force test mode
-# before importing application modules and discard every ambient setting that
-# could construct a live provider.  Database service URLs are intentionally
-# preserved so opt-in PostgreSQL and Neo4j integration tests still work.
-os.environ["APP_ENV"] = "test"
-for provider_env_name in (
-    "LLM_API_KEY",
-    "LLM_BASE_URL",
-    "LLM_MODEL",
-    "LLM_TEMPERATURE",
-    "LLM_SEED",
-    "LLM_TIMEOUT_SECONDS",
-    "LLM_MAX_ATTEMPTS",
-    "LLM_RETRY_BUDGET_SECONDS",
-    "LLM_MAX_INPUT_BYTES",
-    "LLM_MAX_RESPONSE_BYTES",
-    "LLM_MAX_COMPLETION_TOKENS",
-    "GILDATA_MAX_ATTEMPTS",
-    "GILDATA_TOKEN",
-):
-    os.environ.pop(provider_env_name, None)
+# Tests must never see a developer's local .env credentials: APP_ENV=test
+# makes app.env.load_local_env() a no-op, so providers stay mock/fake.
+os.environ.setdefault("APP_ENV", "test")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -38,17 +20,6 @@ NEO4J_URL = os.getenv("NEO4J_URL")
 USE_NEO4J = bool(NEO4J_URL)
 
 
-def _truncate_postgresql_tables(engine, base) -> None:
-    """Reset test rows without dropping Alembic-managed append-only triggers."""
-    table_names = ", ".join(
-        f'"{table.name}"' for table in reversed(base.metadata.sorted_tables)
-    )
-    with engine.begin() as conn:
-        conn.exec_driver_sql(
-            f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
-        )
-
-
 @pytest.fixture(scope="session")
 def engine():
     from app.models.ledger import Base
@@ -57,7 +28,13 @@ def engine():
         eng = create_engine(PG_URL, future=True)
         # 表与 append-only 触发器由 Alembic migration 管理；测试前 TRUNCATE
         # 清残留数据，保留结构与触发器（drop_all 会删触发器，故不用）。
-        _truncate_postgresql_tables(eng, Base)
+        with eng.begin() as conn:
+            table_names = ", ".join(
+                f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables)
+            )
+            conn.exec_driver_sql(
+                f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
+            )
     else:
         eng = create_engine(
             "sqlite://",
@@ -87,9 +64,7 @@ def session(engine) -> Session:
         # StaticPool, so rebuild its disposable schema between tests.  The
         # PostgreSQL fixture deliberately keeps Alembic-managed tables and
         # append-only triggers intact.
-        if USE_PG:
-            _truncate_postgresql_tables(engine, Base)
-        else:
+        if not USE_PG:
             Base.metadata.drop_all(engine)
             Base.metadata.create_all(engine)
 
@@ -98,29 +73,8 @@ def session(engine) -> Session:
 def seeded_session(session) -> Session:
     """A session pre-seeded with the frozen AI-compute evidence slice."""
     from app.scripts.seed_ai_compute_case import seed
-    from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, ResearchCase
-    from sqlalchemy import select
 
     seed(session)
-    # Event-slice protected Case reads need an explicit tenant admission even
-    # for the legacy frozen fixture.  Do not teach route tests to rely on an
-    # implicit "test" tenant.
-    case = session.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
-    assert case is not None
-    document_id = session.scalar(
-        select(CaseDocumentVersion.document_version_id)
-        .where(CaseDocumentVersion.research_case_id == case.id)
-        .order_by(CaseDocumentVersion.linked_at)
-    )
-    assert document_id is not None
-    session.add(CaseTenantAdmission(
-        research_case_id=case.id,
-        tenant_id="test-team",
-        initial_document_version_id=document_id,
-        admitted_by="test-fixture",
-        admitted_at=case.created_at,
-    ))
-    session.flush()
     return session
 
 
@@ -199,10 +153,10 @@ def statement(research_service, span):
 
 
 @pytest.fixture
-def assessment_service(research_repository, session):
+def assessment_service(research_repository):
     from app.services.assessment import AssessmentService
 
-    return AssessmentService(research_repository, session)
+    return AssessmentService(research_repository)
 
 
 @pytest.fixture
@@ -353,7 +307,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture
-def api_client(session, monkeypatch):
+def api_client(session):
     """A TestClient wired to the in-memory test session via get_db override."""
     from app.db import get_db
     from app.main import app
@@ -362,16 +316,14 @@ def api_client(session, monkeypatch):
         yield session
 
     app.dependency_overrides[get_db] = _override_get_db
-    monkeypatch.setenv("RESEARCH_TENANT_TOKENS", '{"test-tenant-token":"test-team"}')
     try:
-        yield TestClient(app, headers={"Authorization": "Bearer test-tenant-token"})
+        yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db, None)
 
 
 @pytest.fixture
 def workbench_case(
-    session,
     document_service,
     research_service,
     assessment_service,
@@ -402,9 +354,6 @@ def workbench_case(
     case = research_service.add_case(
         title="AI compute demand", industry_topic="ai_compute", created_by="tester"
     )
-    from tests.tenant_admission import admit_case
-
-    admit_case(session, case.id, document_version_id=version.id)
     thesis = research_service.add_thesis(
         case.id, statement="GPU demand will grow", created_by="tester"
     )
@@ -642,8 +591,6 @@ class _SeededDatabase:
                 "source_span_id CHAR(32), "
                 "provider_record_id CHAR(32), "
                 "coverage_status VARCHAR(32) NOT NULL DEFAULT 'not_recorded', "
-                "filing_kind VARCHAR(16) NOT NULL DEFAULT 'other', "
-                "supersedes_disclosure_id CHAR(32), "
                 "created_at DATETIME NOT NULL, "
                 "PRIMARY KEY (id), "
                 "FOREIGN KEY(fund_id) REFERENCES funds (id), "
@@ -660,8 +607,8 @@ class _SeededDatabase:
         cur.execute(
             "INSERT INTO holding_disclosures "
             "(id, fund_id, stock_id, weight, report_period, published_at, "
-            "acquired_at, source, coverage_status, created_at) "
-            f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
+            "acquired_at, source, created_at) "
+            f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
             (
                 new_id,
                 fund_id,
@@ -671,7 +618,6 @@ class _SeededDatabase:
                 None,
                 "2026-01-01 00:00:00.000000",
                 "test-undated",
-                "not_recorded",
                 "2026-01-01 00:00:00.000000",
             ),
         )
@@ -728,54 +674,16 @@ def cmd_client(cmd_session):
         yield cmd_session
 
     app.dependency_overrides[get_db] = _override_get_db
-    previous_tokens = os.environ.get("RESEARCH_TENANT_TOKENS")
-    os.environ["RESEARCH_TENANT_TOKENS"] = '{"test-tenant-token":"test-team"}'
     try:
-        yield TestClient(app, headers={"Authorization": "Bearer test-tenant-token"})
+        yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db, None)
-        if previous_tokens is None:
-            os.environ.pop("RESEARCH_TENANT_TOKENS", None)
-        else:
-            os.environ["RESEARCH_TENANT_TOKENS"] = previous_tokens
 
 
 @pytest.fixture
 def cmd_seeded(cmd_session):
     from app.scripts.seed_ai_compute_case import seed
-    from app.models.ledger import CaseDocumentVersion, CaseTenantAdmission, ResearchCase
-    from sqlalchemy import select
 
     seed(cmd_session)
-    case = cmd_session.scalar(select(ResearchCase).order_by(ResearchCase.created_at))
-    assert case is not None
-    document_id = cmd_session.scalar(
-        select(CaseDocumentVersion.document_version_id)
-        .where(CaseDocumentVersion.research_case_id == case.id)
-        .order_by(CaseDocumentVersion.linked_at)
-    )
-    assert document_id is not None
-    cmd_session.add(CaseTenantAdmission(
-        research_case_id=case.id,
-        tenant_id="test-team",
-        initial_document_version_id=document_id,
-        admitted_by="test-fixture",
-        admitted_at=case.created_at,
-    ))
     cmd_session.commit()
     return cmd_session
-
-
-@pytest.fixture(autouse=True)
-def isolate_postgres_concurrency_test(request):
-    """Independent-connection tests commit outside the ordinary session fixture."""
-    if not USE_PG or request.node.get_closest_marker('pg_only') is None:
-        yield
-        return
-    from app.models.ledger import Base
-    test_engine = request.getfixturevalue('engine')
-    _truncate_postgresql_tables(test_engine, Base)
-    try:
-        yield
-    finally:
-        _truncate_postgresql_tables(test_engine, Base)

@@ -166,8 +166,6 @@ def create_holding_disclosure(
             "source_span_id": payload.source_span_id,
             "provider_record_id": payload.provider_record_id,
             "coverage_status": payload.coverage_status,
-            "filing_kind": payload.filing_kind,
-            "supersedes_disclosure_id": payload.supersedes_disclosure_id,
         },
     )
     commit_or_rollback(db)

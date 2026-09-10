@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from unicodedata import normalize
@@ -27,34 +26,7 @@ class SourceAdmission:
     can_accept: bool
 
 
-def source_contract_is_active(
-    contract: object | None,
-    *,
-    at: datetime | None = None,
-) -> bool:
-    """Whether a frozen contract grants use at a specific instant.
-
-    This deliberately treats an absent boundary as open-ended, while keeping
-    comparisons in UTC so SQLite's timezone-naive test values and production
-    timezone-aware values obey the same rule.
-    """
-    if contract is None:
-        return True
-    instant = _as_utc(at or datetime.now(timezone.utc))
-    effective_from = getattr(contract, "effective_from", None)
-    effective_until = getattr(contract, "effective_until", None)
-    return (
-        (effective_from is None or instant >= _as_utc(effective_from))
-        and (effective_until is None or instant <= _as_utc(effective_until))
-    )
-
-
-def apply_source_contract(
-    admission: SourceAdmission,
-    contract: object | None,
-    *,
-    at: datetime | None = None,
-) -> SourceAdmission:
+def apply_source_contract(admission: SourceAdmission, contract: object | None) -> SourceAdmission:
     """Apply frozen use restrictions before a source can enter formal evidence.
 
     This remains deliberately duck-typed so the URL classifier stays a pure
@@ -76,30 +48,7 @@ def apply_source_contract(
             "来源合同禁止展示；不能在审核工作台中作为正式证据处理。",
             False,
         )
-    instant = _as_utc(at or datetime.now(timezone.utc))
-    effective_from = getattr(contract, "effective_from", None)
-    effective_until = getattr(contract, "effective_until", None)
-    if effective_from is not None and instant < _as_utc(effective_from):
-        return SourceAdmission(
-            SourceStatus.RESTRICTED,
-            "来源合同尚未生效；资料只能保留为线索，不能作为正式证据。",
-            False,
-        )
-    if effective_until is not None and instant > _as_utc(effective_until):
-        return SourceAdmission(
-            SourceStatus.RESTRICTED,
-            "来源合同已失效；资料只能保留为线索，不能作为正式证据。",
-            False,
-        )
     return admission
-
-
-def _as_utc(value: datetime) -> datetime:
-    return (
-        value.replace(tzinfo=timezone.utc)
-        if value.tzinfo is None
-        else value.astimezone(timezone.utc)
-    )
 
 
 def classify_source(

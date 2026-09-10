@@ -10,7 +10,6 @@ from sqlalchemy import select
 from app.models.events import DomainEvent
 from app.models.ledger import (
     CaseDocumentVersion,
-    CaseTenantAdmission,
     DocumentVersion,
     ResearchCase,
     SourceSpan,
@@ -105,26 +104,6 @@ def _case(session) -> ResearchCase:
     )
     session.add(case)
     session.flush()
-    initial_document = DocumentVersion(
-        content_sha256=hashlib.sha256(b"initial event intake").hexdigest(),
-        source_url="event://initial-intake",
-        title="Initial event intake",
-        available_at=now,
-        acquired_at=now,
-        parser_version="user-pasted-v1",
-        parse_state="partial",
-    )
-    session.add(initial_document)
-    session.flush()
-    session.add(
-        CaseTenantAdmission(
-            research_case_id=case.id,
-            tenant_id="test-team",
-            initial_document_version_id=initial_document.id,
-            admitted_by="tester",
-            admitted_at=now,
-        )
-    )
     session.add(
         EventResearchLifecycle(
             research_case_id=case.id,

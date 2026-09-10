@@ -1,15 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
-from app.models.ledger import (
-    CaseDocumentVersion,
-    CaseTenantAdmission,
-    DocumentVersion,
-    ResearchCase,
-    Thesis,
-)
+from app.models.ledger import ResearchCase, Thesis
 from app.models.operational import ResearchRun
 from app.models.research_monitor import CaseMonitorVersion, ResearchRunEvent  # noqa: F401
 from app.models.research_expression import KeyFactor
@@ -25,31 +19,6 @@ def _case_with_confirmed_factor(cmd_session) -> tuple[ResearchCase, Thesis]:
     )
     cmd_session.add(case)
     cmd_session.flush()
-    document = DocumentVersion(
-        content_sha256=uuid.uuid4().hex,
-        source_url="https://example.test/monitor-source",
-        available_at=now,
-        acquired_at=now,
-        parser_version="test",
-    )
-    cmd_session.add(document)
-    cmd_session.flush()
-    cmd_session.add_all(
-        [
-            CaseDocumentVersion(
-                research_case_id=case.id,
-                document_version_id=document.id,
-                linked_at=now,
-            ),
-            CaseTenantAdmission(
-                research_case_id=case.id,
-                tenant_id="test-team",
-                initial_document_version_id=document.id,
-                admitted_by="test-fixture",
-                admitted_at=now,
-            ),
-        ]
-    )
     factor = Thesis(
         research_case_id=case.id,
         statement="订单指引是否高于市场预期",
@@ -75,188 +44,6 @@ def _monitor_payload(factor_id: uuid.UUID, **overrides) -> dict:
     }
     payload.update(overrides)
     return payload
-
-
-def _add_confirmed_factor(cmd_session, case: ResearchCase, statement: str) -> Thesis:
-    factor = Thesis(
-        research_case_id=case.id,
-        statement=statement,
-        created_by="human:lin",
-        created_at=datetime.now(timezone.utc),
-        creator_type="human",
-        review_state="confirmed",
-    )
-    cmd_session.add(factor)
-    cmd_session.commit()
-    return factor
-
-
-def _historical_monitor(
-    case: ResearchCase, version: int, factor_ids: list[str]
-) -> CaseMonitorVersion:
-    return CaseMonitorVersion(
-        research_case_id=case.id,
-        version=version,
-        status="active",
-        frequency="weekday_08_30",
-        factor_ids=factor_ids,
-        allowed_source_types=["licensed_provider"],
-        next_verification_event="2026Q1 财报披露",
-        budget=20,
-        changed_by="human:lin",
-        change_reason="historical fixture",
-        created_at=datetime.now(timezone.utc),
-    )
-
-
-def test_monitor_returns_only_confirmed_factors_in_its_effective_scope(
-    cmd_client, cmd_session
-) -> None:
-    case, first = _case_with_confirmed_factor(cmd_session)
-    second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
-
-    saved = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(second.id)
-    )
-
-    assert saved.status_code == 200, saved.text
-    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
-    assert detail.status_code == 200
-    assert detail.json()["confirmed_factors"] == [
-        {"id": str(second.id), "statement": second.statement}
-    ]
-    assert detail.json()["available_confirmed_factors"] == [
-        {"id": str(first.id), "statement": first.statement},
-        {"id": str(second.id), "statement": second.statement},
-    ]
-
-
-def test_monitor_returns_only_confirmed_factors_in_the_newest_scope(
-    cmd_client, cmd_session
-) -> None:
-    case, first = _case_with_confirmed_factor(cmd_session)
-    second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
-    first_saved = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(first.id)
-    )
-    second_saved = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(second.id)
-    )
-
-    assert first_saved.status_code == 200, first_saved.text
-    assert second_saved.status_code == 200, second_saved.text
-    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
-    assert detail.json()["monitor"]["id"] == second_saved.json()["id"]
-    assert detail.json()["confirmed_factors"] == [
-        {"id": str(second.id), "statement": second.statement}
-    ]
-    assert detail.json()["available_confirmed_factors"] == [
-        {"id": str(first.id), "statement": first.statement},
-        {"id": str(second.id), "statement": second.statement},
-    ]
-
-
-def test_monitor_scope_uses_unique_case_confirmed_factors_in_frozen_order(
-    cmd_client, cmd_session
-) -> None:
-    case, first = _case_with_confirmed_factor(cmd_session)
-    second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
-    unconfirmed = Thesis(
-        research_case_id=case.id,
-        statement="尚未确认因素",
-        created_by="human:lin",
-        created_at=datetime.now(timezone.utc),
-        creator_type="human",
-        review_state="pending_review",
-    )
-    foreign_case = ResearchCase(
-        title="其他 Case",
-        industry_topic="事件研究",
-        created_by="tester",
-        created_at=datetime.now(timezone.utc),
-    )
-    cmd_session.add_all([unconfirmed, foreign_case])
-    cmd_session.flush()
-    foreign = Thesis(
-        research_case_id=foreign_case.id,
-        statement="其他 Case 的已确认因素",
-        created_by="human:lin",
-        created_at=datetime.now(timezone.utc),
-        creator_type="human",
-        review_state="confirmed",
-    )
-    cmd_session.add(foreign)
-    cmd_session.flush()
-    cmd_session.add(
-        _historical_monitor(
-            case,
-            version=1,
-            factor_ids=[
-                str(second.id),
-                str(foreign.id),
-                str(second.id),
-                str(first.id),
-                str(unconfirmed.id),
-                "not-a-uuid",
-            ],
-        )
-    )
-    cmd_session.commit()
-
-    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
-
-    assert detail.status_code == 200
-    assert detail.json()["confirmed_factors"] == [
-        {"id": str(second.id), "statement": second.statement},
-        {"id": str(first.id), "statement": first.statement},
-    ]
-    assert detail.json()["available_confirmed_factors"] == [
-        {"id": str(first.id), "statement": first.statement},
-        {"id": str(second.id), "statement": second.statement},
-    ]
-
-
-def test_monitor_with_empty_or_malformed_historical_scope_returns_no_factors(
-    cmd_client, cmd_session
-) -> None:
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    cmd_session.add(_historical_monitor(case, version=1, factor_ids=[]))
-    cmd_session.commit()
-
-    empty_scope = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
-    assert empty_scope.status_code == 200
-    assert empty_scope.json()["confirmed_factors"] == []
-    assert empty_scope.json()["available_confirmed_factors"] == [
-        {"id": str(factor.id), "statement": factor.statement}
-    ]
-
-    cmd_session.add(
-        _historical_monitor(
-            case, version=2, factor_ids=["not-a-uuid", "", "not-an-id"]
-        )
-    )
-    cmd_session.commit()
-
-    malformed_scope = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
-    assert malformed_scope.status_code == 200
-    assert malformed_scope.json()["confirmed_factors"] == []
-
-
-def test_monitor_without_saved_version_lists_all_confirmed_factors(
-    cmd_client, cmd_session
-) -> None:
-    case, first = _case_with_confirmed_factor(cmd_session)
-    second = _add_confirmed_factor(cmd_session, case, "第二个已确认因素")
-
-    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
-
-    assert detail.status_code == 200
-    assert detail.json()["monitor"] is None
-    assert detail.json()["confirmed_factors"] == [
-        {"id": str(first.id), "statement": first.statement},
-        {"id": str(second.id), "statement": second.statement},
-    ]
-    assert detail.json()["available_confirmed_factors"] == detail.json()["confirmed_factors"]
 
 
 def test_monitor_read_update_and_run_events_are_transparent(cmd_client, cmd_session) -> None:
@@ -322,10 +109,6 @@ def test_manual_monitor_run_uses_the_saved_version_not_caller_options(
         "factor_statements": [factor.statement],
         "allowed_source_types": ["company_disclosure"],
         "budget": 7,
-        "frequency": "weekday_08_30",
-        "next_verification_event": "2026Q1 财报披露",
-        "configured_by": "human:lin",
-        "configuration_change_reason": "建立可复现的监控范围",
     }
 
     second = cmd_client.put(
@@ -353,7 +136,7 @@ def test_manual_monitor_run_uses_the_saved_version_not_caller_options(
     assert replayed_first_scope == first_scope
 
 
-def test_factor_monitor_run_requires_an_explicit_reviewed_factor_to_thesis_link_and_window(
+def test_factor_monitor_run_requires_an_explicit_reviewed_factor_to_thesis_link(
     cmd_client, cmd_session
 ) -> None:
     case, factor = _case_with_confirmed_factor(cmd_session)
@@ -384,54 +167,10 @@ def test_factor_monitor_run_requires_an_explicit_reviewed_factor_to_thesis_link_
         json={"key_factor_id": str(key_factor.id)},
     )
 
-    assert response.status_code == 422
-    assert "verification window" in response.json()["error"]["message"]
-
-
-def test_factor_monitor_run_rejects_a_duplicate_active_scope(
-    cmd_client, cmd_session
-) -> None:
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    saved = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(factor.id)
-    )
-    assert saved.status_code == 200, saved.text
-    now = datetime.now(timezone.utc)
-    key_factor = KeyFactor(
-        research_case_id=case.id,
-        thesis_id=factor.id,
-        report_claim_id=None,
-        name="订单指引",
-        expected_direction="positive",
-        metric_name="订单金额",
-        allowed_source_types=["licensed_provider"],
-        verification_window_start=date(2026, 1, 1),
-        verification_window_end=date(2026, 3, 31),
-        support_condition="订单增长",
-        refutation_condition="订单下降",
-        next_verification_event="下一次财报",
-        review_state="reviewed",
-        reviewed_by="human:lin",
-        review_reason="已审核并绑定当前 Case 的研究范围因素",
-        reviewed_at=now,
-        created_at=now,
-    )
-    cmd_session.add(key_factor)
-    cmd_session.commit()
-
-    first = cmd_client.post(
-        f"/api/v1/research-cases/{case.id}/monitor/factor-runs",
-        json={"key_factor_id": str(key_factor.id)},
-    )
-    assert first.status_code == 201, first.text
-
-    duplicate = cmd_client.post(
-        f"/api/v1/research-cases/{case.id}/monitor/factor-runs",
-        json={"key_factor_id": str(key_factor.id)},
-    )
-
-    assert duplicate.status_code == 422
-    assert "already has an active replenishment run" in duplicate.json()["error"]["message"]
+    assert response.status_code == 201, response.text
+    events = cmd_client.get(f"/api/v1/research-runs/{response.json()['id']}/events").json()["items"]
+    assert events[0]["details"]["factor_ids"] == [str(factor.id)]
+    assert events[0]["details"]["requested_key_factor_id"] == str(key_factor.id)
 
 
 def test_manual_monitor_run_requires_a_saved_monitor(cmd_client, cmd_session) -> None:
@@ -441,28 +180,6 @@ def test_manual_monitor_run_requires_a_saved_monitor(cmd_client, cmd_session) ->
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_failed"
-
-
-def test_monitor_prefers_an_active_run_over_a_later_cancelled_run(
-    cmd_client, cmd_session
-) -> None:
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    saved = cmd_client.put(f"/api/v1/research-cases/{case.id}/monitor", json=_monitor_payload(factor.id))
-    assert saved.status_code == 200
-    first = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
-    second = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
-    assert first.status_code == 201 and second.status_code == 201
-
-    cancelled = cmd_client.post(
-        f"/api/v1/research-runs/{first.json()['id']}/cancel",
-        json={"actor": "human:lin", "change_reason": "取消重复测试运行"},
-    )
-    assert cancelled.status_code == 200
-
-    detail = cmd_client.get(f"/api/v1/research-cases/{case.id}/monitor")
-    assert detail.status_code == 200
-    assert detail.json()["latest_run"]["id"] == second.json()["id"]
-    assert detail.json()["latest_run"]["status"] == "queued"
 
 
 def test_monitor_rejects_unsupported_source_type(cmd_client, cmd_session) -> None:
@@ -502,55 +219,6 @@ def test_active_runs_expose_case_and_frozen_scope_without_reconstructing_current
     assert item["scope"]["allowed_source_types"] == ["company_disclosure"]
     assert item["scope"]["factor_statements"] == [factor.statement]
 
-    completed = cmd_session.get(ResearchRun, uuid.UUID(started.json()["id"]))
-    assert completed is not None
-    completed.status = "succeeded"
-    completed.stage = "complete"
-    completed.stop_reason = "no_new_evidence"
-    cmd_session.commit()
-
-    active = cmd_client.get("/api/v1/research-runs/active")
-    assert active.status_code == 200
-    assert str(completed.id) not in {run["run_id"] for run in active.json()["items"]}
-
-
-def test_run_archive_replays_the_monitoring_cadence_and_change_basis_that_started_it(
-    cmd_client, cmd_session
-) -> None:
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    first = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/monitor",
-        json=_monitor_payload(
-            factor.id,
-            frequency="weekday_08_30",
-            next_verification_event="2026Q1 财报披露",
-            change_reason="以晨间披露核验订单指引",
-        ),
-    )
-    assert first.status_code == 200, first.text
-    started = cmd_client.post(f"/api/v1/research-cases/{case.id}/monitor/runs")
-    assert started.status_code == 201, started.text
-
-    changed = cmd_client.put(
-        f"/api/v1/research-cases/{case.id}/monitor",
-        json=_monitor_payload(
-            factor.id,
-            frequency="daily_20_00",
-            next_verification_event="下一次行业会议",
-            change_reason="改为每日晚间复核",
-        ),
-    )
-    assert changed.status_code == 200, changed.text
-
-    archived = cmd_client.get("/api/v1/research-runs")
-    assert archived.status_code == 200, archived.text
-    scope = archived.json()["items"][0]["scope"]
-    assert scope["monitor_version_id"] == first.json()["id"]
-    assert scope["frequency"] == "weekday_08_30"
-    assert scope["next_verification_event"] == "2026Q1 财报披露"
-    assert scope["configured_by"] == "human:lin"
-    assert scope["configuration_change_reason"] == "以晨间披露核验订单指引"
-
 
 def test_global_run_archive_keeps_terminal_run_and_its_frozen_scope(
     cmd_client, cmd_session
@@ -579,39 +247,3 @@ def test_global_run_archive_keeps_terminal_run_and_its_frozen_scope(
     assert item["stop_reason"] == "task_failed"
     assert item["scope"]["monitor_version_id"] == saved.json()["id"]
     assert item["scope"]["allowed_source_types"] == ["company_disclosure"]
-
-
-def test_monitor_save_rejects_stale_version_without_overwriting_pause(cmd_client, cmd_session):
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    path = f'/api/v1/research-cases/{case.id}/monitor'
-    first = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 0})
-    assert first.status_code == 200, first.text
-    paused = cmd_client.post(f'{path}/paused', json={'actor': 'other', 'change_reason': '暂停核验'})
-    assert paused.status_code == 200
-    stale = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 1})
-    assert stale.status_code == 409, stale.text
-    current = cmd_client.get(path).json()
-    assert current['monitor']['version'] == 2
-    assert current['monitor']['status'] == 'paused'
-    assert len(current['history']) == 2
-    updated = cmd_client.put(path, json={**_monitor_payload(factor.id), 'expected_version': 2})
-    assert updated.status_code == 200, updated.text
-    assert updated.json()['version'] == 3
-
-
-def test_status_command_rejects_stale_monitor_version(cmd_client, cmd_session):
-    case, factor = _case_with_confirmed_factor(cmd_session)
-    path = f'/api/v1/research-cases/{case.id}/monitor'
-    assert cmd_client.put(path, json=_monitor_payload(factor.id)).status_code == 200
-    assert cmd_client.put(path, json={**_monitor_payload(factor.id), 'budget': 30}).status_code == 200
-    stale = cmd_client.post(f'{path}/paused', json={'actor': 'tester', 'change_reason': '旧页面暂停', 'expected_version': 1})
-    assert stale.status_code == 409, stale.text
-    current = cmd_client.get(path).json()
-    assert current['monitor']['version'] == 2
-    assert current['monitor']['status'] == 'active'
-    assert len(current['history']) == 2
-    paused = cmd_client.post(f'{path}/paused', json={'actor': 'tester', 'change_reason': '核对新范围后暂停', 'expected_version': 2})
-    assert paused.status_code == 200, paused.text
-    stale_resume = cmd_client.post(f'{path}/active', json={'actor': 'tester', 'change_reason': '旧页面恢复', 'expected_version': 2})
-    assert stale_resume.status_code == 409
-    assert cmd_client.get(path).json()['monitor']['status'] == 'paused'

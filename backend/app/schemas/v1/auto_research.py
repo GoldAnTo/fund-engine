@@ -32,10 +32,6 @@ class FrozenRunScopeDTO(V1Model):
     factor_statements: list[str] = Field(default_factory=list)
     allowed_source_types: list[str] = Field(default_factory=list)
     budget: int | None = None
-    frequency: str | None = None
-    next_verification_event: str | None = None
-    configured_by: str | None = None
-    configuration_change_reason: str | None = None
 
 
 class ActiveResearchRunDTO(V1Model):
@@ -52,15 +48,6 @@ class ActiveResearchRunDTO(V1Model):
 
 class ActiveResearchRunsResponse(CursorPage):
     items: list[ActiveResearchRunDTO]
-
-
-class ResearchWorkerStatusDTO(V1Model):
-    """Current liveness of the process that advances queued research work."""
-
-    status: str
-    last_seen_at: str | None = None
-    mode: str | None = None
-    state: str | None = None
 
 
 class ResearchRunArchiveDTO(ActiveResearchRunDTO):
@@ -134,16 +121,6 @@ class ReviewTaskDTO(V1Model):
     ref_type: str | None
     ref_id: str | None
 
-
-class PendingAssessmentDTO(V1Model):
-    assessment_id: str
-    conclusion: str
-    rationale: str
-    gaps: list[str]
-    task_id: str
-    task_status: str
-
-
 class ResearchRunResponse(V1Model):
     id: str
     case_id: str
@@ -162,29 +139,7 @@ class ResearchRunResponse(V1Model):
     gap_tasks: list[ResearchTaskDTO]
     failed_tasks: list[ResearchTaskDTO]
     assessments: list[dict[str, Any] | None]
-    pending_assessments: list[PendingAssessmentDTO]
     pending_proposals: list[PendingProposalDTO]
     review_tasks: list[ReviewTaskDTO]
     next_action: str
     tasks: list[ResearchTaskDTO]
-
-
-class AIUsageSummaryDTO(V1Model):
-    """Only persisted, explicitly attributed operations; not the full provider bill."""
-    coverage: str = "recorded_attributed_operations_only"
-    operation_count: int
-    reported_attempt_count: int
-    unavailable_attempt_count: int
-    unavailable_operation_count: int
-    reported_prompt_tokens: int
-    reported_completion_tokens: int
-    reported_total_tokens: int
-    recorded_total_tokens: int | None
-
-
-class RunAIUsageDTO(AIUsageSummaryDTO):
-    run_id: str
-
-
-class CaseAIUsageDTO(AIUsageSummaryDTO):
-    case_id: str
