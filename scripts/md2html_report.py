@@ -6,15 +6,16 @@
 步骤：
 1. 通过 `npx --yes marked --gfm` 将 Markdown 转为 HTML 片段；
 2. 用内嵌 CSS（A4 版式、PingFang SC 中文字体、表格/代码样式）包装；
-3. 在 frontend/ 下临时生成 Playwright 脚本，用系统 Chrome
-   （channel="chrome"，兼容 macOS 12）以 printBackground 打印 PDF。
+3. 使用系统 Chrome 的 headless PDF 命令打印，不依赖网页应用或其 npm 包。
+   可通过 REPORT_CHROME 指定 Chrome/Chromium 可执行文件。
 
 产物：
 - docs/evidence-driven-research-report.html（中间产物，可删除）
 - docs/evidence-driven-research-report.pdf（最终产物）
 """
 
-import re
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,11 +25,10 @@ ROOT = Path(__file__).resolve().parent.parent
 MD = ROOT / "docs" / "evidence-driven-research-report.md"
 HTML = ROOT / "docs" / "evidence-driven-research-report.html"
 PDF = ROOT / "docs" / "evidence-driven-research-report.pdf"
-FRONTEND = ROOT / "frontend"
 
 CSS = """
 @page { size: A4; margin: 20mm 18mm; }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 html, body { background: #ffffff; }
 body {
   font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
@@ -73,20 +73,16 @@ a { color: #2f5d8a; text-decoration: none; }
 em { color: #44576d; }
 """
 
-PRINT_JS = """
-import { chromium } from "@playwright/test";
-const browser = await chromium.launch({ channel: "chrome" });
-const page = await browser.newPage();
-await page.goto("file://%(html)s");
-await page.pdf({
-  path: "%(pdf)s",
-  format: "A4",
-  printBackground: true,
-  margin: { top: "20mm", bottom: "20mm", left: "18mm", right: "18mm" },
-});
-await browser.close();
-console.log("PDF printed");
-"""
+def chrome_executable() -> str:
+    configured = os.environ.get("REPORT_CHROME")
+    candidates = [configured] if configured else [
+        "google-chrome", "chromium", "chromium-browser",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ]
+    for candidate in candidates:
+        if candidate and (resolved := shutil.which(candidate)):
+            return resolved
+    raise SystemExit("System Chrome is required; set REPORT_CHROME to its executable.")
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
@@ -111,17 +107,13 @@ def main() -> None:
     )
     print(f"HTML written: {HTML}")
 
-    # 3. Playwright（系统 Chrome）打印 PDF
-    js = PRINT_JS % {"html": HTML, "pdf": PDF}
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".tmp.mjs", dir=FRONTEND, delete=False, encoding="utf-8"
-    ) as f:
-        f.write(js)
-        tmp = Path(f.name)
-    try:
-        run(["node", str(tmp.name)], cwd=FRONTEND)
-    finally:
-        tmp.unlink(missing_ok=True)
+    # Use an isolated browser profile; never borrow a user's running session.
+    with tempfile.TemporaryDirectory(prefix="research-report-chrome-") as profile:
+        run([
+            chrome_executable(), "--headless", "--disable-gpu",
+            f"--user-data-dir={profile}", "--no-pdf-header-footer",
+            f"--print-to-pdf={PDF}", HTML.as_uri(),
+        ])
     print(f"PDF written: {PDF}")
 
 
