@@ -74,14 +74,13 @@ main() {
 
   compose config -q
 
-  for service in postgres api research-worker acquisition-worker frontend; do
+  for service in postgres api research-worker acquisition-worker; do
     require_running_service "$service"
   done
   require_expected_healthy_replicas research-worker 1
   require_expected_healthy_replicas acquisition-worker 3
 
   curl --fail --silent --show-error http://127.0.0.1:8000/health >/dev/null
-  curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null
 
   database_user="$(runtime_env_value ONE_CLICK_POSTGRES_USER)"
   database_name="$(runtime_env_value ONE_CLICK_POSTGRES_DB)"

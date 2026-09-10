@@ -18,7 +18,7 @@ def test_runtime_control_script_keeps_credentials_local_and_switches_only_app_se
     assert "ACQUISITION_ENABLED_ADAPTERS=sse,szse,gildata" in script
     assert 'LEGACY_PROJECT="fund-engine-event"' in script
     assert "label=com.docker.compose.project=" in script
-    for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
+    for service in ("api", "research-worker", "acquisition-worker", "scheduler"):
         assert service in script
     assert "postgres" not in script[script.index("stop_legacy_application_services"): script.index("start_one_click_runtime")]
     assert "--scale acquisition-worker=3" in script
@@ -36,7 +36,7 @@ def test_rollback_restarts_only_legacy_application_containers() -> None:
     assert "LEGACY_STOPPED_STATE_FILE" in rollback
     assert "docker ps" not in rollback
     allowed_services = script[script.index("legacy_service_is_allowed"): script.index("begin_legacy_stop_state")]
-    for service in ("api", "frontend", "research-worker", "acquisition-worker", "scheduler"):
+    for service in ("api", "research-worker", "acquisition-worker", "scheduler"):
         assert service in allowed_services
     assert "postgres" not in rollback
     assert "keycloak" not in rollback
@@ -45,8 +45,8 @@ def test_rollback_restarts_only_legacy_application_containers() -> None:
 def test_up_builds_before_cutover_and_restores_only_recorded_containers_on_failure(tmp_path: Path) -> None:
     api_short = "89c5b6eb2322"
     api_full = api_short + "a" * 52
-    frontend_short = "3d70c9b8e735"
-    frontend_full = frontend_short + "b" * 52
+    acquisition_short = "3d70c9b8e735"
+    acquisition_full = acquisition_short + "b" * 52
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     script = scripts_dir / "one-click-runtime.sh"
@@ -69,14 +69,14 @@ case "$1" in
     ;;
   ps)
     [[ "$*" == *"service=api"* ]] && printf '{api_short}\\n'
-    [[ "$*" == *"service=frontend"* ]] && printf '{frontend_short}\\n'
+    [[ "$*" == *"service=acquisition-worker"* ]] && printf '{acquisition_short}\\n'
     exit 0
     ;;
   inspect)
     container_id="${{!#}}"
     case "$container_id" in
       {api_short}|{api_full}) canonical_id="{api_full}"; service="api" ;;
-      {frontend_short}|{frontend_full}) canonical_id="{frontend_full}"; service="frontend" ;;
+      {acquisition_short}|{acquisition_full}) canonical_id="{acquisition_full}"; service="acquisition-worker" ;;
       *) exit 1 ;;
     esac
     [[ "$*" == *"{{{{.Id}}}}"* ]] && printf '%s\\n' "$canonical_id"
@@ -102,8 +102,8 @@ esac
     first_stop_index = next(index for index, command in enumerate(commands) if command.startswith("stop "))
     up_index = next(index for index, command in enumerate(commands) if " up -d --no-build" in command)
     assert config_index < build_index < first_stop_index < up_index
-    assert {command for command in commands if command.startswith("stop ")} == {f"stop {api_full}", f"stop {frontend_full}"}
-    assert {command for command in commands if command.startswith("start ")} == {f"start {api_full}", f"start {frontend_full}"}
+    assert {command for command in commands if command.startswith("stop ")} == {f"stop {api_full}", f"stop {acquisition_full}"}
+    assert {command for command in commands if command.startswith("start ")} == {f"start {api_full}", f"start {acquisition_full}"}
     assert not (tmp_path / ".one-click-runtime" / "legacy-stopped-containers").exists()
 
 
@@ -112,8 +112,7 @@ def test_runtime_verifier_checks_new_stack_and_legacy_database_revision() -> Non
 
     assert "config -q" in script
     assert "http://127.0.0.1:8000/health" in script
-    assert "http://127.0.0.1:8080/health" in script
-    for service in ("postgres", "api", "research-worker", "acquisition-worker", "frontend"):
+    for service in ("postgres", "api", "research-worker", "acquisition-worker"):
         assert service in script
     assert "0060" in script
     assert "0062" in script

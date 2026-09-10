@@ -58,7 +58,7 @@ init_runtime_environment() {
 
 legacy_service_is_allowed() {
   case "$1" in
-    api|frontend|research-worker|acquisition-worker|scheduler) return 0 ;;
+    api|research-worker|acquisition-worker|scheduler) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -92,6 +92,8 @@ normalize_legacy_stop_state() {
         rm -f "$temporary_state_file"
         exit 1
       }
+      # Retired UI containers must never be restarted by legacy rollback.
+      [[ "$service" != frontend ]] || continue
       legacy_service_is_allowed "$service" || {
         rm -f "$temporary_state_file"
         exit 1
@@ -119,7 +121,7 @@ stop_legacy_application_services() {
   [[ -e "$LEGACY_STOPPED_STATE_FILE" ]] && return 0
   begin_legacy_stop_state
 
-  for service in api frontend research-worker acquisition-worker scheduler; do
+  for service in api research-worker acquisition-worker scheduler; do
     while IFS= read -r container_id; do
       [[ -n "$container_id" ]] || continue
       full_container_id="$(docker inspect --format '{{.Id}}' "$container_id")" || return 1
