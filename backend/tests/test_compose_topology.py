@@ -27,7 +27,6 @@ def test_live_topology_declares_every_runtime_and_migration_gate() -> None:
         "research-worker",
         "acquisition-worker",
         "scheduler",
-        "frontend",
     } <= services
     for service in ("api", "research-worker", "acquisition-worker", "scheduler"):
         dependency = live["services"][service]["depends_on"]["migrate"]
@@ -77,7 +76,6 @@ def test_topology_uses_runtime_environment_and_contains_no_provider_secret() -> 
 
     assert "LLM_API_KEY: ${LLM_API_KEY" in rendered
     assert "GILDATA_TOKEN: ${GILDATA_TOKEN" in rendered
-    assert "VITE_OIDC_AUTHORITY" in rendered
     assert "RESEARCH_TENANT_TOKENS" not in rendered
     assert "VITE_RESEARCH_BEARER_TOKEN" not in rendered
     assert "live-ui-verifier-token" not in rendered

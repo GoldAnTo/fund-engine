@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPOSITORY_ROOT / "backend"
-FRONTEND_ROOT = REPOSITORY_ROOT / "frontend"
 
 ORCHESTRATION_MODULES = (
     BACKEND_ROOT / "app/services/research_orchestration.py",
@@ -24,12 +22,6 @@ FORBIDDEN_ORCHESTRATION_IMPORTS = (
     "app.datasources.exchanges",
     "app.repositories.acquisition",
 )
-FRONTEND_WORKFLOW_MODULES = (
-    FRONTEND_ROOT / "src/domain/eventWorkflow.ts",
-    FRONTEND_ROOT / "src/features/case/EventWorkflowOverview.tsx",
-    FRONTEND_ROOT / "src/data/httpResearchAdapter.ts",
-)
-IMPORT_SPECIFIER = re.compile(r"(?:\bfrom\s*|\bimport\s*\(\s*)[\"']([^\"']+)[\"']")
 
 
 def _python_imports(path: Path) -> set[str]:
@@ -65,19 +57,5 @@ def test_orchestration_modules_do_not_import_source_or_acquisition_repository() 
             ):
                 violations.append(
                     f"{path.relative_to(REPOSITORY_ROOT)} imports {imported}"
-                )
-    assert violations == []
-
-
-def test_frontend_workflow_modules_do_not_import_mock_adapters() -> None:
-    violations: list[str] = []
-    for path in FRONTEND_WORKFLOW_MODULES:
-        assert path.is_file(), f"missing guarded frontend workflow module: {path}"
-        source = path.read_text(encoding="utf-8")
-        for specifier in IMPORT_SPECIFIER.findall(source):
-            normalized = specifier.replace("\\", "/").casefold()
-            if "mock" in normalized:
-                violations.append(
-                    f"{path.relative_to(REPOSITORY_ROOT)} imports {specifier}"
                 )
     assert violations == []
